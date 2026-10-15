@@ -1,0 +1,293 @@
+"""Sensors for the hub and for each zone."""
+
+from __future__ import annotations
+
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
+from homeassistant.const import UnitOfPrecipitationDepth
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .const import SUBENTRY_ZONE
+from .coordinator import SmartWaterConfigEntry
+from .entity import SmartWaterHubEntity, SmartWaterZoneEntity
+from .units import mm_to_inches
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: SmartWaterConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Create hub sensors and one set of sensors per zone."""
+    coordinator = entry.runtime_data
+    async_add_entities(
+        [
+            ModeSensor(coordinator),
+            TonightPlanSensor(coordinator),
+            ET0Sensor(coordinator),
+        ]
+    )
+    for subentry in entry.subentries.values():
+        if subentry.subentry_type != SUBENTRY_ZONE:
+            continue
+        zone_id = subentry.subentry_id
+        async_add_entities(
+            [
+                DeficitSensor(coordinator, zone_id),
+                RawSensor(coordinator, zone_id),
+                NextRunSensor(coordinator, zone_id),
+                PlanReasonSensor(coordinator, zone_id),
+            ],
+            config_subentry_id=zone_id,
+        )
+
+
+class ModeSensor(SmartWaterHubEntity, SensorEntity):
+    """Hub mode: auto, notify_only, or off. Dry-run is an attribute."""
+
+    _attr_translation_key = "mode"
+    _attr_icon = "mdi:tune"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_mode"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the configured mode."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.mode
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Expose the execution guard next to the mode."""
+        data = self.coordinator.data
+        if data is None:
+            return {}
+        return {
+            "dry_run": data.dry_run,
+            "would_execute": data.would_execute,
+            "block_reason": data.block_reason,
+            "last_error": data.last_error,
+        }
+
+
+class TonightPlanSensor(SmartWaterHubEntity, SensorEntity):
+    """Short status for tonight, with the full plan in attributes."""
+
+    _attr_translation_key = "tonight_plan"
+    _attr_icon = "mdi:sprinkler"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_tonight_plan"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return a short dry-run status."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.summary_short
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Return the full plan. would_execute is false in v0.1."""
+        data = self.coordinator.data
+        if data is None or data.plan is None:
+            return {"would_execute": False}
+        plan = data.plan
+        return {
+            "summary": plan.summary,
+            "warning": plan.warning,
+            "dry_run": plan.dry_run,
+            "would_execute": plan.would_execute,
+            "block_reason": plan.block_reason,
+            "finish_by": plan.finish_by.isoformat(),
+            "timeline": plan.to_dict()["timeline"],
+            "zones": plan.to_dict()["zones"],
+        }
+
+
+class ET0Sensor(SmartWaterHubEntity, SensorEntity):
+    """Today's reference evapotranspiration."""
+
+    _attr_translation_key = "et0"
+    _attr_device_class = SensorDeviceClass.PRECIPITATION
+    _attr_native_unit_of_measurement = UnitOfPrecipitationDepth.MILLIMETERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:weather-sunny"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_et0"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return ET0 in millimeters."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.et0_mm
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Show whether Penman-Monteith or Hargreaves was used."""
+        data = self.coordinator.data
+        if data is None:
+            return {}
+        return {
+            "method": data.et0_method,
+            "detail": data.et0_detail,
+            "date": data.et0_date,
+            "elevation_m": data.elevation_m,
+            "latitude": data.latitude,
+        }
+
+
+class _ZoneSensor(SmartWaterZoneEntity, SensorEntity):
+    """Base for per-zone sensors."""
+
+    def __init__(self, coordinator, zone_id: str, key: str) -> None:
+        """Set the unique id from the zone and the sensor key."""
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{zone_id}_{key}"
+
+
+class DeficitSensor(_ZoneSensor):
+    """Root-zone depletion Dr."""
+
+    _attr_translation_key = "deficit"
+    _attr_device_class = SensorDeviceClass.PRECIPITATION
+    _attr_native_unit_of_measurement = UnitOfPrecipitationDepth.MILLIMETERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:water-minus"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the deficit sensor."""
+        super().__init__(coordinator, zone_id, "deficit")
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the deficit in millimeters."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.deficit_mm
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Include TAW and the inputs that set the bucket size."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {
+            "deficit_in": round(mm_to_inches(zone.deficit_mm), 3),
+            "taw_mm": round(zone.taw_mm, 2),
+            "taw_in": round(mm_to_inches(zone.taw_mm), 3),
+            "raw_mm": round(zone.raw_mm, 2),
+            "kc": zone.kc,
+            "p": zone.p,
+            "etc_mm": None if zone.etc_mm is None else round(zone.etc_mm, 2),
+            "soil_type": zone.soil_type,
+            "plant_type": zone.plant_type,
+            "precipitation_rate_in_hr": zone.precipitation_rate_in_hr,
+            "valve_entity": zone.valve_entity,
+            "enabled": zone.enabled,
+        }
+
+
+class RawSensor(_ZoneSensor):
+    """Readily available water, the irrigation threshold."""
+
+    _attr_translation_key = "raw"
+    _attr_device_class = SensorDeviceClass.PRECIPITATION
+    _attr_native_unit_of_measurement = UnitOfPrecipitationDepth.MILLIMETERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:water-check"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the RAW sensor."""
+        super().__init__(coordinator, zone_id, "raw")
+
+    @property
+    def native_value(self) -> float | None:
+        """Return RAW in millimeters."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.raw_mm
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Show the depletion fraction and TAW used for RAW."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {
+            "p": zone.p,
+            "taw_mm": round(zone.taw_mm, 2),
+            "raw_in": round(mm_to_inches(zone.raw_mm), 3),
+        }
+
+
+class NextRunSensor(_ZoneSensor):
+    """Start of the next planned cycle. Empty when the zone is not scheduled."""
+
+    _attr_translation_key = "next_run"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the next-run sensor."""
+        super().__init__(coordinator, zone_id, "next_run")
+
+    @property
+    def native_value(self):
+        """Return the next cycle start, or none."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.next_run
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Cycle lengths are whole minutes, ready for a later Hydrawise call."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {
+            "scheduled": zone.scheduled,
+            "runtime_min": zone.runtime_min,
+            "cycles_min": list(zone.cycles),
+            "soak_min": zone.soak_min,
+            "max_cycle_min": zone.max_cycle_min,
+        }
+
+
+class PlanReasonSensor(_ZoneSensor):
+    """Why the zone was scheduled or left out."""
+
+    _attr_translation_key = "plan_reason"
+    _attr_icon = "mdi:comment-text-outline"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the reason sensor."""
+        super().__init__(coordinator, zone_id, "plan_reason")
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the latest reason."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.reason

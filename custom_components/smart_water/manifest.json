@@ -1,0 +1,12 @@
+{
+  "domain": "smart_water",
+  "name": "Smart Water",
+  "codeowners": ["@Hestand"],
+  "config_flow": true,
+  "documentation": "https://github.com/Hestand/hx-garden-utils",
+  "issue_tracker": "https://github.com/Hestand/hx-garden-utils/issues",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "requirements": [],
+  "version": "0.1.0"
+}

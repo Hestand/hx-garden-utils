@@ -1,0 +1,120 @@
+calculate_plan:
+  name: Calculate plan
+  description: >-
+    Build tonight's dry-run watering plan from the current buckets. Does not
+    open a valve or call Hydrawise. Commits today's ET and rain if that has
+    not happened yet.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name. Needed only when more than one Smart Water hub is loaded.
+      selector:
+        text:
+    notify:
+      name: Notify
+      description: Send the plan to the hub's notify target when one is set.
+      default: true
+      selector:
+        boolean:
+
+reset_bucket:
+  name: Reset bucket
+  description: >-
+    Set a zone's soil-water deficit to zero (field capacity). Does not open a valve.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name, if you have more than one.
+      selector:
+        text:
+    zone:
+      name: Zone
+      description: Zone name.
+      required: true
+      selector:
+        text:
+
+set_bucket:
+  name: Set bucket
+  description: >-
+    Set a zone's soil-water deficit. Provide millimeters or inches. The value
+    is clamped to total available water. Does not open a valve.
+  fields:
+    hub:
+      name: Hub
+      selector:
+        text:
+    zone:
+      name: Zone
+      required: true
+      selector:
+        text:
+    deficit_mm:
+      name: Deficit (mm)
+      selector:
+        number:
+          min: 0
+          max: 500
+          step: 0.1
+          unit_of_measurement: mm
+    deficit_in:
+      name: Deficit (in)
+      selector:
+        number:
+          min: 0
+          max: 20
+          step: 0.01
+          unit_of_measurement: in
+
+mark_watered:
+  name: Mark watered
+  description: >-
+    Credit net irrigation already applied, in millimeters or inches. Leave the
+    depth empty to refill the zone to field capacity. Does not open a valve.
+  fields:
+    hub:
+      name: Hub
+      selector:
+        text:
+    zone:
+      name: Zone
+      required: true
+      selector:
+        text:
+    depth_mm:
+      name: Net depth (mm)
+      selector:
+        number:
+          min: 0
+          max: 500
+          step: 0.1
+          unit_of_measurement: mm
+    depth_in:
+      name: Net depth (in)
+      selector:
+        number:
+          min: 0
+          max: 20
+          step: 0.01
+          unit_of_measurement: in
+
+skip_zone:
+  name: Skip zone
+  description: >-
+    Leave a zone out of the plan through a date (inclusive). Defaults to
+    tomorrow. Does not open a valve.
+  fields:
+    hub:
+      name: Hub
+      selector:
+        text:
+    zone:
+      name: Zone
+      required: true
+      selector:
+        text:
+    until:
+      name: Until
+      description: Local date in YYYY-MM-DD. The zone is skipped through that morning.
+      selector:
+        text:
