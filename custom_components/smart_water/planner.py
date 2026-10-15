@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from .balance import zone_is_due
 from .cycle_soak import plan_cycles
 from .safety import block_reason, would_execute
+from .schedule import clip_blackout, day_allowed, weekday_name
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,9 @@ class ZoneRequest:
     priority: int
     max_cycle_override_min: int | None = None
     soak_override_min: int | None = None
+    adjustment_pct: float = 100.0
+    sprinkler_type: str = "spray"
+    ignores_schedule: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,10 @@ class PlanRequest:
     dry_run: bool
     max_daily_runtime_min: int | None = None
     days_ahead: int = 1
+    allowed_weekdays: tuple[str, ...] | None = None
+    blackout_start_hour: int | None = None
+    blackout_end_hour: int | None = None
+    whole_minutes: bool = True
 
 
 @dataclass(frozen=True)
@@ -78,10 +86,10 @@ class ZonePlan:
     kc: float
     p: float
     net_mm: float
-    runtime_min: int
+    runtime_min: int | float
     max_cycle_min: int
     soak_min: int
-    cycles: tuple[int, ...]
+    cycles: tuple[int | float, ...]
     precipitation_rate_in_hr: float
 
 
@@ -93,7 +101,7 @@ class TimelineEvent:
     zone_name: str
     cycle_index: int
     cycle_count: int
-    duration_min: int
+    duration_min: int | float
     start: datetime
     end: datetime
 
@@ -171,9 +179,14 @@ class _Job:
     ready_min: int = 0
 
 
-def _scale_cycles(cycles: tuple[int, ...], scale: float) -> tuple[int, ...]:
-    scaled = [max(1, int(round(minutes * scale))) for minutes in cycles if minutes > 0]
-    return tuple(scaled)
+def _scale_cycles(
+    cycles: tuple[int | float, ...], scale: float, *, whole: bool
+) -> tuple[int | float, ...]:
+    if whole:
+        return tuple(
+            max(1, int(round(minutes * scale))) for minutes in cycles if minutes > 0
+        )
+    return tuple(max(0.1, round(minutes * scale, 1)) for minutes in cycles if minutes > 0)
 
 
 def _schedule(jobs: list[_Job]) -> list[tuple[_Job, int, int, int]]:
@@ -286,15 +299,20 @@ def build_plan(request: PlanRequest) -> NightPlan:
         raise ValueError("earliest_start must be timezone-aware")
 
     blocked = block_reason(dry_run=request.dry_run, mode=request.mode)
-    finish_day = request.finish_by.date().isoformat()
     warnings: list[str] = []
+    finish_by, earliest, blackout_note = clip_blackout(
+        request.finish_by,
+        request.earliest_start,
+        request.blackout_start_hour,
+        request.blackout_end_hour,
+    )
+    if blackout_note:
+        warnings.append(blackout_note)
+    finish_day = finish_by.date().isoformat()
     zone_plans: list[ZonePlan] = []
     jobs: list[_Job] = []
 
-    window_closed = (
-        request.earliest_start is not None
-        and request.earliest_start >= request.finish_by
-    )
+    window_closed = earliest is not None and earliest >= finish_by
     if window_closed:
         warnings.append(
             "The earliest start is at or after the sunrise deadline, "
@@ -331,25 +349,37 @@ def build_plan(request: PlanRequest) -> NightPlan:
                 "Skipped because forecast rain is "
                 f"{request.forecast_precip_mm:.1f} mm."
             )
+        elif (
+            not zone.ignores_schedule
+            and not day_allowed(finish_by, request.allowed_weekdays)
+        ):
+            scheduled_candidate = False
+            reason = f"Not an allowed watering day ({weekday_name(finish_by)})."
         elif window_closed and due:
             scheduled_candidate = False
             reason = f"{due_reason} The watering window is closed."
 
-        cycles: tuple[int, ...] = ()
-        runtime = 0
+        cycles: tuple[int | float, ...] = ()
+        runtime: int | float = 0
         max_cycle = 0
         soak = 0
         net_mm = 0.0
+        adjusted_mm = zone.deficit_mm * zone.adjustment_pct / 100.0
+        if scheduled_candidate and adjusted_mm <= 0:
+            scheduled_candidate = False
+            reason = "Adjustment percent is 0."
         if scheduled_candidate:
-            # Refill the deficit and no more, so water stays in the root zone.
+            # Refill the adjusted deficit and no more, so water stays in the root zone.
             cycle_plan = plan_cycles(
-                net_mm=zone.deficit_mm,
+                net_mm=adjusted_mm,
                 precipitation_rate_in_hr=zone.precipitation_rate_in_hr,
                 efficiency=zone.efficiency,
                 soil_type=zone.soil_type,
                 slope_pct=zone.slope_pct,
                 max_cycle_override_min=zone.max_cycle_override_min,
                 soak_override_min=zone.soak_override_min,
+                whole_minutes=request.whole_minutes,
+                sprinkler_type=zone.sprinkler_type,
             )
             cycles = cycle_plan.cycles_min
             runtime = cycle_plan.total_runtime_min
@@ -398,15 +428,20 @@ def build_plan(request: PlanRequest) -> NightPlan:
         if total > cap and total > 0 and cap > 0:
             scale = cap / total
             for job in jobs:
-                job.cycles = list(_scale_cycles(tuple(job.cycles), scale))
+                job.cycles = list(
+                    _scale_cycles(tuple(job.cycles), scale, whole=request.whole_minutes)
+                )
             warnings.append(
                 f"Total runtime {total} min exceeds the daily cap of {cap} min "
                 "and was trimmed."
             )
 
     events = _schedule(jobs) if jobs and not window_closed else []
-    if events and request.earliest_start is not None:
-        window = (request.finish_by - request.earliest_start).total_seconds() / 60.0
+    # The clipped deadline is what the timeline must finish by.
+    request_finish = finish_by
+    request_earliest = earliest
+    if events and request_earliest is not None:
+        window = (request_finish - request_earliest).total_seconds() / 60.0
         span = _span_minutes(events)
         if window <= 0:
             events = []
@@ -415,7 +450,9 @@ def build_plan(request: PlanRequest) -> NightPlan:
             for job in jobs:
                 job.next_index = 0
                 job.ready_min = 0
-                job.cycles = list(_scale_cycles(tuple(job.cycles), scale))
+                job.cycles = list(
+                    _scale_cycles(tuple(job.cycles), scale, whole=request.whole_minutes)
+                )
             events = _schedule(jobs)
             span = _span_minutes(events)
             if span > window:
@@ -426,11 +463,11 @@ def build_plan(request: PlanRequest) -> NightPlan:
             else:
                 warnings.append("Runtimes were trimmed to fit the watering window.")
 
-    timeline = _place(events, request.finish_by)
+    timeline = _place(events, request_finish)
     if (
         timeline
-        and request.earliest_start is not None
-        and timeline[0].start < request.earliest_start
+        and request_earliest is not None
+        and timeline[0].start < request_earliest
     ):
         warnings.append("The plan starts before the earliest allowed time.")
 
@@ -466,8 +503,8 @@ def build_plan(request: PlanRequest) -> NightPlan:
     warning = " ".join(warnings) if warnings else None
     summary = _summary(final_zones, timeline, warning, blocked)
     return NightPlan(
-        finish_by=request.finish_by,
-        earliest_start=request.earliest_start,
+        finish_by=request_finish,
+        earliest_start=request_earliest,
         dry_run=request.dry_run,
         mode=request.mode,
         would_execute=would_execute(dry_run=request.dry_run, mode=request.mode),

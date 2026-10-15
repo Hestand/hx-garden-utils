@@ -1,8 +1,8 @@
 """Smart Water custom integration.
 
-v0.1 plans irrigation and does not apply it. There is no call to
-``hydrawise.start_watering``, no valve service, and no switch turn-on.
-See ``safety.py`` for the guard that stays in place even if dry-run is cleared.
+v0.2 computes the water balance and the nightly plan. It does not apply
+them. There is no valve service, no switch turn-on, and no controller API.
+See ``safety.py``. A later executor will use each zone's stored on/off entity.
 """
 
 from __future__ import annotations

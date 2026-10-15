@@ -3,8 +3,7 @@
 Max cycle minutes = 60 × NRCS intake rate (in/hr) ÷ precipitation rate (in/hr).
 That matches the design example: 1.5 in/hr sprays on clay loam at a 5–8% slope
 (0.10 in/hr) produce a 4 minute cycle. The result is floored so a cycle does
-not exceed the intake rate, then raised to 1 minute because a later Hydrawise
-run cannot be shorter than that. A warning is set when 1 minute still exceeds
+not exceed the intake rate, then raised to 1 minute. A warning is set when 1 minute still exceeds
 the intake rate.
 
 Soak time follows the EPA WaterSense cycle-and-soak guidance: 30 minutes, or
@@ -22,6 +21,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .const import SPRINKLERS_WITHOUT_SOAK
 from .soil import default_soak_minutes, intake_rate_in_per_hr
 from .units import mm_to_inches
 
@@ -83,8 +83,8 @@ class CycleSoak:
     soak_min: int
     net_mm: float
     gross_in: float
-    total_runtime_min: int
-    cycles_min: tuple[int, ...]
+    total_runtime_min: int | float
+    cycles_min: tuple[int | float, ...]
     intake_exceeded_by_minimum: bool
     note: str | None
 
@@ -98,8 +98,15 @@ def plan_cycles(
     slope_pct: float,
     max_cycle_override_min: int | None = None,
     soak_override_min: int | None = None,
+    whole_minutes: bool = True,
+    sprinkler_type: str | None = None,
 ) -> CycleSoak:
-    """Turn a net irrigation depth into whole-minute cycles and a soak."""
+    """Turn a net irrigation depth into cycles and a soak.
+
+    ``whole_minutes`` rounds the runtime to an integer. When it is false the
+    runtime is kept to 0.1 minute. Drip and bubbler zones soak for 0 unless
+    the zone sets an override, because those rates do not pond the way sprays do.
+    """
     if efficiency <= 0 or efficiency > 1:
         raise ValueError("efficiency must be in (0, 1]")
     if precipitation_rate_in_hr <= 0:
@@ -111,15 +118,24 @@ def plan_cycles(
     max_cycle = (
         computed_max if max_cycle_override_min is None else max(1, max_cycle_override_min)
     )
-    soak = (
-        default_soak_minutes(soil_type)
-        if soak_override_min is None
-        else max(0, soak_override_min)
-    )
+    if soak_override_min is not None:
+        soak = max(0, soak_override_min)
+    elif sprinkler_type in SPRINKLERS_WITHOUT_SOAK:
+        soak = 0
+    else:
+        soak = default_soak_minutes(soil_type)
     net_in = mm_to_inches(max(0.0, net_mm))
     gross_in = net_in / efficiency
-    total = int(round(60.0 * gross_in / precipitation_rate_in_hr))
-    cycles = split_runtime(total, max_cycle)
+    raw_total = 60.0 * gross_in / precipitation_rate_in_hr
+    if whole_minutes:
+        total: int | float = int(round(raw_total))
+        cycles = split_runtime(int(total), max_cycle)
+    else:
+        total = round(raw_total, 1)
+        tenths = int(round(total * 10))
+        cycles = tuple(
+            piece / 10 for piece in split_runtime(tenths, max(1, max_cycle * 10))
+        )
     note = None
     if exceeded:
         note = (

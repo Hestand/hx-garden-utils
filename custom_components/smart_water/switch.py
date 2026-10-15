@@ -33,7 +33,7 @@ class MasterAutoSwitch(SmartWaterHubEntity, SwitchEntity):
     """On when the hub mode is not off.
 
     Off forces mode off. On restores notify-only while dry-run is set, and
-    never writes dry_run to false. In v0.1 the on position still does not water.
+    never writes dry_run to false. The on position still does not water.
     """
 
     _attr_translation_key = "master_auto"

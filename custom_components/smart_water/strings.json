@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Smart Water hub",
-        "description": "v0.1 only plans. It never opens a valve. Elevation is used for Penman-Monteith air pressure. Home Assistant often stores 0; the central Texas site in the design notes is about 219 m. Leave latitude and longitude empty to use Home Assistant's location.",
+        "description": "v0.2 plans and records. It never opens a valve. Elevation is used for Penman-Monteith air pressure. Home Assistant often stores 0; the central Texas site in the design notes is about 219 m. Leave latitude and longitude empty to use Home Assistant's location.",
         "data": {
           "name": "Name",
           "weather_entity": "Weather entity",
@@ -15,7 +15,7 @@
       },
       "behavior": {
         "title": "How the hub behaves",
-        "description": "Dry-run is off by default. Turn it on to label plans as not-for-execution. This version still will not water: there is no executor. Notify only and Off both refuse execution. Auto is the mode a future executor would use.",
+        "description": "Dry-run is off by default. This version still will not water: there is no executor. The schedule preset only decides which days and hours a plan may use. Waco presets follow the city year-round rules (odd or even address, no Friday, no watering 10:00–19:00).",
         "data": {
           "dry_run": "Dry-run (do not water)",
           "mode": "Mode",
@@ -25,24 +25,44 @@
           "plan_hour": "Hour to commit the daily balance and notify",
           "earliest_hour": "Earliest start hour",
           "forecast_skip_mm": "Skip when forecast rain is at least",
-          "max_daily_runtime_min": "Max valve-on minutes per night"
+          "max_daily_runtime_min": "Max valve-on minutes per night",
+          "round_minutes": "Round runtimes to whole minutes",
+          "schedule_preset": "Watering-day preset",
+          "allowed_weekdays": "Allowed weekdays",
+          "blackout_start_hour": "Blackout start hour",
+          "blackout_end_hour": "Blackout end hour",
+          "drip_ignores_schedule": "Drip ignores weekday limits"
         },
         "data_description": {
           "notify_target": "Example: mobile_app_phone, or notify.mobile_app_phone. Empty sends nothing.",
           "forecast_skip_mm": "Leave empty to disable. A 0.25 inch rule is not assumed.",
-          "earliest_hour": "Local hour on the morning of the run. Empty means the plan only has to finish by sunrise."
+          "earliest_hour": "Local hour on the morning of the run. Empty means the plan only has to finish by sunrise.",
+          "round_minutes": "On keeps every cycle a whole minute. Off keeps tenths of a minute.",
+          "schedule_preset": "None uses every day. Waco presets ignore the custom days and hours below. Custom uses the weekdays and blackout you set.",
+          "allowed_weekdays": "Used only with the custom preset. Leave empty to allow every day.",
+          "blackout_start_hour": "First hour when watering is not allowed, local time. Used by None and Custom. Waco always uses 10.",
+          "blackout_end_hour": "First hour when watering is allowed again. Used by None and Custom. Waco always uses 19.",
+          "drip_ignores_schedule": "Buried drip may skip the weekday check. The blackout still applies. Off by default."
         }
       },
       "sensors": {
         "title": "Optional weather sensors",
-        "description": "Leave these empty to use the weather entity. A solar sensor in W/m² (Tempest) is recorded and is not treated as a daily radiation total. Use a daily MJ/m² sensor if you have one. Pressure, when set, should be station pressure, not sea-level pressure.",
+        "description": "Entity sensors are preferred. The weather entity is the fallback. A Tempest solar radiation sensor in W/m² is integrated through the day into MJ/m². A daily MJ/m² sensor is used as-is. UV index is only a fallback and is not an FAO measurement. Pressure, when set, should be station pressure.",
         "data": {
           "temperature_sensor": "Temperature sensor",
           "humidity_sensor": "Humidity sensor",
           "wind_sensor": "Wind sensor",
           "pressure_sensor": "Pressure sensor",
           "solar_radiation_sensor": "Solar radiation sensor",
+          "uv_sensor": "UV index sensor",
+          "rain_amount_sensor": "Rain amount sensor",
+          "rain_kind": "Rain sensor kind",
           "wind_height_m": "Wind sensor height"
+        },
+        "data_description": {
+          "uv_sensor": "Used only when solar radiation is empty. About 100 W/m² per UV index, not an FAO factor.",
+          "rain_amount_sensor": "Preferred over the weather forecast. Daily total matches Tempest rain today.",
+          "rain_kind": "Daily total replaces the day's rain. Cumulative adds increases and ignores the first sample. Rate is mm/h, integrated between updates."
         }
       },
       "reconfigure": {
@@ -64,7 +84,7 @@
     "step": {
       "init": {
         "title": "Smart Water options",
-        "description": "Dry-run defaults off. Turning it on only marks the plan as not-for-execution. v0.1 still does not water.",
+        "description": "Dry-run defaults off. Turning it on only marks the plan as not-for-execution. v0.2 still does not water.",
         "data": {
           "elevation_m": "Elevation",
           "latitude": "Latitude override",
@@ -77,7 +97,20 @@
           "plan_hour": "Hour to commit the daily balance and notify",
           "earliest_hour": "Earliest start hour",
           "forecast_skip_mm": "Skip when forecast rain is at least",
-          "max_daily_runtime_min": "Max valve-on minutes per night"
+          "max_daily_runtime_min": "Max valve-on minutes per night",
+          "round_minutes": "Round runtimes to whole minutes",
+          "schedule_preset": "Watering-day preset",
+          "allowed_weekdays": "Allowed weekdays",
+          "blackout_start_hour": "Blackout start hour",
+          "blackout_end_hour": "Blackout end hour",
+          "drip_ignores_schedule": "Drip ignores weekday limits"
+        },
+        "data_description": {
+          "notify_target": "Example: mobile_app_phone, or notify.mobile_app_phone. Empty sends nothing.",
+          "forecast_skip_mm": "Leave empty to disable.",
+          "schedule_preset": "None uses every day. Waco presets ignore the custom days and hours. Custom uses the weekdays and blackout you set.",
+          "allowed_weekdays": "Used only with the custom preset.",
+          "drip_ignores_schedule": "Weekday check only. The blackout still applies."
         }
       },
       "sensors": {
@@ -88,6 +121,9 @@
           "wind_sensor": "Wind sensor",
           "pressure_sensor": "Pressure sensor",
           "solar_radiation_sensor": "Solar radiation sensor",
+          "uv_sensor": "UV index sensor",
+          "rain_amount_sensor": "Rain amount sensor",
+          "rain_kind": "Rain sensor kind",
           "wind_height_m": "Wind sensor height"
         }
       }
@@ -99,18 +135,19 @@
       "step": {
         "user": {
           "title": "Zone",
-          "description": "Plant and soil set the starting crop coefficient, depletion fraction, root depth, and intake rate. You can edit the numbers on the next step.",
+          "description": "Plant and soil set the starting crop coefficient, depletion fraction, root depth, and intake rate. You can edit the numbers on the next step. Sprinkler type changes the default soak: drip and bubbler do not soak unless you set one.",
           "data": {
             "name": "Name",
             "plant_type": "Plant type",
             "soil_type": "Soil type",
             "slope_pct": "Slope",
-            "sun_exposure": "Sun exposure"
+            "sun_exposure": "Sun exposure",
+            "sprinkler_type": "Sprinkler type"
           }
         },
         "hydraulics": {
           "title": "Watering hardware",
-          "description": "Enter a precipitation rate, or both flow and area. The rate you type is used when both are filled in. Efficiency defaults to 1 so no unverified distribution uniformity is assumed. The valve is stored for a later version and is not opened.",
+          "description": "Enter a precipitation rate, or both flow and area. The rate you type is used when both are filled in. Efficiency defaults to 1 so no unverified distribution uniformity is assumed. The on/off entity is stored for a later version and is not turned on. Moisture and flow are optional.",
           "data": {
             "precipitation_rate_in_hr": "Precipitation rate",
             "flow_gpm": "Total flow",
@@ -121,7 +158,16 @@
             "max_cycle_min": "Max cycle override",
             "soak_min": "Soak override",
             "priority": "Priority",
-            "valve_entity": "Valve",
+            "valve_entity": "On/off entity",
+            "moisture_sensor": "Soil moisture sensor",
+            "moisture_mode": "Moisture mode",
+            "moisture_kind": "Moisture reading",
+            "moisture_weight": "Moisture correction weight",
+            "field_capacity_vwc": "Field capacity (VWC)",
+            "flow_sensor": "Flow sensor",
+            "flow_kind": "Flow sensor kind",
+            "flow_low_ratio": "Low-flow ratio",
+            "flow_leak_ratio": "Leak ratio",
             "rain_sensor": "Rain sensor",
             "kc_override": "Crop coefficient override",
             "awc_override": "Available water override"
@@ -129,7 +175,13 @@
           "data_description": {
             "priority": "Lower numbers run first when two zones are both ready.",
             "max_cycle_min": "Replaces the NRCS intake calculation. Use this after a pooling test.",
-            "efficiency": "1.0 applies the net deficit. Set a measured distribution uniformity below 1 if you have one."
+            "efficiency": "1.0 applies the net deficit. Set a measured distribution uniformity below 1 if you have one.",
+            "valve_entity": "Switch, valve, or input boolean. Stored only. v0.2 does not call it.",
+            "moisture_mode": "Off ignores the sensor. Correct blends it into the bucket once per day. Override replaces the bucket on every update.",
+            "moisture_kind": "Relative is percent of available water (0–100, or a 0–1 fraction). Volumetric needs field capacity.",
+            "flow_sensor": "Any sensor that reports a volume total or a flow rate. Used to flag low flow and leaks. Nothing is closed.",
+            "flow_low_ratio": "Delivered ÷ expected below this, after the run window, is low flow. Default 0.5.",
+            "flow_leak_ratio": "Delivered ÷ expected above this is a leak. Default 1.5. Unscheduled delivery of at least 1 gallon is also a leak."
           }
         }
       },
@@ -145,9 +197,35 @@
   "selector": {
     "mode": {
       "options": {
-        "auto": "Auto (still blocked in v0.1, and while dry-run is on)",
+        "auto": "Auto (still blocked in v0.2, and while dry-run is on)",
         "notify_only": "Notify only",
         "off": "Off"
+      }
+    },
+    "schedule_preset": {
+      "options": {
+        "none": "None (any day)",
+        "waco_odd": "Waco, odd address (Sun/Tue/Thu, no 10:00–19:00)",
+        "waco_even": "Waco, even address (Mon/Wed/Sat, no 10:00–19:00)",
+        "custom": "Custom days and blackout"
+      }
+    },
+    "weekday": {
+      "options": {
+        "mon": "Monday",
+        "tue": "Tuesday",
+        "wed": "Wednesday",
+        "thu": "Thursday",
+        "fri": "Friday",
+        "sat": "Saturday",
+        "sun": "Sunday"
+      }
+    },
+    "rain_kind": {
+      "options": {
+        "daily_total": "Daily total (replaces today's rain)",
+        "cumulative": "Cumulative counter",
+        "rate": "Rate (mm/h)"
       }
     },
     "plant_type": {
@@ -177,6 +255,34 @@
         "part_sun": "Part sun (factor 0.8, approximate)",
         "shade": "Shade (factor 0.6, approximate)"
       }
+    },
+    "sprinkler_type": {
+      "options": {
+        "spray": "Spray",
+        "rotor": "Rotor",
+        "mp_rotator": "MP rotator",
+        "drip": "Drip",
+        "bubbler": "Bubbler"
+      }
+    },
+    "moisture_mode": {
+      "options": {
+        "off": "Off",
+        "correct": "Correct the bucket once a day",
+        "override": "Override the bucket on every update"
+      }
+    },
+    "moisture_kind": {
+      "options": {
+        "relative": "Relative (percent of available water)",
+        "vwc": "Volumetric water content"
+      }
+    },
+    "flow_kind": {
+      "options": {
+        "total": "Volume total",
+        "rate": "Flow rate"
+      }
     }
   },
   "entity": {
@@ -187,17 +293,28 @@
       "deficit": { "name": "Deficit" },
       "raw": { "name": "Readily available water" },
       "next_run": { "name": "Next planned run" },
-      "plan_reason": { "name": "Plan reason" }
+      "plan_reason": { "name": "Plan reason" },
+      "rain_today": { "name": "Rain today" },
+      "schedule": { "name": "Next run" },
+      "zone_plan": { "name": "Plan" },
+      "flow": { "name": "Flow" },
+      "moisture": { "name": "Moisture deficit" }
     },
     "switch": {
       "master_auto": { "name": "Master auto" },
       "zone_enabled": { "name": "Enabled" }
+    },
+    "number": {
+      "adjustment": { "name": "Adjustment" }
+    },
+    "button": {
+      "run_now": { "name": "Run now" }
     }
   },
   "services": {
     "calculate_plan": {
       "name": "Calculate plan",
-      "description": "Build tonight's dry-run plan. Does not open a valve."
+      "description": "Build tonight's plan. Does not open a valve."
     },
     "reset_bucket": {
       "name": "Reset bucket",
@@ -214,6 +331,18 @@
     "skip_zone": {
       "name": "Skip zone",
       "description": "Leave a zone out of the plan through a date."
+    },
+    "pause_zone": {
+      "name": "Pause zone",
+      "description": "Skip a zone for a number of days. Zero clears the pause. Does not open a valve."
+    },
+    "set_adjustment": {
+      "name": "Set adjustment",
+      "description": "Scale a zone's planned depth. 100 is unchanged. Does not open a valve."
+    },
+    "run_now": {
+      "name": "Run now",
+      "description": "Log the planned run. Does not call the zone's on/off entity."
     }
   }
 }

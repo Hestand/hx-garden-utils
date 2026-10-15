@@ -192,6 +192,66 @@ def test_daily_runtime_cap_trims_before_scheduling() -> None:
     assert "daily cap" in plan.warning
 
 
+def test_adjustment_scales_runtime_and_zero_drops_the_zone() -> None:
+    half = build_plan(_request(_zone(adjustment_pct=50)))
+    assert half.zones[0].scheduled is True
+    # 10 mm net at 1.5 in/hr rounds to 16 minutes.
+    assert half.zones[0].runtime_min == 16
+    stopped = build_plan(_request(_zone(adjustment_pct=0)))
+    assert stopped.zones[0].scheduled is False
+    assert stopped.zones[0].reason == "Adjustment percent is 0."
+
+
+def test_allowed_weekday_skips_friday_and_keeps_thursday() -> None:
+    friday = datetime(2026, 10, 16, 11, 45, tzinfo=timezone.utc)
+    skipped = build_plan(
+        _request(finish_by=friday, allowed_weekdays=("sun", "tue", "thu"))
+    )
+    assert skipped.zones[0].scheduled is False
+    assert "fri" in skipped.zones[0].reason
+    thursday = datetime(2026, 10, 15, 11, 45, tzinfo=timezone.utc)
+    kept = build_plan(
+        _request(finish_by=thursday, allowed_weekdays=("sun", "tue", "thu"))
+    )
+    assert kept.zones[0].scheduled is True
+
+
+def test_drip_can_ignore_the_weekday_and_does_not_soak() -> None:
+    friday = datetime(2026, 10, 16, 11, 45, tzinfo=timezone.utc)
+    plan = build_plan(
+        _request(
+            _zone(sprinkler_type="drip", ignores_schedule=True),
+            finish_by=friday,
+            allowed_weekdays=("sun",),
+        )
+    )
+    assert plan.zones[0].scheduled is True
+    assert plan.zones[0].soak_min == 0
+
+
+def test_blackout_clips_a_midday_deadline_back_to_morning() -> None:
+    finish = datetime(2026, 10, 16, 11, 45, tzinfo=timezone.utc)
+    plan = build_plan(
+        _request(finish_by=finish, blackout_start_hour=10, blackout_end_hour=19)
+    )
+    assert plan.finish_by == datetime(2026, 10, 16, 10, 0, tzinfo=timezone.utc)
+    assert plan.earliest_start == datetime(2026, 10, 16, 0, 0, tzinfo=timezone.utc)
+    assert plan.timeline[-1].end == plan.finish_by
+    assert plan.warning is not None
+    evening = datetime(2026, 10, 16, 21, 0, tzinfo=timezone.utc)
+    late = build_plan(
+        _request(finish_by=evening, blackout_start_hour=10, blackout_end_hour=19)
+    )
+    assert late.finish_by == evening
+    assert late.earliest_start == datetime(2026, 10, 16, 19, 0, tzinfo=timezone.utc)
+
+
+def test_fractional_runtime_stays_off_the_whole_minute_grid() -> None:
+    plan = build_plan(_request(whole_minutes=False))
+    assert plan.zones[0].runtime_min == pytest.approx(31.5)
+    assert all(isinstance(minutes, float) for minutes in plan.zones[0].cycles)
+
+
 def _assert_one_valve(timeline: tuple) -> None:
     ordered = sorted(timeline, key=lambda event: event.start)
     for previous, current in zip(ordered, ordered[1:]):

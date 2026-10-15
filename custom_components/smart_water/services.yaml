@@ -1,8 +1,8 @@
 calculate_plan:
   name: Calculate plan
   description: >-
-    Build tonight's dry-run watering plan from the current buckets. Does not
-    open a valve or call Hydrawise. Commits today's ET and rain if that has
+    Build tonight's watering plan from the current buckets. Does not
+    open a valve or call a controller. Commits today's ET and rain if that has
     not happened yet.
   fields:
     hub:
@@ -116,5 +116,73 @@ skip_zone:
     until:
       name: Until
       description: Local date in YYYY-MM-DD. The zone is skipped through that morning.
+      selector:
+        text:
+
+pause_zone:
+  name: Pause zone
+  description: >-
+    Skip a zone for a number of local days. Zero clears the pause. Does not
+    open a valve.
+  fields:
+    hub:
+      name: Hub
+      selector:
+        text:
+    zone:
+      name: Zone
+      required: true
+      selector:
+        text:
+    days:
+      name: Days
+      description: Local days to skip, including today. Zero clears the pause.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 365
+          step: 1
+          mode: box
+
+set_adjustment:
+  name: Set adjustment
+  description: >-
+    Scale the planned depth for a zone. 100 leaves it unchanged. 0 keeps the
+    zone off the timeline. Does not open a valve.
+  fields:
+    hub:
+      name: Hub
+      selector:
+        text:
+    zone:
+      name: Zone
+      required: true
+      selector:
+        text:
+    percent:
+      name: Adjustment
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 300
+          step: 1
+          unit_of_measurement: "%"
+          mode: box
+
+run_now:
+  name: Run now
+  description: >-
+    Log the zone's current planned runtime. v0.2 does not start the run and
+    does not call the zone's on/off entity.
+  fields:
+    hub:
+      name: Hub
+      selector:
+        text:
+    zone:
+      name: Zone
+      required: true
       selector:
         text:

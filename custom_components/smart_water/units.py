@@ -70,6 +70,30 @@ def pressure_kpa(value: float, unit: str | None) -> float:
     return value * 0.1
 
 
+def volume_gallons(value: float, unit: str | None) -> float:
+    """Convert a volume total to US gallons."""
+    normalized = (unit or "gal").lower().replace(" ", "").replace("³", "3")
+    if normalized in {"l", "liter", "liters", "litre", "litres"}:
+        return value * 0.264172
+    if normalized in {"m3", "m^3"}:
+        return value * 264.172
+    if normalized in {"ft3", "ft^3", "cuft"}:
+        return value * 7.48052
+    return value
+
+
+def rate_gpm(value: float, unit: str | None) -> float:
+    """Convert a flow rate to US gallons per minute."""
+    normalized = (unit or "gal/min").lower().replace(" ", "").replace("³", "3")
+    if normalized in {"l/min", "lpm"}:
+        return value * 0.264172
+    if normalized in {"m3/h", "m^3/h"}:
+        return value * 264.172 / 60.0
+    if normalized in {"gal/h", "gph"}:
+        return value / 60.0
+    return value
+
+
 def solar_parts(value: float, unit: str | None) -> tuple[float | None, float | None]:
     """Split a solar sensor into daily MJ/m² and instantaneous W/m².
 

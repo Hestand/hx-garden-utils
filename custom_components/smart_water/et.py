@@ -5,8 +5,9 @@ available. Radiation is the measured daily total when a sensor provides one,
 otherwise the Hargreaves radiation estimate (Eq. 50) inside Penman-Monteith.
 Temperature-only days fall back to the Hargreaves ET0 equation (Eq. 52).
 
-An instantaneous W/m² reading is accepted and reported, and is not used as
-the daily solar total. That is the Tempest-shaped hook for v0.1.
+An instantaneous W/m² reading is not itself the daily total. The coordinator
+integrates those samples (and a UV-index fallback) to MJ/m²/day and passes
+that integral in as ``rs_mj_m2_day``.
 """
 
 from __future__ import annotations

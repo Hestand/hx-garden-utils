@@ -128,3 +128,41 @@ def test_efficiency_increases_runtime_without_assuming_a_default_du() -> None:
         slope_pct=0,
     )
     assert doubled.total_runtime_min == 120
+
+
+def test_drip_and_bubbler_skip_soak_unless_overridden() -> None:
+    drip = plan_cycles(
+        net_mm=20.0,
+        precipitation_rate_in_hr=1.5,
+        efficiency=1.0,
+        soil_type="clay_loam",
+        slope_pct=6,
+        sprinkler_type="drip",
+    )
+    assert drip.soak_min == 0
+    assert drip.total_runtime_min == 31
+    bubbler = plan_cycles(
+        net_mm=20.0,
+        precipitation_rate_in_hr=1.5,
+        efficiency=1.0,
+        soil_type="clay_loam",
+        slope_pct=6,
+        sprinkler_type="bubbler",
+        soak_override_min=15,
+    )
+    assert bubbler.soak_min == 15
+
+
+def test_fractional_minutes_keep_a_tenth() -> None:
+    plan = plan_cycles(
+        net_mm=20.0,
+        precipitation_rate_in_hr=1.5,
+        efficiency=1.0,
+        soil_type="clay_loam",
+        slope_pct=6,
+        whole_minutes=False,
+    )
+    # 20 mm / 25.4 / 1.5 in/hr × 60 = 31.496 min, kept as 31.5.
+    assert plan.total_runtime_min == pytest.approx(31.5)
+    assert sum(plan.cycles_min) == pytest.approx(31.5)
+    assert all(minutes <= 4.0 + 1e-9 for minutes in plan.cycles_min)

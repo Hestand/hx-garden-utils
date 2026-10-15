@@ -1,4 +1,4 @@
-"""Dry-run services. None of these open a valve or start Hydrawise."""
+"""Services that change the plan or the bucket. None of them open a valve."""
 
 from __future__ import annotations
 
@@ -25,7 +25,10 @@ from .const import (
     DOMAIN,
     SERVICE_CALCULATE_PLAN,
     SERVICE_MARK_WATERED,
+    SERVICE_PAUSE_ZONE,
     SERVICE_RESET_BUCKET,
+    SERVICE_RUN_NOW,
+    SERVICE_SET_ADJUSTMENT,
     SERVICE_SET_BUCKET,
     SERVICE_SKIP_ZONE,
     SERVICES,
@@ -155,7 +158,30 @@ def async_setup_services(hass: HomeAssistant) -> None:
             until = (dt_util.now().date() + timedelta(days=1)).isoformat()
         await coordinator.async_skip_zone(zone_id, str(until))
 
+    async def pause_zone(call: ServiceCall) -> None:
+        """Skip a zone for N local days. Zero clears the pause."""
+        _entry, coordinator, zone_id = _find_zone(
+            hass, call.data["zone"], call.data.get("hub")
+        )
+        await coordinator.async_pause_zone(zone_id, int(call.data["days"]))
+
+    async def set_adjustment(call: ServiceCall) -> None:
+        """Scale the planned depth. This does not water."""
+        _entry, coordinator, zone_id = _find_zone(
+            hass, call.data["zone"], call.data.get("hub")
+        )
+        await coordinator.async_set_adjustment(zone_id, float(call.data["percent"]))
+
+    async def run_now(call: ServiceCall) -> None:
+        """Log the planned run. No valve, switch, or controller service is called."""
+        _entry, coordinator, zone_id = _find_zone(
+            hass, call.data["zone"], call.data.get("hub")
+        )
+        await coordinator.async_run_now(zone_id)
+
     number = vol.All(vol.Coerce(float), vol.Range(min=0, max=500))
+    days = vol.All(vol.Coerce(int), vol.Range(min=0, max=365))
+    percent = vol.All(vol.Coerce(float), vol.Range(min=0, max=300))
     hass.services.async_register(
         DOMAIN,
         SERVICE_CALCULATE_PLAN,
@@ -213,6 +239,41 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 vol.Optional("hub"): str,
                 vol.Required("zone"): str,
                 vol.Optional("until"): str,
+            }
+        ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_PAUSE_ZONE,
+        pause_zone,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Required("zone"): str,
+                vol.Required("days"): days,
+            }
+        ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_ADJUSTMENT,
+        set_adjustment,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Required("zone"): str,
+                vol.Required("percent"): percent,
+            }
+        ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RUN_NOW,
+        run_now,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Required("zone"): str,
             }
         ),
     )

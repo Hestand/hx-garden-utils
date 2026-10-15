@@ -7,7 +7,8 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN
+from .const import DEFAULT_ADJUSTMENT_PCT, DOMAIN
+from .observe import fresh_day
 
 STORAGE_VERSION = 1
 
@@ -19,6 +20,13 @@ def fresh_zone() -> dict[str, Any]:
         "balance_date": None,
         "skipped_until": None,
         "enabled": True,
+        "adjustment_pct": DEFAULT_ADJUSTMENT_PCT,
+        "flow_date": None,
+        "flow_delivered_gal": 0.0,
+        "flow_cursor": None,
+        "flow_last_at": None,
+        "last_run_now": None,
+        "moisture_deficit_mm": None,
     }
 
 
@@ -37,6 +45,7 @@ class SmartWaterStore:
         self.et0_method: str | None = None
         self.et0_detail: str | None = None
         self.et0_date: str | None = None
+        self.weather: dict[str, Any] = fresh_day("")
 
     async def async_load(self) -> None:
         """Load the last saved state."""
@@ -51,6 +60,8 @@ class SmartWaterStore:
         self.et0_method = data.get("et0_method")
         self.et0_detail = data.get("et0_detail")
         self.et0_date = data.get("et0_date")
+        saved_weather = dict(data.get("weather") or {})
+        self.weather = {**fresh_day(str(saved_weather.get("date") or "")), **saved_weather}
 
     def zone(self, zone_id: str) -> dict[str, Any]:
         """Return mutable state for a zone, creating it at field capacity."""
@@ -59,6 +70,12 @@ class SmartWaterStore:
             state = fresh_zone()
             self.zones[zone_id] = state
         return state
+
+    def weather_for(self, date: str) -> dict[str, Any]:
+        """Return today's accumulation, resetting it when the date changes."""
+        if self.weather.get("date") != date:
+            self.weather = fresh_day(date)
+        return self.weather
 
     def prune(self, zone_ids: set[str]) -> None:
         """Drop state for zones that were removed."""
@@ -77,5 +94,6 @@ class SmartWaterStore:
                 "et0_method": self.et0_method,
                 "et0_detail": self.et0_detail,
                 "et0_date": self.et0_date,
+                "weather": self.weather,
             }
         )

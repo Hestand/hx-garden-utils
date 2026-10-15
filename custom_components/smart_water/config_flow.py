@@ -1,7 +1,8 @@
 """Config and options flows for Smart Water.
 
-Zones are config subentries. Dry-run defaults off. v0.1 still will not open
-a valve, because there is no executor.
+Zones are config subentries. Dry-run defaults off. v0.2 still will not open
+a valve, because there is no executor. A later executor will use the stored
+on/off entity and will not call Hydrawise.
 """
 
 from __future__ import annotations
@@ -25,10 +26,19 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_ALLOWED_WEEKDAYS,
     CONF_AREA_SQFT,
     CONF_AWC_OVERRIDE,
+    CONF_BLACKOUT_END_HOUR,
+    CONF_BLACKOUT_START_HOUR,
     CONF_DEPLETION,
+    CONF_DRIP_IGNORES_SCHEDULE,
     CONF_DRY_RUN,
+    CONF_FIELD_CAPACITY,
+    CONF_FLOW_KIND,
+    CONF_FLOW_LEAK_RATIO,
+    CONF_FLOW_LOW_RATIO,
+    CONF_FLOW_SENSOR,
     CONF_EARLIEST_HOUR,
     CONF_EFFICIENCY,
     CONF_ELEVATION_M,
@@ -39,6 +49,10 @@ from .const import (
     CONF_LATITUDE,
     CONF_LONGITUDE,
     CONF_MAX_CYCLE_MIN,
+    CONF_MOISTURE_KIND,
+    CONF_MOISTURE_MODE,
+    CONF_MOISTURE_SENSOR,
+    CONF_MOISTURE_WEIGHT,
     CONF_MAX_DAILY_RUNTIME_MIN,
     CONF_MODE,
     CONF_NOTIFY_TARGET,
@@ -47,14 +61,20 @@ from .const import (
     CONF_PRECIPITATION_RATE,
     CONF_PRESSURE_SENSOR,
     CONF_PRIORITY,
+    CONF_RAIN_AMOUNT_SENSOR,
+    CONF_RAIN_KIND,
     CONF_RAIN_SENSOR,
+    CONF_ROUND_MINUTES,
     CONF_ROOT_DEPTH_IN,
+    CONF_SCHEDULE_PRESET,
     CONF_SLOPE_PCT,
+    CONF_SPRINKLER_TYPE,
     CONF_SOAK_MIN,
     CONF_SOIL_TYPE,
     CONF_SOLAR_SENSOR,
     CONF_SUNRISE_BUFFER_MIN,
     CONF_SUN_EXPOSURE,
+    CONF_UV_SENSOR,
     CONF_TEMPERATURE_SENSOR,
     CONF_VALVE_ENTITY,
     CONF_WEATHER_ENTITY,
@@ -62,6 +82,16 @@ from .const import (
     CONF_WIND_SENSOR,
     DEFAULT_DRY_RUN,
     DEFAULT_EFFICIENCY,
+    DEFAULT_FLOW_KIND,
+    DEFAULT_FLOW_LEAK_RATIO,
+    DEFAULT_FLOW_LOW_RATIO,
+    DEFAULT_MOISTURE_KIND,
+    DEFAULT_MOISTURE_MODE,
+    DEFAULT_MOISTURE_WEIGHT,
+    DEFAULT_RAIN_KIND,
+    DEFAULT_ROUND_MINUTES,
+    DEFAULT_SCHEDULE_PRESET,
+    DEFAULT_SPRINKLER_TYPE,
     DEFAULT_ELEVATION_M,
     DEFAULT_PLAN_HOUR,
     DEFAULT_PRIORITY,
@@ -69,8 +99,15 @@ from .const import (
     DEFAULT_WIND_HEIGHT_M,
     DOMAIN,
     MODE_NOTIFY_ONLY,
+    FLOW_KINDS,
     MODES,
+    MOISTURE_KINDS,
+    MOISTURE_MODES,
+    RAIN_KINDS,
+    SCHEDULE_PRESETS,
+    SPRINKLER_TYPES,
     SUBENTRY_ZONE,
+    WEEKDAYS,
 )
 from .soil import PLANT_TYPES, PLANTS, SOIL_TYPES, SUN_EXPOSURES
 
@@ -79,15 +116,23 @@ _SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")
 _BINARY = selector.EntitySelector(
     selector.EntitySelectorConfig(domain="binary_sensor")
 )
-_VALVE = selector.EntitySelector(selector.EntitySelectorConfig(domain="valve"))
+_ON_OFF = selector.EntitySelector(
+    selector.EntitySelectorConfig(domain=["switch", "valve", "input_boolean"])
+)
 _TEXT = selector.TextSelector()
 _BOOL = selector.BooleanSelector()
 
 
-def _select(options: tuple[str, ...] | list[str], key: str) -> selector.SelectSelector:
+def _select(
+    options: tuple[str, ...] | list[str],
+    key: str,
+    *,
+    multiple: bool = False,
+) -> selector.SelectSelector:
     return selector.SelectSelector(
         selector.SelectSelectorConfig(
             options=list(options),
+            multiple=multiple,
             mode=selector.SelectSelectorMode.DROPDOWN,
             translation_key=key,
         )
@@ -291,6 +336,14 @@ def _behavior_fields() -> dict[Any, Any]:
         vol.Optional(CONF_EARLIEST_HOUR): _number(0, 23, 1),
         vol.Optional(CONF_FORECAST_SKIP_MM): _number(0, 100, 0.1, "mm"),
         vol.Optional(CONF_MAX_DAILY_RUNTIME_MIN): _number(1, 600, 1, "min"),
+        vol.Required(CONF_ROUND_MINUTES, default=DEFAULT_ROUND_MINUTES): _BOOL,
+        vol.Required(CONF_SCHEDULE_PRESET, default=DEFAULT_SCHEDULE_PRESET): _select(
+            SCHEDULE_PRESETS, "schedule_preset"
+        ),
+        vol.Optional(CONF_ALLOWED_WEEKDAYS): _select(WEEKDAYS, "weekday", multiple=True),
+        vol.Optional(CONF_BLACKOUT_START_HOUR): _number(0, 23, 1),
+        vol.Optional(CONF_BLACKOUT_END_HOUR): _number(0, 23, 1),
+        vol.Required(CONF_DRIP_IGNORES_SCHEDULE, default=False): _BOOL,
     }
 
 
@@ -319,6 +372,11 @@ def _sensor_schema() -> vol.Schema:
             vol.Optional(CONF_WIND_SENSOR): _SENSOR,
             vol.Optional(CONF_PRESSURE_SENSOR): _SENSOR,
             vol.Optional(CONF_SOLAR_SENSOR): _SENSOR,
+            vol.Optional(CONF_UV_SENSOR): _SENSOR,
+            vol.Optional(CONF_RAIN_AMOUNT_SENSOR): _SENSOR,
+            vol.Required(CONF_RAIN_KIND, default=DEFAULT_RAIN_KIND): _select(
+                RAIN_KINDS, "rain_kind"
+            ),
             vol.Required(CONF_WIND_HEIGHT_M, default=DEFAULT_WIND_HEIGHT_M): _number(
                 0.5, 30, 0.1, "m"
             ),
@@ -406,6 +464,9 @@ class ZoneSubentryFlow(ConfigSubentryFlow):
                         vol.Required(CONF_SUN_EXPOSURE, default="full_sun"): _select(
                             SUN_EXPOSURES, "sun_exposure"
                         ),
+                        vol.Required(
+                            CONF_SPRINKLER_TYPE, default=DEFAULT_SPRINKLER_TYPE
+                        ): _select(SPRINKLER_TYPES, "sprinkler_type"),
                     }
                 ),
                 suggested,
@@ -491,7 +552,28 @@ def _hydraulics_schema() -> vol.Schema:
             vol.Optional(CONF_MAX_CYCLE_MIN): _number(1, 180, 1, "min"),
             vol.Optional(CONF_SOAK_MIN): _number(0, 180, 1, "min"),
             vol.Required(CONF_PRIORITY, default=DEFAULT_PRIORITY): _number(1, 99, 1),
-            vol.Optional(CONF_VALVE_ENTITY): _VALVE,
+            vol.Optional(CONF_VALVE_ENTITY): _ON_OFF,
+            vol.Optional(CONF_MOISTURE_SENSOR): _SENSOR,
+            vol.Required(CONF_MOISTURE_MODE, default=DEFAULT_MOISTURE_MODE): _select(
+                MOISTURE_MODES, "moisture_mode"
+            ),
+            vol.Required(CONF_MOISTURE_KIND, default=DEFAULT_MOISTURE_KIND): _select(
+                MOISTURE_KINDS, "moisture_kind"
+            ),
+            vol.Required(CONF_MOISTURE_WEIGHT, default=DEFAULT_MOISTURE_WEIGHT): _number(
+                0, 1, 0.05
+            ),
+            vol.Optional(CONF_FIELD_CAPACITY): _number(0.01, 0.6, 0.01),
+            vol.Optional(CONF_FLOW_SENSOR): _SENSOR,
+            vol.Required(CONF_FLOW_KIND, default=DEFAULT_FLOW_KIND): _select(
+                FLOW_KINDS, "flow_kind"
+            ),
+            vol.Required(CONF_FLOW_LOW_RATIO, default=DEFAULT_FLOW_LOW_RATIO): _number(
+                0, 1, 0.05
+            ),
+            vol.Required(CONF_FLOW_LEAK_RATIO, default=DEFAULT_FLOW_LEAK_RATIO): _number(
+                1, 5, 0.05
+            ),
             vol.Optional(CONF_RAIN_SENSOR): _BINARY,
             vol.Optional(CONF_KC_OVERRIDE): _number(0, 1.5, 0.01),
             vol.Optional(CONF_AWC_OVERRIDE): _number(0.01, 0.6, 0.01),

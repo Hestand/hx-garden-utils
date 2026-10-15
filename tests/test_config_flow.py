@@ -62,6 +62,10 @@ def _serialize(result: dict[str, Any]) -> list[dict[str, Any]]:
     for field in fields:
         assert "name" in field
         assert "selector" in field, field
+        number = field["selector"].get("number")
+        if number and "step" in number:
+            step = number["step"]
+            assert step == "any" or float(step) >= 0.001, field
     return fields
 
 
@@ -117,6 +121,13 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
         "notify_only",
         "off",
     ]
+    assert _field(fields, "schedule_preset")["selector"]["select"]["options"] == [
+        "none",
+        "waco_odd",
+        "waco_even",
+        "custom",
+    ]
+    assert _field(fields, "round_minutes")["selector"]["boolean"] == {}
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -131,6 +142,12 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
     fields = _serialize(result)
     assert _field(fields, "temperature_sensor")["selector"]["entity"]["domain"] == [
         "sensor"
+    ]
+    assert _field(fields, "uv_sensor")["selector"]["entity"]["domain"] == ["sensor"]
+    assert _field(fields, "rain_kind")["selector"]["select"]["options"] == [
+        "daily_total",
+        "cumulative",
+        "rate",
     ]
 
 
@@ -192,6 +209,13 @@ async def test_zone_subentry_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert "text" in _field(fields, "name")["selector"]
     assert _field(fields, CONF_PLANT_TYPE)["selector"]["select"]["options"]
     assert _field(fields, CONF_SLOPE_PCT)["selector"]["number"]["unit_of_measurement"] == "%"
+    assert _field(fields, "sprinkler_type")["selector"]["select"]["options"] == [
+        "spray",
+        "rotor",
+        "mp_rotator",
+        "drip",
+        "bubbler",
+    ]
 
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"],
@@ -211,7 +235,22 @@ async def test_zone_subentry_flow_forms_serialize(hass: HomeAssistant) -> None:
         ]
         == "in/h"
     )
-    assert _field(fields, "valve_entity")["selector"]["entity"]["domain"] == ["valve"]
+    assert _field(fields, "valve_entity")["selector"]["entity"]["domain"] == [
+        "switch",
+        "valve",
+        "input_boolean",
+    ]
+    assert _field(fields, "moisture_mode")["selector"]["select"]["options"] == [
+        "off",
+        "correct",
+        "override",
+    ]
+    assert _field(fields, "flow_kind")["selector"]["select"]["options"] == [
+        "total",
+        "rate",
+    ]
+    assert _field(fields, "moisture_weight")["selector"]["number"]["step"] == 0.05
+    assert _field(fields, "flow_leak_ratio")["selector"]["number"]["step"] == 0.05
 
 
 async def test_reconfigure_forms_serialize(hass: HomeAssistant) -> None:

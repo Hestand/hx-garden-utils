@@ -29,6 +29,8 @@ async def async_setup_entry(
             ModeSensor(coordinator),
             TonightPlanSensor(coordinator),
             ET0Sensor(coordinator),
+            RainSensor(coordinator),
+            ScheduleSensor(coordinator),
         ]
     )
     for subentry in entry.subentries.values():
@@ -41,6 +43,9 @@ async def async_setup_entry(
                 RawSensor(coordinator, zone_id),
                 NextRunSensor(coordinator, zone_id),
                 PlanReasonSensor(coordinator, zone_id),
+                ZonePlanSensor(coordinator, zone_id),
+                FlowSensor(coordinator, zone_id),
+                MoistureSensor(coordinator, zone_id),
             ],
             config_subentry_id=zone_id,
         )
@@ -98,7 +103,7 @@ class TonightPlanSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Return the full plan. would_execute is false in v0.1."""
+        """Return the full plan. would_execute stays false until an executor exists."""
         data = self.coordinator.data
         if data is None or data.plan is None:
             return {"would_execute": False}
@@ -261,7 +266,7 @@ class NextRunSensor(_ZoneSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Cycle lengths are whole minutes, ready for a later Hydrawise call."""
+        """Cycle lengths for a later generic entity run. Nothing is turned on."""
         zone = self._zone()
         if zone is None:
             return {}
@@ -291,3 +296,171 @@ class PlanReasonSensor(_ZoneSensor):
         if zone is None:
             return None
         return zone.reason
+
+
+class RainSensor(SmartWaterHubEntity, SensorEntity):
+    """Today's rain, with the FAO effective-rain decision in attributes."""
+
+    _attr_translation_key = "rain_today"
+    _attr_device_class = SensorDeviceClass.PRECIPITATION
+    _attr_native_unit_of_measurement = UnitOfPrecipitationDepth.MILLIMETERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:weather-rainy"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_rain_today"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return accumulated rain in millimeters."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.rain_today_mm
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Effective rain is what the bucket is allowed to use."""
+        data = self.coordinator.data
+        if data is None:
+            return {}
+        return {
+            "effective_mm": data.effective_rain_mm,
+            "ignored": data.rain_ignored,
+            "source": data.precip_source,
+            "solar_mj": data.solar_mj,
+        }
+
+
+class ScheduleSensor(SmartWaterHubEntity, SensorEntity):
+    """Next planned start across zones, plus the watering-day rules."""
+
+    _attr_translation_key = "schedule"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_schedule"
+
+    @property
+    def native_value(self):
+        """Return the earliest cycle start, if any zone is scheduled."""
+        data = self.coordinator.data
+        if data is None or data.plan is None or not data.plan.timeline:
+            return None
+        return data.plan.timeline[0].start
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Show the preset and the blackout that shaped the window."""
+        data = self.coordinator.data
+        if data is None:
+            return {}
+        return {
+            "preset": data.schedule_source,
+            "allowed_weekdays": list(data.allowed_weekdays or []),
+            "blackout_start": data.blackout_start,
+            "blackout_end": data.blackout_end,
+            "round_minutes": data.round_minutes,
+        }
+
+
+class ZonePlanSensor(_ZoneSensor):
+    """Per-zone plan: scheduled or the reason it was left out."""
+
+    _attr_translation_key = "zone_plan"
+    _attr_icon = "mdi:sprinkler-variant"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the zone plan sensor."""
+        super().__init__(coordinator, zone_id, "zone_plan")
+
+    @property
+    def native_value(self) -> str | None:
+        """Return scheduled or idle."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return "scheduled" if zone.scheduled else "idle"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Runtime, cycles, adjustment, and the stored on/off entity."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {
+            "reason": zone.reason,
+            "runtime_min": zone.runtime_min,
+            "cycles_min": list(zone.cycles),
+            "soak_min": zone.soak_min,
+            "adjustment_pct": zone.adjustment_pct,
+            "sprinkler_type": zone.sprinkler_type,
+            "valve_entity": zone.valve_entity,
+            "last_run_now": zone.last_run_now,
+        }
+
+
+class FlowSensor(_ZoneSensor):
+    """Delivered volume versus the plan. Status only; nothing is closed."""
+
+    _attr_translation_key = "flow"
+    _attr_icon = "mdi:water-pump"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the flow sensor."""
+        super().__init__(coordinator, zone_id, "flow")
+
+    @property
+    def native_value(self) -> str | None:
+        """Return pending, ok, low_flow, leak, no_data, or not_configured."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.flow_status
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Gallons observed and gallons the plan expected."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {
+            "delivered_gal": round(zone.flow_delivered_gal, 2),
+            "expected_gal": zone.flow_expected_gal,
+        }
+
+
+class MoistureSensor(_ZoneSensor):
+    """Sensor-derived deficit. The bucket uses it only in correct or override mode."""
+
+    _attr_translation_key = "moisture"
+    _attr_device_class = SensorDeviceClass.PRECIPITATION
+    _attr_native_unit_of_measurement = UnitOfPrecipitationDepth.MILLIMETERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:water-percent"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the moisture sensor."""
+        super().__init__(coordinator, zone_id, "moisture")
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the deficit implied by the moisture sensor."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.moisture_deficit_mm
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Show whether the reading corrects or replaces the bucket."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {"mode": zone.moisture_mode}
