@@ -1,10 +1,9 @@
 """Guards that keep v0.1 from watering.
 
-Dry-run is the stored default, and leaving it requires the options-flow
-confirmation phrase. That flag is not sufficient on its own: this module
-refuses execution even when dry-run has been cleared, because v0.1 has no
-executor. A later version that calls ``hydrawise.start_watering`` must keep
-the dry-run and mode checks.
+Dry-run is an optional switch and defaults off. It is not what stops
+watering in this version: this module refuses execution because v0.1 has
+no executor. A later version that calls ``hydrawise.start_watering`` must
+keep the dry-run and mode checks.
 """
 
 from __future__ import annotations

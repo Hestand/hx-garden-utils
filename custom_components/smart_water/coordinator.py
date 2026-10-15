@@ -58,6 +58,7 @@ from .const import (
     CONF_WEATHER_ENTITY,
     CONF_WIND_HEIGHT_M,
     CONF_WIND_SENSOR,
+    DEFAULT_DRY_RUN,
     DEFAULT_EFFICIENCY,
     DEFAULT_ELEVATION_M,
     DEFAULT_PLAN_HOUR,
@@ -277,7 +278,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         now = dt_util.now(self._timezone())
         today = now.date().isoformat()
         plan_hour = int(options.get(CONF_PLAN_HOUR, DEFAULT_PLAN_HOUR))
-        dry_run = bool(options.get(CONF_DRY_RUN, True))
+        dry_run = bool(options.get(CONF_DRY_RUN, DEFAULT_DRY_RUN))
         mode = str(options.get(CONF_MODE, MODE_NOTIFY_ONLY))
         elevation = float(options.get(CONF_ELEVATION_M, DEFAULT_ELEVATION_M))
         latitude = options.get(CONF_LATITUDE, self.hass.config.latitude)

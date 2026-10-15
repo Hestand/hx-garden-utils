@@ -15,7 +15,7 @@
       },
       "behavior": {
         "title": "How the hub behaves",
-        "description": "Dry-run stays on unless you clear it on the next step and type ENABLE WATERING. Clearing it only stores the flag. This version still will not water. Notify only and Off both refuse execution. Auto is the mode a future executor would use, and it is still blocked while dry-run is on.",
+        "description": "Dry-run is off by default. Turn it on to label plans as not-for-execution. This version still will not water: there is no executor. Notify only and Off both refuse execution. Auto is the mode a future executor would use.",
         "data": {
           "dry_run": "Dry-run (do not water)",
           "mode": "Mode",
@@ -45,13 +45,6 @@
           "wind_height_m": "Wind sensor height"
         }
       },
-      "confirm_arm": {
-        "title": "Leave dry-run?",
-        "description": "Type ENABLE WATERING to store dry-run off. v0.1 has no executor and will still not open a valve or call Hydrawise. The phrase only records that a later version is allowed to consider watering.",
-        "data": {
-          "confirm": "Confirmation"
-        }
-      },
       "reconfigure": {
         "title": "Update the hub",
         "data": {
@@ -61,8 +54,7 @@
       }
     },
     "error": {
-      "latitude_pair": "Set both latitude and longitude, or leave both empty.",
-      "invalid_confirmation": "Type ENABLE WATERING to continue. Dry-run was left on."
+      "latitude_pair": "Set both latitude and longitude, or leave both empty."
     },
     "abort": {
       "reconfigure_successful": "Hub updated."
@@ -72,7 +64,7 @@
     "step": {
       "init": {
         "title": "Smart Water options",
-        "description": "Dry-run is on by default. Turning it off asks for the confirmation phrase and still does not water in v0.1.",
+        "description": "Dry-run defaults off. Turning it on only marks the plan as not-for-execution. v0.1 still does not water.",
         "data": {
           "elevation_m": "Elevation",
           "latitude": "Latitude override",
@@ -98,17 +90,7 @@
           "solar_radiation_sensor": "Solar radiation sensor",
           "wind_height_m": "Wind sensor height"
         }
-      },
-      "confirm_arm": {
-        "title": "Leave dry-run?",
-        "description": "Type ENABLE WATERING. v0.1 will still not open a valve.",
-        "data": {
-          "confirm": "Confirmation"
-        }
       }
-    },
-    "error": {
-      "invalid_confirmation": "Type ENABLE WATERING to continue. Dry-run was left on."
     }
   },
   "config_subentries": {

@@ -1,7 +1,7 @@
 """Config and options flows for Smart Water.
 
-Zones are config subentries. Dry-run defaults on. Clearing it requires the
-confirmation phrase, and v0.1 still will not open a valve after that.
+Zones are config subentries. Dry-run defaults off. v0.1 still will not open
+a valve, because there is no executor.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
-    ARM_PHRASE,
     CONF_AREA_SQFT,
     CONF_AWC_OVERRIDE,
     CONF_DEPLETION,
@@ -61,6 +60,7 @@ from .const import (
     CONF_WEATHER_ENTITY,
     CONF_WIND_HEIGHT_M,
     CONF_WIND_SENSOR,
+    DEFAULT_DRY_RUN,
     DEFAULT_EFFICIENCY,
     DEFAULT_ELEVATION_M,
     DEFAULT_PLAN_HOUR,
@@ -198,7 +198,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=self.add_suggested_values_to_schema(
                 _behavior_schema(),
                 {
-                    CONF_DRY_RUN: True,
+                    CONF_DRY_RUN: DEFAULT_DRY_RUN,
                     CONF_MODE: MODE_NOTIFY_ONLY,
                     CONF_SUNRISE_BUFFER_MIN: DEFAULT_SUNRISE_BUFFER_MIN,
                     CONF_PLAN_HOUR: DEFAULT_PLAN_HOUR,
@@ -212,36 +212,18 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         """Optional Tempest-style sensors. All of them can be left empty."""
         if user_input is not None:
             self._draft.update(user_input)
-            if self._draft.get(CONF_DRY_RUN, True) is False:
-                return await self.async_step_confirm_arm()
             return self._create()
         return self.async_show_form(
             step_id="sensors",
             data_schema=_sensor_schema(),
-            last_step=bool(self._draft.get(CONF_DRY_RUN, True)),
-        )
-
-    async def async_step_confirm_arm(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Require a typed phrase before storing dry-run off."""
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            if str(user_input.get("confirm", "")).strip() != ARM_PHRASE:
-                errors["confirm"] = "invalid_confirmation"
-            else:
-                return self._create()
-        return self.async_show_form(
-            step_id="confirm_arm",
-            data_schema=vol.Schema({vol.Required("confirm"): str}),
-            errors=errors,
+            last_step=True,
         )
 
     def _create(self) -> ConfigFlowResult:
         draft = _drop_blanks(self._draft)
         name = str(draft.pop("name"))
         weather = draft.pop(CONF_WEATHER_ENTITY)
-        draft.setdefault(CONF_DRY_RUN, True)
+        draft.setdefault(CONF_DRY_RUN, DEFAULT_DRY_RUN)
         draft.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
         return self.async_create_entry(
             title=name,
@@ -294,7 +276,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
 def _behavior_fields() -> dict[Any, Any]:
     """Markers for dry-run, mode, and the watering window."""
     return {
-        vol.Required(CONF_DRY_RUN, default=True): bool,
+        vol.Required(CONF_DRY_RUN, default=DEFAULT_DRY_RUN): bool,
         vol.Required(CONF_MODE, default=MODE_NOTIFY_ONLY): _select(MODES, "mode"),
         vol.Optional(CONF_NOTIFY_TARGET): str,
         vol.Optional(CONF_RAIN_SENSOR): _BINARY,
@@ -369,42 +351,19 @@ class SmartWaterOptionsFlow(OptionsFlow):
         """Optional local sensors."""
         if user_input is not None:
             self._draft.update(user_input)
-            previous = bool(self.config_entry.options.get(CONF_DRY_RUN, True))
-            if previous and self._draft.get(CONF_DRY_RUN, True) is False:
-                return await self.async_step_confirm_arm()
             return self._save()
         return self.async_show_form(
             step_id="sensors",
             data_schema=self.add_suggested_values_to_schema(
                 _sensor_schema(), dict(self.config_entry.options)
             ),
-            last_step=not (
-                bool(self.config_entry.options.get(CONF_DRY_RUN, True))
-                and self._draft.get(CONF_DRY_RUN, True) is False
-            ),
-        )
-
-    async def async_step_confirm_arm(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Confirm before storing dry-run off. v0.1 still will not water."""
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            if str(user_input.get("confirm", "")).strip() != ARM_PHRASE:
-                errors["confirm"] = "invalid_confirmation"
-            else:
-                return self._save()
-        return self.async_show_form(
-            step_id="confirm_arm",
-            data_schema=vol.Schema({vol.Required("confirm"): str}),
-            errors=errors,
+            last_step=True,
         )
 
     def _save(self) -> ConfigFlowResult:
         # Keep the weather entity in entry data. Options replace the rest.
         data = _drop_blanks(self._draft)
-        data.pop("confirm", None)
-        data.setdefault(CONF_DRY_RUN, True)
+        data.setdefault(CONF_DRY_RUN, DEFAULT_DRY_RUN)
         data.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
         return self.async_create_entry(data=data)
 

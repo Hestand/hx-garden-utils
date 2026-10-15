@@ -51,8 +51,8 @@ MODES = (MODE_AUTO, MODE_NOTIFY_ONLY, MODE_OFF)
 
 SUBENTRY_ZONE = "zone"
 
-# Typed by the user to store dry_run=False. v0.1 still will not open a valve.
-ARM_PHRASE = "ENABLE WATERING"
+# Off by default. v0.1 still will not open a valve: there is no executor.
+DEFAULT_DRY_RUN = False
 
 DEFAULT_ELEVATION_M = 219.0
 DEFAULT_SUNRISE_BUFFER_MIN = 30
