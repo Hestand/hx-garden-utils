@@ -6,7 +6,7 @@ a valve, because there is no executor.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import voluptuous as vol
 
@@ -80,6 +80,8 @@ _BINARY = selector.EntitySelector(
     selector.EntitySelectorConfig(domain="binary_sensor")
 )
 _VALVE = selector.EntitySelector(selector.EntitySelectorConfig(domain="valve"))
+_TEXT = selector.TextSelector()
+_BOOL = selector.BooleanSelector()
 
 
 def _select(options: tuple[str, ...] | list[str], key: str) -> selector.SelectSelector:
@@ -95,7 +97,7 @@ def _select(options: tuple[str, ...] | list[str], key: str) -> selector.SelectSe
 def _number(
     min_value: float,
     max_value: float,
-    step: float,
+    step: float | Literal["any"],
     unit: str | None = None,
 ) -> selector.NumberSelector:
     config = selector.NumberSelectorConfig(
@@ -172,13 +174,15 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=self.add_suggested_values_to_schema(
                 vol.Schema(
                     {
-                        vol.Required("name"): str,
+                        vol.Required("name"): _TEXT,
                         vol.Required(CONF_WEATHER_ENTITY): _WEATHER,
                         vol.Required(
                             CONF_ELEVATION_M, default=DEFAULT_ELEVATION_M
                         ): _number(0, 5000, 0.1, "m"),
-                        vol.Optional(CONF_LATITUDE): _number(-90, 90, 0.0001),
-                        vol.Optional(CONF_LONGITUDE): _number(-180, 180, 0.0001),
+                        # NumberSelector rejects steps below 0.001. "any" keeps
+                        # full coordinate precision on Home Assistant 2026.10.
+                        vol.Optional(CONF_LATITUDE): _number(-90, 90, "any"),
+                        vol.Optional(CONF_LONGITUDE): _number(-180, 180, "any"),
                     }
                 ),
                 user_input or {},
@@ -264,7 +268,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=self.add_suggested_values_to_schema(
                 vol.Schema(
                     {
-                        vol.Required("name"): str,
+                        vol.Required("name"): _TEXT,
                         vol.Required(CONF_WEATHER_ENTITY): _WEATHER,
                     }
                 ),
@@ -276,9 +280,9 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
 def _behavior_fields() -> dict[Any, Any]:
     """Markers for dry-run, mode, and the watering window."""
     return {
-        vol.Required(CONF_DRY_RUN, default=DEFAULT_DRY_RUN): bool,
+        vol.Required(CONF_DRY_RUN, default=DEFAULT_DRY_RUN): _BOOL,
         vol.Required(CONF_MODE, default=MODE_NOTIFY_ONLY): _select(MODES, "mode"),
-        vol.Optional(CONF_NOTIFY_TARGET): str,
+        vol.Optional(CONF_NOTIFY_TARGET): _TEXT,
         vol.Optional(CONF_RAIN_SENSOR): _BINARY,
         vol.Required(
             CONF_SUNRISE_BUFFER_MIN, default=DEFAULT_SUNRISE_BUFFER_MIN
@@ -300,8 +304,8 @@ def _options_schema() -> vol.Schema:
         vol.Required(CONF_ELEVATION_M, default=DEFAULT_ELEVATION_M): _number(
             0, 5000, 0.1, "m"
         ),
-        vol.Optional(CONF_LATITUDE): _number(-90, 90, 0.0001),
-        vol.Optional(CONF_LONGITUDE): _number(-180, 180, 0.0001),
+        vol.Optional(CONF_LATITUDE): _number(-90, 90, "any"),
+        vol.Optional(CONF_LONGITUDE): _number(-180, 180, "any"),
     }
     fields.update(_behavior_fields())
     return vol.Schema(fields)
@@ -395,7 +399,7 @@ class ZoneSubentryFlow(ConfigSubentryFlow):
             data_schema=self.add_suggested_values_to_schema(
                 vol.Schema(
                     {
-                        vol.Required("name"): str,
+                        vol.Required("name"): _TEXT,
                         vol.Required(CONF_PLANT_TYPE): _select(PLANT_TYPES, "plant_type"),
                         vol.Required(CONF_SOIL_TYPE): _select(SOIL_TYPES, "soil_type"),
                         vol.Required(CONF_SLOPE_PCT, default=0): _number(0, 100, 0.1, "%"),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "smart_water"
 NAME = "Smart Water"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 # Stored on the hub. v0.1 never waters; clearing this only records intent.
 CONF_DRY_RUN = "dry_run"

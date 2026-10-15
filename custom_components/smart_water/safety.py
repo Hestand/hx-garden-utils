@@ -11,7 +11,7 @@ from __future__ import annotations
 from .const import MODE_AUTO, MODE_NOTIFY_ONLY, MODE_OFF
 
 # Flip only when an executor exists and has been reviewed. Tests assert this
-# stays false for the 0.1.0 release.
+# stays false for the 0.1 series.
 EXECUTION_IMPLEMENTED = False
 
 

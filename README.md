@@ -2,7 +2,7 @@
 
 Work in progress, not ready for general use.
 
-Dry-run water-balance planner for Home Assistant (`smart_water` 0.1.0).
+Dry-run water-balance planner for Home Assistant (`smart_water` 0.1.1).
 
 It estimates reference evapotranspiration, tracks a soil-water deficit for each zone, and builds a nightly cycle-and-soak plan that finishes before sunrise. **Version 0.1 never opens a valve and never calls `hydrawise.start_watering`.** A plan is a notification and a set of sensors.
 
@@ -16,7 +16,7 @@ Requires Home Assistant **2025.3** or newer (config subentries). No extra Python
 
 1. HACS → Integrations → ⋮ → Custom repositories.
 2. Add `https://github.com/Hestand/hx-garden-utils` as category **Integration**.
-3. Download **Smart Water** (release `v0.1.0`), then restart Home Assistant.
+3. Download **Smart Water** (release `v0.1.1`), then restart Home Assistant.
 
 `hacs.json` is included. This is not in the default HACS store.
 
