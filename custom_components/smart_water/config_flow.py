@@ -1,11 +1,12 @@
 """Config and options flows for Smart Water.
 
-The hub asks for a name and either a weather entity or a temperature sensor.
-A zone asks for a name, an on/off entity, and the plant, soil, sprinkler,
-and sun dropdowns. Every derived number stays blank unless the user types
-an override; blank means the preset in ``presets.py``.
+The first step chooses a live hub or a simulation hub. A live hub asks for
+a name and either a weather entity or a temperature sensor. A simulation
+hub asks for a name, an example week, and a starting soil, and its zones
+have no on/off entity. Every derived number stays blank unless the user
+types an override; blank means the preset in ``presets.py``.
 
-v0.3 still will not open a valve. There is no executor. A later executor
+v0.4 still will not open a valve. There is no executor. A later executor
 will use the stored on/off entity and will not call Hydrawise.
 """
 
@@ -37,6 +38,7 @@ from .const import (
     CONF_AWC_OVERRIDE,
     CONF_BLACKOUT_END_HOUR,
     CONF_BLACKOUT_START_HOUR,
+    CONF_BUCKET,
     CONF_DEPLETION,
     CONF_DRIP_IGNORES_SCHEDULE,
     CONF_DRY_RUN,
@@ -73,7 +75,9 @@ from .const import (
     CONF_RAIN_SENSOR,
     CONF_ROUND_MINUTES,
     CONF_ROOT_DEPTH_IN,
+    CONF_SCENARIO,
     CONF_SCHEDULE_PRESET,
+    CONF_SIMULATION,
     CONF_SLOPE_PCT,
     CONF_SOAK_MIN,
     CONF_SOIL_TYPE,
@@ -118,6 +122,7 @@ from .const import (
 )
 from .discover import EntityHint, discover
 from .presets import preset_placeholders
+from .simulate import BUCKETS, DEFAULT_BUCKET, DEFAULT_SCENARIO, SCENARIOS
 from .soil import PLANT_TYPES, SOIL_TYPES, SUN_EXPOSURES
 
 _SECTION_SENSORS = "sensors"
@@ -372,19 +377,64 @@ def _hub_schema(*, sensors_collapsed: bool) -> vol.Schema:
     )
 
 
-def _options_schema(*, sensors_collapsed: bool) -> vol.Schema:
+def _options_schema(*, sensors_collapsed: bool, simulation: bool = False) -> vol.Schema:
+    fields: dict[Any, Any] = {}
+    if simulation:
+        fields[vol.Required(CONF_SCENARIO, default=DEFAULT_SCENARIO)] = _select(
+            SCENARIOS, "scenario"
+        )
+        fields[vol.Required(CONF_BUCKET, default=DEFAULT_BUCKET)] = _select(
+            BUCKETS, "bucket"
+        )
+    fields[vol.Required(_SECTION_SENSORS)] = section(
+        vol.Schema(_sensor_fields()),
+        {"collapsed": sensors_collapsed},
+    )
+    fields[vol.Required(_SECTION_LOCATION)] = section(
+        vol.Schema(_location_fields()),
+        {"collapsed": True},
+    )
+    return vol.Schema(fields)
+
+
+def _simulation_schema() -> vol.Schema:
     return vol.Schema(
         {
-            vol.Required(_SECTION_SENSORS): section(
-                vol.Schema(_sensor_fields()),
-                {"collapsed": sensors_collapsed},
+            vol.Required("name"): _TEXT,
+            vol.Required(CONF_SCENARIO, default=DEFAULT_SCENARIO): _select(
+                SCENARIOS, "scenario"
             ),
+            vol.Required(CONF_BUCKET, default=DEFAULT_BUCKET): _select(BUCKETS, "bucket"),
             vol.Required(_SECTION_LOCATION): section(
                 vol.Schema(_location_fields()),
                 {"collapsed": True},
             ),
         }
     )
+
+
+def _zone_quick_schema(*, simulation: bool) -> vol.Schema:
+    fields: dict[Any, Any] = {
+        vol.Required("name"): _TEXT,
+    }
+    if not simulation:
+        fields[vol.Required(CONF_VALVE_ENTITY)] = _ON_OFF
+    fields.update(
+        {
+            vol.Required(CONF_PLANT_TYPE): _select(PLANT_TYPES, "plant_type"),
+            vol.Required(CONF_SOIL_TYPE): _select(SOIL_TYPES, "soil_type"),
+            vol.Required(CONF_SPRINKLER_TYPE, default=DEFAULT_SPRINKLER_TYPE): _select(
+                SPRINKLER_TYPES, "sprinkler_type"
+            ),
+            vol.Required(CONF_SUN_EXPOSURE, default="full_sun"): _select(
+                SUN_EXPOSURES, "sun_exposure"
+            ),
+        }
+    )
+    if simulation:
+        fields[vol.Optional(CONF_AREA_SQFT)] = _number(1, 1_000_000, 1, "ft²")
+        fields[vol.Optional(CONF_SLOPE_PCT)] = _number(0, 100, 0.1, "%")
+    return vol.Schema(fields)
 
 
 def _advanced_schema() -> vol.Schema:
@@ -474,7 +524,7 @@ def _has_climate(weather: Any, temperature: Any) -> bool:
 class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
     """Set up a Smart Water hub."""
 
-    VERSION = 2
+    VERSION = 3
     MINOR_VERSION = 1
 
     @staticmethod
@@ -492,6 +542,15 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         return {SUBENTRY_ZONE: ZoneSubentryFlow}
 
     async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose a live hub or a simulation that needs no real devices."""
+        return self.async_show_menu(
+            step_id="user",
+            menu_options=["live", "simulation"],
+        )
+
+    async def async_step_live(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Name, optional weather, and collapsed sensor and schedule sections."""
@@ -538,13 +597,49 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         )
         return self.async_show_form(
-            step_id="user",
+            step_id="live",
             data_schema=self.add_suggested_values_to_schema(
                 _hub_schema(sensors_collapsed=not sensors_open),
                 suggested,
             ),
             errors=errors,
             last_step=True,
+        )
+
+    async def async_step_simulation(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Name only. Weather, sensors, and valves are not required."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            flat = _flatten(user_input, frozenset({_SECTION_LOCATION}))
+            if _blank(flat.get(CONF_LATITUDE)) != _blank(flat.get(CONF_LONGITUDE)):
+                errors["base"] = "latitude_pair"
+            else:
+                return self._create_simulation(flat)
+        return self.async_show_form(
+            step_id="simulation",
+            data_schema=self.add_suggested_values_to_schema(
+                _simulation_schema(),
+                user_input or {},
+            ),
+            errors=errors,
+            last_step=True,
+        )
+
+    def _create_simulation(self, flat: dict[str, Any]) -> ConfigFlowResult:
+        draft = _drop_blanks(flat)
+        name = str(draft.pop("name"))
+        scenario = str(draft.pop(CONF_SCENARIO, DEFAULT_SCENARIO))
+        bucket = str(draft.pop(CONF_BUCKET, DEFAULT_BUCKET))
+        draft.setdefault(CONF_DRY_RUN, DEFAULT_DRY_RUN)
+        draft.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
+        draft[CONF_SCENARIO] = scenario
+        draft[CONF_BUCKET] = bucket
+        return self.async_create_entry(
+            title=name,
+            data={CONF_SIMULATION: True},
+            options=draft,
         )
 
     def _create(self, flat: dict[str, Any]) -> ConfigFlowResult:
@@ -581,9 +676,12 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         """Change the hub name. Weather can be cleared when a temperature sensor exists."""
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
+        simulating = bool(entry.data.get(CONF_SIMULATION))
         if user_input is not None:
             weather = user_input.get(CONF_WEATHER_ENTITY)
-            if not _has_climate(weather, entry.options.get(CONF_TEMPERATURE_SENSOR)):
+            if not simulating and not _has_climate(
+                weather, entry.options.get(CONF_TEMPERATURE_SENSOR)
+            ):
                 errors["base"] = "need_weather"
             else:
                 data = {
@@ -603,17 +701,12 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
             suggested[CONF_WEATHER_ENTITY] = entry.data[CONF_WEATHER_ENTITY]
         if user_input:
             suggested.update(user_input)
+        schema: dict[Any, Any] = {vol.Required("name"): _TEXT}
+        if not simulating:
+            schema[vol.Optional(CONF_WEATHER_ENTITY)] = _WEATHER
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=self.add_suggested_values_to_schema(
-                vol.Schema(
-                    {
-                        vol.Required("name"): _TEXT,
-                        vol.Optional(CONF_WEATHER_ENTITY): _WEATHER,
-                    }
-                ),
-                suggested,
-            ),
+            data_schema=self.add_suggested_values_to_schema(vol.Schema(schema), suggested),
             errors=errors,
         )
 
@@ -626,12 +719,13 @@ class SmartWaterOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Sensors and the schedule, in two collapsed sections."""
         current = dict(self.config_entry.options)
+        simulating = bool(self.config_entry.data.get(CONF_SIMULATION))
         errors: dict[str, str] = {}
         if user_input is not None:
             flat = _flatten(user_input, _HUB_SECTIONS)
             if _blank(flat.get(CONF_LATITUDE)) != _blank(flat.get(CONF_LONGITUDE)):
                 errors["base"] = "latitude_pair"
-            elif not _has_climate(
+            elif not simulating and not _has_climate(
                 self.config_entry.data.get(CONF_WEATHER_ENTITY),
                 flat.get(CONF_TEMPERATURE_SENSOR),
             ):
@@ -642,6 +736,8 @@ class SmartWaterOptionsFlow(OptionsFlow):
                 data.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
                 return self.async_create_entry(data=data)
         suggested = user_input or {
+            CONF_SCENARIO: current.get(CONF_SCENARIO, DEFAULT_SCENARIO),
+            CONF_BUCKET: current.get(CONF_BUCKET, DEFAULT_BUCKET),
             _SECTION_SENSORS: _present(current, _SENSOR_KEYS),
             _SECTION_LOCATION: _present(current, _LOCATION_KEYS),
         }
@@ -651,7 +747,10 @@ class SmartWaterOptionsFlow(OptionsFlow):
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(
-                _options_schema(sensors_collapsed=not sensors_open),
+                _options_schema(
+                    sensors_collapsed=not sensors_open,
+                    simulation=simulating,
+                ),
                 suggested,
             ),
             errors=errors,
@@ -690,26 +789,15 @@ class ZoneSubentryFlow(ConfigSubentryFlow):
                         CONF_SOIL_TYPE,
                         CONF_SPRINKLER_TYPE,
                         CONF_SUN_EXPOSURE,
+                        CONF_AREA_SQFT,
+                        CONF_SLOPE_PCT,
                     ),
                 ),
             }
         return self.async_show_form(
             step_id="user",
             data_schema=self.add_suggested_values_to_schema(
-                vol.Schema(
-                    {
-                        vol.Required("name"): _TEXT,
-                        vol.Required(CONF_VALVE_ENTITY): _ON_OFF,
-                        vol.Required(CONF_PLANT_TYPE): _select(PLANT_TYPES, "plant_type"),
-                        vol.Required(CONF_SOIL_TYPE): _select(SOIL_TYPES, "soil_type"),
-                        vol.Required(
-                            CONF_SPRINKLER_TYPE, default=DEFAULT_SPRINKLER_TYPE
-                        ): _select(SPRINKLER_TYPES, "sprinkler_type"),
-                        vol.Required(CONF_SUN_EXPOSURE, default="full_sun"): _select(
-                            SUN_EXPOSURES, "sun_exposure"
-                        ),
-                    }
-                ),
+                _zone_quick_schema(simulation=self._simulation()),
                 suggested,
             ),
             errors=errors,
@@ -781,9 +869,14 @@ class ZoneSubentryFlow(ConfigSubentryFlow):
                 return {"name": "name_exists"}
         return {}
 
+    def _simulation(self) -> bool:
+        return bool(self._get_entry().data.get(CONF_SIMULATION))
+
     def _finish(self) -> SubentryFlowResult:
         name = str(self._quick.pop("name")).strip()
         data = _drop_blanks(self._quick)
+        if self._simulation():
+            data[CONF_VALVE_ENTITY] = f"simulation.{_zone_slug(name)}"
         if self._editing:
             return self.async_update_and_abort(
                 self._get_entry(),

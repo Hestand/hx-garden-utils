@@ -23,6 +23,8 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.smart_water.const import (
+    CONF_AREA_SQFT,
+    CONF_BUCKET,
     CONF_DEPLETION,
     CONF_DRY_RUN,
     CONF_EFFICIENCY,
@@ -35,6 +37,8 @@ from custom_components.smart_water.const import (
     CONF_PRECIPITATION_RATE,
     CONF_PRIORITY,
     CONF_ROOT_DEPTH_IN,
+    CONF_SCENARIO,
+    CONF_SIMULATION,
     CONF_SLOPE_PCT,
     CONF_SOIL_TYPE,
     CONF_SPRINKLER_TYPE,
@@ -114,13 +118,25 @@ def _sections() -> dict[str, dict[str, Any]]:
     return {"sensors": {}, "location": {}}
 
 
-async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
-    """One hub form holds the name, weather, and two collapsed sections."""
+async def _open_live(hass: HomeAssistant) -> dict[str, Any]:
+    """Start the user menu and open the live hub form."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "user"}
     )
-    fields = _serialize(result)
+    assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "user"
+    assert list(result["menu_options"]) == ["live", "simulation"]
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"next_step_id": "live"},
+    )
+
+
+async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
+    """The live hub form holds the name, weather, and two collapsed sections."""
+    result = await _open_live(hass)
+    fields = _serialize(result)
+    assert result["step_id"] == "live"
     assert "text" in _field(fields, "name")["selector"]
     assert _field(fields, CONF_WEATHER_ENTITY)["selector"]["entity"]["domain"] == [
         "weather"
@@ -159,7 +175,7 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert result["result"].options[CONF_ELEVATION_M] == 219
     assert result["result"].options[CONF_MODE] == MODE_NOTIFY_ONLY
     assert CONF_TEMPERATURE_SENSOR not in result["result"].options
-    assert result["result"].version == 2
+    assert result["result"].version == 3
 
 
 async def test_user_flow_http_post_is_ok(hass: HomeAssistant, hass_client) -> None:
@@ -174,17 +190,25 @@ async def test_user_flow_http_post_is_ok(hass: HomeAssistant, hass_client) -> No
     text = await response.text()
     assert response.status == 200, text
     body = json.loads(text)
-    assert body["type"] == "form"
+    assert body["type"] == "menu"
     assert body["step_id"] == "user"
+    assert body["menu_options"] == ["live", "simulation"]
+    response = await client.post(
+        f"/api/config/config_entries/flow/{body['flow_id']}",
+        json={"next_step_id": "live"},
+    )
+    text = await response.text()
+    assert response.status == 200, text
+    body = json.loads(text)
+    assert body["type"] == "form"
+    assert body["step_id"] == "live"
     latitude = _field(body["data_schema"], CONF_LATITUDE)
     assert latitude["selector"]["number"]["step"] == "any"
 
 
 async def test_temperature_sensor_can_replace_weather(hass: HomeAssistant) -> None:
     """A hub with only a temperature sensor is enough."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await _open_live(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
@@ -223,9 +247,7 @@ async def test_tempest_entities_are_suggested(hass: HomeAssistant) -> None:
             "friendly_name": "Kitchen",
         },
     )
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "user"}
-    )
+    result = await _open_live(hass)
     fields = _serialize(result)
     assert _field(fields, CONF_WEATHER_ENTITY)["description"]["suggested_value"] == (
         "weather.tempest"
@@ -465,3 +487,75 @@ async def test_reconfigure_suggests_stored_overrides_only(hass: HomeAssistant) -
     assert saved[CONF_EFFICIENCY] == 1.0
     assert saved[CONF_ROOT_DEPTH_IN] == 6
     assert CONF_PRECIPITATION_RATE not in saved
+
+
+async def test_simulation_hub_uses_dropdowns_and_a_virtual_valve(
+    hass: HomeAssistant,
+) -> None:
+    """A simulation hub needs no weather entity and no real on/off entity."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"next_step_id": "simulation"},
+    )
+    fields = _serialize(result)
+    assert result["step_id"] == "simulation"
+    assert all(field["name"] != CONF_WEATHER_ENTITY for field in fields)
+    assert _field(fields, CONF_SCENARIO)["selector"]["select"]["options"][0] == "hot_dry"
+    assert _field(fields, CONF_BUCKET)["selector"]["select"]["options"] == [
+        "full",
+        "half",
+        "raw",
+    ]
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "name": "Play yard",
+            CONF_SCENARIO: "hot_dry",
+            CONF_BUCKET: "full",
+            "location": {},
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    entry = result["result"]
+    assert entry.version == 3
+    assert entry.data == {CONF_SIMULATION: True}
+    assert entry.options[CONF_SCENARIO] == "hot_dry"
+    assert entry.options[CONF_BUCKET] == "full"
+    assert CONF_WEATHER_ENTITY not in entry.data
+
+    zone = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_ZONE),
+        context={"source": SOURCE_USER},
+    )
+    fields = _serialize(zone)
+    assert all(field["name"] != CONF_VALVE_ENTITY for field in fields)
+    assert _field(fields, CONF_AREA_SQFT)["optional"] is True
+    assert _field(fields, CONF_SLOPE_PCT)["optional"] is True
+    zone = await hass.config_entries.subentries.async_configure(
+        zone["flow_id"],
+        {
+            "name": "Front lawn",
+            CONF_PLANT_TYPE: "st_augustine",
+            CONF_SOIL_TYPE: "clay_loam",
+            CONF_SPRINKLER_TYPE: "spray",
+            CONF_SUN_EXPOSURE: "full_sun",
+            CONF_AREA_SQFT: 1000,
+        },
+    )
+    assert zone["step_id"] == "advanced"
+    zone = await hass.config_entries.subentries.async_configure(
+        zone["flow_id"],
+        {
+            "plant_overrides": {},
+            "hardware_overrides": {},
+            "measurement_overrides": {},
+        },
+    )
+    assert zone["type"] is FlowResultType.CREATE_ENTRY
+    assert zone["data"][CONF_VALVE_ENTITY] == "simulation.front_lawn"
+    assert zone["data"][CONF_AREA_SQFT] == 1000
+    assert CONF_SLOPE_PCT not in zone["data"]
+    assert CONF_EFFICIENCY not in zone["data"]

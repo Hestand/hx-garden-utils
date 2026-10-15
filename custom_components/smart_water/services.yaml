@@ -174,7 +174,7 @@ set_adjustment:
 run_now:
   name: Run now
   description: >-
-    Log the zone's current planned runtime. v0.2 does not start the run and
+    Log the zone's current planned runtime. This does not start the run and
     does not call the zone's on/off entity.
   fields:
     hub:
@@ -186,3 +186,49 @@ run_now:
       required: true
       selector:
         text:
+
+simulate:
+  name: Simulate a week
+  description: >-
+    Play a 7-day weather week through the same planner a live hub uses.
+    A preset is enough. Custom days replace the preset for this run.
+    This does not open a valve, call a controller, or change the stored bucket.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name. Needed only when more than one Smart Water hub is loaded.
+      selector:
+        text:
+    scenario:
+      name: Weather week
+      description: Ignored when custom days are set.
+      selector:
+        select:
+          options:
+            - hot_dry
+            - mild_spring
+            - rainy
+            - heat_then_storm
+            - fall_cooldown
+    bucket:
+      name: Starting soil
+      description: Full is field capacity. Half is half the root zone used. Raw is ready to water.
+      selector:
+        select:
+          options:
+            - full
+            - half
+            - raw
+    start_date:
+      name: First day
+      description: YYYY-MM-DD. Empty starts today.
+      selector:
+        text:
+    days:
+      name: Custom days
+      description: >-
+        Optional YAML list that replaces the preset. Each item can set high_f,
+        low_f, humidity, wind_mph, cloud (0 clear to 1 overcast), and rain_in.
+      selector:
+        text:
+          multiline: true

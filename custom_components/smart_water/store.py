@@ -46,6 +46,7 @@ class SmartWaterStore:
         self.et0_detail: str | None = None
         self.et0_date: str | None = None
         self.weather: dict[str, Any] = fresh_day("")
+        self.simulation: dict[str, Any] | None = None
 
     async def async_load(self) -> None:
         """Load the last saved state."""
@@ -62,6 +63,8 @@ class SmartWaterStore:
         self.et0_date = data.get("et0_date")
         saved_weather = dict(data.get("weather") or {})
         self.weather = {**fresh_day(str(saved_weather.get("date") or "")), **saved_weather}
+        saved_simulation = data.get("simulation")
+        self.simulation = dict(saved_simulation) if isinstance(saved_simulation, dict) else None
 
     def zone(self, zone_id: str) -> dict[str, Any]:
         """Return mutable state for a zone, creating it at field capacity."""
@@ -95,5 +98,6 @@ class SmartWaterStore:
                 "et0_detail": self.et0_detail,
                 "et0_date": self.et0_date,
                 "weather": self.weather,
+                "simulation": self.simulation,
             }
         )

@@ -1,4 +1,4 @@
-"""v0.3 must not grow a valve, switch, or controller call."""
+"""v0.4 must not grow a valve, switch, or controller call."""
 
 from __future__ import annotations
 

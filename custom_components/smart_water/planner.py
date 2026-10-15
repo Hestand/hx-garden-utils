@@ -17,8 +17,35 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from .balance import zone_is_due
-from .cycle_soak import plan_cycles
+from .balance import root_zone, zone_is_due
+from .const import (
+    CONF_AREA_SQFT,
+    CONF_AWC_OVERRIDE,
+    CONF_DEPLETION,
+    CONF_FLOW_GPM,
+    CONF_INTAKE_IN_HR,
+    CONF_KC_OVERRIDE,
+    CONF_MAX_CYCLE_MIN,
+    CONF_PLANT_TYPE,
+    CONF_PRECIPITATION_RATE,
+    CONF_PRIORITY,
+    CONF_SOAK_MIN,
+    CONF_SOIL_TYPE,
+    CONF_SPRINKLER_TYPE,
+    CONF_SUN_EXPOSURE,
+    DEFAULT_ADJUSTMENT_PCT,
+    DEFAULT_PRIORITY,
+    DEFAULT_SPRINKLER_TYPE,
+    SPRINKLER_DRIP,
+)
+from .cycle_soak import plan_cycles, resolve_precipitation_rate
+from .presets import (
+    resolved_efficiency,
+    resolved_root_depth_in,
+    resolved_slope_pct,
+    sprinkler_precip,
+    stored_float,
+)
 from .safety import block_reason, would_execute
 from .schedule import clip_blackout, day_allowed, weekday_name
 
@@ -49,6 +76,71 @@ class ZoneRequest:
     sprinkler_type: str = "spray"
     ignores_schedule: bool = False
     intake_override_in_hr: float | None = None
+
+
+def build_zone_request(
+    *,
+    zone_id: str,
+    name: str,
+    data: dict[str, object],
+    deficit_mm: float,
+    et0_mm: float | None,
+    month: int | None,
+    enabled: bool = True,
+    rain_sensor_wet: bool = False,
+    skipped_until: str | None = None,
+    adjustment_pct: float = DEFAULT_ADJUSTMENT_PCT,
+    drip_ignores_schedule: bool = False,
+) -> ZoneRequest:
+    """Resolve one zone the way the nightly plan does.
+
+    The coordinator and the week simulation both call this, then
+    :func:`build_plan`, so a simulated week uses the same presets, overrides,
+    and runtime rules as a live hub.
+    """
+    sprinkler = str(data.get(CONF_SPRINKLER_TYPE) or DEFAULT_SPRINKLER_TYPE)
+    limits = root_zone(
+        soil_type=str(data[CONF_SOIL_TYPE]),
+        plant_type=str(data[CONF_PLANT_TYPE]),
+        sun_exposure=str(data[CONF_SUN_EXPOSURE]),
+        root_depth_in=resolved_root_depth_in(data),
+        p_table=stored_float(data, CONF_DEPLETION),
+        kc_override=stored_float(data, CONF_KC_OVERRIDE),
+        awc_override=stored_float(data, CONF_AWC_OVERRIDE),
+        et0_mm=et0_mm,
+        month=month,
+    )
+    max_cycle = stored_float(data, CONF_MAX_CYCLE_MIN)
+    soak = stored_float(data, CONF_SOAK_MIN)
+    return ZoneRequest(
+        zone_id=zone_id,
+        name=name,
+        soil_type=str(data[CONF_SOIL_TYPE]),
+        slope_pct=resolved_slope_pct(data),
+        precipitation_rate_in_hr=resolve_precipitation_rate(
+            stored_float(data, CONF_PRECIPITATION_RATE),
+            stored_float(data, CONF_FLOW_GPM),
+            stored_float(data, CONF_AREA_SQFT),
+            sprinkler_precip(sprinkler),
+        ),
+        efficiency=resolved_efficiency(data),
+        deficit_mm=deficit_mm,
+        taw_mm=limits.taw_mm,
+        raw_mm=limits.raw_mm,
+        etc_mm=0.0 if limits.etc_mm is None else limits.etc_mm,
+        kc=limits.kc,
+        p=limits.p,
+        enabled=enabled,
+        rain_sensor_wet=rain_sensor_wet,
+        skipped_until=skipped_until,
+        priority=int(data.get(CONF_PRIORITY) or DEFAULT_PRIORITY),
+        max_cycle_override_min=None if max_cycle is None else int(max_cycle),
+        soak_override_min=None if soak is None else int(soak),
+        intake_override_in_hr=stored_float(data, CONF_INTAKE_IN_HR),
+        adjustment_pct=adjustment_pct,
+        sprinkler_type=sprinkler,
+        ignores_schedule=drip_ignores_schedule and sprinkler == SPRINKLER_DRIP,
+    )
 
 
 @dataclass(frozen=True)

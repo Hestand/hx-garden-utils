@@ -7,9 +7,10 @@ from datetime import timedelta
 from typing import Any
 
 import voluptuous as vol
+import yaml
 
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
 
@@ -30,9 +31,11 @@ from .const import (
     SERVICE_RUN_NOW,
     SERVICE_SET_ADJUSTMENT,
     SERVICE_SET_BUCKET,
+    SERVICE_SIMULATE,
     SERVICE_SKIP_ZONE,
     SERVICES,
 )
+from .simulate import BUCKETS, SCENARIOS
 from .coordinator import SmartWaterCoordinator
 from .presets import resolved_root_depth_in
 from .units import inches_to_mm
@@ -180,6 +183,34 @@ def async_setup_services(hass: HomeAssistant) -> None:
         )
         await coordinator.async_run_now(zone_id)
 
+    async def simulate(call: ServiceCall) -> dict[str, Any]:
+        """Play a weather week through the planner. Does not call a valve."""
+        matches = [
+            (entry, coordinator)
+            for entry, coordinator in _coordinators(hass)
+            if _hub_matches(entry, call.data.get("hub"))
+        ]
+        if not matches:
+            raise ServiceValidationError("No Smart Water hub is loaded.")
+        if len(matches) > 1:
+            raise ServiceValidationError(
+                "More than one Smart Water hub is loaded. Pass the hub name."
+            )
+        _entry, coordinator = matches[0]
+        try:
+            days = _parse_days(call.data.get("days"))
+        except (yaml.YAMLError, ValueError, vol.Invalid) as err:
+            raise ServiceValidationError(f"Could not read days: {err}") from err
+        try:
+            return await coordinator.async_simulate(
+                scenario=call.data.get("scenario"),
+                days=days,
+                bucket=call.data.get("bucket"),
+                start=call.data.get("start_date"),
+            )
+        except (KeyError, TypeError, ValueError) as err:
+            raise ServiceValidationError(str(err)) from err
+
     number = vol.All(vol.Coerce(float), vol.Range(min=0, max=500))
     days = vol.All(vol.Coerce(int), vol.Range(min=0, max=365))
     percent = vol.All(vol.Coerce(float), vol.Range(min=0, max=300))
@@ -278,7 +309,43 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SIMULATE,
+        simulate,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Optional("scenario"): vol.In(SCENARIOS),
+                vol.Optional("bucket"): vol.In(BUCKETS),
+                vol.Optional("start_date"): str,
+                vol.Optional("days"): vol.Any(str, list),
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     _LOGGER.debug("Registered Smart Water services")
+
+
+def _parse_days(value: Any) -> list[dict[str, Any]] | None:
+    """Accept a list or a YAML/JSON string from the service form."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        loaded = yaml.safe_load(value)
+        if loaded is None:
+            return None
+        value = loaded
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        raise ValueError("days must be a list")
+    days = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("each day must be a mapping")
+        days.append(item)
+    return days
 
 
 def async_unload_services(hass: HomeAssistant) -> None:

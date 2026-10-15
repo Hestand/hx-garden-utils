@@ -1,4 +1,4 @@
-"""Run-now records the plan in the log and does not move a valve."""
+"""Buttons record a plan or replay a simulated week. They do not move a valve."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import SUBENTRY_ZONE
+from .const import CONF_SIMULATION, SUBENTRY_ZONE
 from .coordinator import SmartWaterConfigEntry
-from .entity import SmartWaterZoneEntity
+from .entity import SmartWaterHubEntity, SmartWaterZoneEntity
 
 
 async def async_setup_entry(
@@ -16,8 +16,10 @@ async def async_setup_entry(
     entry: SmartWaterConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Create one run-now button per zone."""
+    """Create one run-now button per zone, and a week button on a simulation hub."""
     coordinator = entry.runtime_data
+    if entry.data.get(CONF_SIMULATION):
+        async_add_entities([SimulateButton(coordinator)])
     for subentry in entry.subentries.values():
         if subentry.subentry_type != SUBENTRY_ZONE:
             continue
@@ -25,6 +27,22 @@ async def async_setup_entry(
             [RunNowButton(coordinator, subentry.subentry_id)],
             config_subentry_id=subentry.subentry_id,
         )
+
+
+class SimulateButton(SmartWaterHubEntity, ButtonEntity):
+    """Run the stored weather week again. The press does not call a valve."""
+
+    _attr_translation_key = "simulate"
+    _attr_icon = "mdi:calendar-week"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_simulate"
+
+    async def async_press(self) -> None:
+        """Replace the stored week using the hub's scenario and starting soil."""
+        await self.coordinator.async_simulate()
 
 
 class RunNowButton(SmartWaterZoneEntity, ButtonEntity):

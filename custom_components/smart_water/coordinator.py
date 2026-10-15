@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -26,6 +26,7 @@ from .const import (
     CONF_ALLOWED_WEEKDAYS,
     CONF_BLACKOUT_END_HOUR,
     CONF_BLACKOUT_START_HOUR,
+    CONF_BUCKET,
     CONF_DRIP_IGNORES_SCHEDULE,
     CONF_FIELD_CAPACITY,
     CONF_FLOW_KIND,
@@ -39,16 +40,16 @@ from .const import (
     CONF_RAIN_AMOUNT_SENSOR,
     CONF_RAIN_KIND,
     CONF_ROUND_MINUTES,
+    CONF_SCENARIO,
     CONF_SCHEDULE_PRESET,
+    CONF_SIMULATION,
     CONF_SPRINKLER_TYPE,
     CONF_UV_SENSOR,
     CONF_AREA_SQFT,
     CONF_AWC_OVERRIDE,
-    CONF_INTAKE_IN_HR,
     CONF_DEPLETION,
     CONF_DRY_RUN,
     CONF_EARLIEST_HOUR,
-    CONF_EFFICIENCY,
     CONF_ELEVATION_M,
     CONF_FLOW_GPM,
     CONF_FORECAST_SKIP_MM,
@@ -56,7 +57,6 @@ from .const import (
     CONF_KC_OVERRIDE,
     CONF_LATITUDE,
     CONF_LONGITUDE,
-    CONF_MAX_CYCLE_MIN,
     CONF_MAX_DAILY_RUNTIME_MIN,
     CONF_MODE,
     CONF_NOTIFY_TARGET,
@@ -64,11 +64,7 @@ from .const import (
     CONF_PLANT_TYPE,
     CONF_PRECIPITATION_RATE,
     CONF_PRESSURE_SENSOR,
-    CONF_PRIORITY,
     CONF_RAIN_SENSOR,
-    CONF_ROOT_DEPTH_IN,
-    CONF_SLOPE_PCT,
-    CONF_SOAK_MIN,
     CONF_SOIL_TYPE,
     CONF_SOLAR_SENSOR,
     CONF_SUNRISE_BUFFER_MIN,
@@ -92,7 +88,6 @@ from .const import (
     DEFAULT_SCHEDULE_PRESET,
     DEFAULT_SPRINKLER_TYPE,
     DEFAULT_PLAN_HOUR,
-    DEFAULT_PRIORITY,
     DEFAULT_SUNRISE_BUFFER_MIN,
     DEFAULT_WIND_HEIGHT_M,
     DOMAIN,
@@ -100,22 +95,15 @@ from .const import (
     MODE_OFF,
     MOISTURE_CORRECT,
     MOISTURE_OVERRIDE,
-    SPRINKLER_DRIP,
     SUBENTRY_ZONE,
 )
-from .cycle_soak import resolve_precipitation_rate
 from .flow import classify_flow, expected_gallons, note_flow
 from .moisture import apply_moisture, deficit_from_reading
 from .observe import note_rain, note_solar_w, note_temperature, observed_temperature_range, uv_index_to_w_m2
 from .schedule import rules_for
 from .et import ETInputs, daily_et0
-from .planner import NightPlan, PlanRequest, ZoneRequest, build_plan, short_status
-from .presets import (
-    resolved_efficiency,
-    resolved_root_depth_in,
-    resolved_slope_pct,
-    sprinkler_precip,
-)
+from .planner import NightPlan, PlanRequest, build_plan, build_zone_request, short_status
+from .presets import resolved_root_depth_in
 from .safety import would_execute
 from .solar import next_sunrise
 from .store import SmartWaterStore
@@ -195,6 +183,7 @@ class HubSnapshot:
     blackout_start: int | None = None
     blackout_end: int | None = None
     round_minutes: bool = True
+    simulation: dict[str, Any] | None = None
 
 
 def _optional_int(data: dict[str, Any], key: str) -> int | None:
@@ -480,6 +469,16 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 mode=mode,
                 force_notify=force_notify,
             )
+        if (
+            self.config_entry.data.get(CONF_SIMULATION)
+            and not self.store.simulation
+            and zone_ids
+        ):
+            try:
+                self.store.simulation = self.simulate_week()
+            except (KeyError, TypeError, ValueError) as err:
+                error = error or f"Simulation: {err}"
+                _LOGGER.warning("Smart Water could not simulate a week: %s", err)
         await self.store.async_save()
         return self._snapshot(
             et0=self.store.et0_mm,
@@ -686,58 +685,28 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             local_finish = finish_by.astimezone(now.tzinfo)
             earliest = local_finish.replace(hour=hour, minute=0, second=0, microsecond=0)
         hub_wet = _is_wet(self.hass, options.get(CONF_RAIN_SENSOR) or None)
-        requests: list[ZoneRequest] = []
+        requests = []
+        drip_ignores = bool(options.get(CONF_DRIP_IGNORES_SCHEDULE, False))
         for subentry in self.config_entry.subentries.values():
             if subentry.subentry_type != SUBENTRY_ZONE:
                 continue
             data = dict(subentry.data)
             state = self.store.zone(subentry.subentry_id)
-            limits = self._limits(data, et0, now.month)
-            sprinkler = str(data.get(CONF_SPRINKLER_TYPE, DEFAULT_SPRINKLER_TYPE))
-            pr = resolve_precipitation_rate(
-                _optional_float(data, CONF_PRECIPITATION_RATE),
-                _optional_float(data, CONF_FLOW_GPM),
-                _optional_float(data, CONF_AREA_SQFT),
-                sprinkler_precip(sprinkler),
-            )
-            zone_wet = _is_wet(self.hass, data.get(CONF_RAIN_SENSOR) or None)
             requests.append(
-                ZoneRequest(
+                build_zone_request(
                     zone_id=subentry.subentry_id,
                     name=subentry.title,
-                    soil_type=data[CONF_SOIL_TYPE],
-                    slope_pct=resolved_slope_pct(data),
-                    precipitation_rate_in_hr=pr,
-                    efficiency=resolved_efficiency(data),
+                    data=data,
                     deficit_mm=float(state["deficit_mm"]),
-                    taw_mm=limits.taw_mm,
-                    raw_mm=limits.raw_mm,
-                    etc_mm=0.0 if limits.etc_mm is None else limits.etc_mm,
-                    kc=limits.kc,
-                    p=limits.p,
+                    et0_mm=et0,
+                    month=now.month,
                     enabled=bool(state.get("enabled", True)),
-                    rain_sensor_wet=zone_wet,
+                    rain_sensor_wet=_is_wet(self.hass, data.get(CONF_RAIN_SENSOR) or None),
                     skipped_until=state.get("skipped_until"),
-                    priority=int(data.get(CONF_PRIORITY, DEFAULT_PRIORITY)),
-                    max_cycle_override_min=(
-                        None
-                        if data.get(CONF_MAX_CYCLE_MIN) in (None, "")
-                        else int(data[CONF_MAX_CYCLE_MIN])
-                    ),
-                    soak_override_min=(
-                        None
-                        if data.get(CONF_SOAK_MIN) in (None, "")
-                        else int(data[CONF_SOAK_MIN])
-                    ),
-                    intake_override_in_hr=_optional_float(data, CONF_INTAKE_IN_HR),
                     adjustment_pct=float(
                         state.get("adjustment_pct", DEFAULT_ADJUSTMENT_PCT)
                     ),
-                    sprinkler_type=str(data.get(CONF_SPRINKLER_TYPE, DEFAULT_SPRINKLER_TYPE)),
-                    ignores_schedule=(
-                        bool(options.get(CONF_DRIP_IGNORES_SCHEDULE, False))
-                        and data.get(CONF_SPRINKLER_TYPE) == SPRINKLER_DRIP
-                    ),
+                    drip_ignores_schedule=drip_ignores,
                 )
             )
         skip = _optional_float(options, CONF_FORECAST_SKIP_MM)
@@ -946,6 +915,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             blackout_start=rules.blackout_start,
             blackout_end=rules.blackout_end,
             round_minutes=bool(options.get(CONF_ROUND_MINUTES, DEFAULT_ROUND_MINUTES)),
+            simulation=self.store.simulation,
         )
 
     async def _maybe_notify(
@@ -990,9 +960,120 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             self._notified_date = today
             self.store.notified_date = today
 
+    def simulate_week(
+        self,
+        *,
+        scenario: str | None = None,
+        days: list[dict[str, Any]] | None = None,
+        bucket: str | None = None,
+        start: str | None = None,
+    ) -> dict[str, Any]:
+        """Run a week in memory. Does not change zone deficits or call a valve."""
+        from .simulate import (
+            DEFAULT_BUCKET,
+            DEFAULT_SCENARIO,
+            SimSettings,
+            SimZone,
+            parse_day,
+            preset_week,
+            run_week,
+        )
+
+        options = self._options()
+        chosen = str(scenario or options.get(CONF_SCENARIO) or DEFAULT_SCENARIO)
+        chosen_bucket = str(bucket or options.get(CONF_BUCKET) or DEFAULT_BUCKET)
+        if days:
+            weather = tuple(parse_day(day) for day in days)
+            scenario_key: str | None = None
+        else:
+            weather = preset_week(chosen)
+            scenario_key = chosen
+        latitude = options.get(CONF_LATITUDE, self.hass.config.latitude)
+        longitude = options.get(CONF_LONGITUDE, self.hass.config.longitude)
+        if latitude is None or longitude is None:
+            raise ValueError("Latitude and longitude are required to simulate a week.")
+        start_date = None
+        if start:
+            start_date = date.fromisoformat(str(start)[:10])
+        zones = []
+        for subentry in self.config_entry.subentries.values():
+            if subentry.subentry_type != SUBENTRY_ZONE:
+                continue
+            state = self.store.zone(subentry.subentry_id)
+            zones.append(
+                SimZone(
+                    zone_id=subentry.subentry_id,
+                    name=subentry.title,
+                    data=dict(subentry.data),
+                    enabled=bool(state.get("enabled", True)),
+                    skipped_until=state.get("skipped_until"),
+                    adjustment_pct=float(
+                        state.get("adjustment_pct", DEFAULT_ADJUSTMENT_PCT)
+                    ),
+                )
+            )
+        cap = options.get(CONF_MAX_DAILY_RUNTIME_MIN)
+        return run_week(
+            tuple(zones),
+            weather,
+            SimSettings(
+                latitude=float(latitude),
+                longitude=float(longitude),
+                elevation_m=float(options.get(CONF_ELEVATION_M, DEFAULT_ELEVATION_M)),
+                timezone=self._timezone().key,
+                start=start_date,
+                sunrise_buffer_min=int(
+                    options.get(CONF_SUNRISE_BUFFER_MIN, DEFAULT_SUNRISE_BUFFER_MIN)
+                ),
+                plan_hour=int(options.get(CONF_PLAN_HOUR, DEFAULT_PLAN_HOUR)),
+                earliest_hour=_optional_int(options, CONF_EARLIEST_HOUR),
+                forecast_skip_mm=_optional_float(options, CONF_FORECAST_SKIP_MM),
+                max_daily_runtime_min=None if cap in (None, "") else int(cap),
+                schedule_preset=str(
+                    options.get(CONF_SCHEDULE_PRESET, DEFAULT_SCHEDULE_PRESET)
+                ),
+                allowed_weekdays=(
+                    tuple(options.get(CONF_ALLOWED_WEEKDAYS) or ()) or None
+                ),
+                blackout_start_hour=_optional_int(options, CONF_BLACKOUT_START_HOUR),
+                blackout_end_hour=_optional_int(options, CONF_BLACKOUT_END_HOUR),
+                drip_ignores_schedule=bool(options.get(CONF_DRIP_IGNORES_SCHEDULE, False)),
+                whole_minutes=bool(options.get(CONF_ROUND_MINUTES, DEFAULT_ROUND_MINUTES)),
+                wind_height_m=float(options.get(CONF_WIND_HEIGHT_M, DEFAULT_WIND_HEIGHT_M)),
+                mode=str(options.get(CONF_MODE, MODE_NOTIFY_ONLY)),
+                dry_run=bool(options.get(CONF_DRY_RUN, DEFAULT_DRY_RUN)),
+            ),
+            bucket=chosen_bucket,
+            scenario=scenario_key,
+        )
+
+    async def async_simulate(
+        self,
+        *,
+        scenario: str | None = None,
+        days: list[dict[str, Any]] | None = None,
+        bucket: str | None = None,
+        start: str | None = None,
+    ) -> dict[str, Any]:
+        """Store a week simulation and refresh sensors. Does not actuate."""
+        result = self.simulate_week(
+            scenario=scenario, days=days, bucket=bucket, start=start
+        )
+        self.store.simulation = result
+        snapshot = await self._async_build(force_balance=False, force_notify=False)
+        self.async_set_updated_data(snapshot)
+        return result
+
     async def _async_observation(self, now: datetime) -> Observation:
         options = self._options()
         entity_id = self.config_entry.data.get(CONF_WEATHER_ENTITY)
+        if self.config_entry.data.get(CONF_SIMULATION) and not entity_id:
+            return Observation(
+                inputs=None,
+                precip_today_mm=0.0,
+                precip_tomorrow_mm=0.0,
+                error=None,
+            )
         state = self.hass.states.get(entity_id) if entity_id else None
         if state is None or state.state in {"unknown", "unavailable"}:
             return Observation(

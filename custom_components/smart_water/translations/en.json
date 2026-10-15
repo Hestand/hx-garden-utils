@@ -3,6 +3,14 @@
   "config": {
     "step": {
       "user": {
+        "title": "Smart Water",
+        "description": "A live hub uses your weather and stores on/off entities. A simulation hub uses example zones and a weather week you describe. Neither one opens a valve.",
+        "menu_options": {
+          "live": "Live hub",
+          "simulation": "Simulation hub"
+        }
+      },
+      "live": {
         "title": "Smart Water hub",
         "description": "Name the hub, then pick a weather entity or open Sensors and pick a temperature sensor. A Tempest station is filled in when one is found. Location and schedule already have defaults. This version plans and records. It does not open a valve.",
         "data": {
@@ -37,7 +45,7 @@
           },
           "location": {
             "name": "Location and schedule",
-            "description": "Defaults match the central Texas design site (about 219 m) and water any day. Change these only if you need to. Dry-run is off. v0.3 still will not water.",
+            "description": "Defaults match the central Texas design site (about 219 m) and water any day. Change these only if you need to. Dry-run is off. v0.4 still will not water.",
             "data": {
               "elevation_m": "Elevation",
               "latitude": "Latitude override",
@@ -75,6 +83,51 @@
           }
         }
       },
+      "simulation": {
+        "title": "Simulation hub",
+        "description": "No weather entity, sensor, or on/off entity is required. Pick an example week and how full the soil starts. Zones are dropdowns only and use virtual valves. The week uses the same planner as a live hub and does not open a valve.",
+        "data": {
+          "name": "Name",
+          "scenario": "Weather week",
+          "bucket": "Starting soil"
+        },
+        "data_description": {
+          "scenario": "An example week, not a forecast and not a climate normal. Change it later in options or with the simulate service.",
+          "bucket": "Full is field capacity. Half is half the root zone used. Raw is ready to water."
+        },
+        "sections": {
+          "location": {
+            "name": "Location and schedule",
+            "description": "Defaults match the central Texas design site (about 219 m) and water any day. The simulated mornings use this sunrise and this schedule.",
+            "data": {
+              "elevation_m": "Elevation",
+              "latitude": "Latitude override",
+              "longitude": "Longitude override",
+              "dry_run": "Dry-run (do not water)",
+              "mode": "Mode",
+              "notify_target": "Notify service",
+              "rain_sensor": "Rain sensor",
+              "sunrise_buffer_min": "Minutes before sunrise to finish",
+              "plan_hour": "Hour to commit the daily balance and notify",
+              "earliest_hour": "Earliest start hour",
+              "forecast_skip_mm": "Skip when forecast rain is at least",
+              "max_daily_runtime_min": "Max valve-on minutes per night",
+              "round_minutes": "Round runtimes to whole minutes",
+              "schedule_preset": "Watering-day preset",
+              "allowed_weekdays": "Allowed weekdays",
+              "blackout_start_hour": "Blackout start hour",
+              "blackout_end_hour": "Blackout end hour",
+              "drip_ignores_schedule": "Drip ignores weekday limits"
+            },
+            "data_description": {
+              "latitude": "Leave empty to use Home Assistant's location. Set both latitude and longitude, or neither.",
+              "longitude": "Leave empty to use Home Assistant's location.",
+              "forecast_skip_mm": "Leave empty to disable. Tomorrow's simulated rain skips a zone only when this is set.",
+              "schedule_preset": "None uses every day. Waco presets ignore the custom days and hours below."
+            }
+          }
+        }
+      },
       "reconfigure": {
         "title": "Update the hub",
         "description": "Clear the weather entity only if a temperature sensor is already set under options.",
@@ -99,7 +152,15 @@
     "step": {
       "init": {
         "title": "Smart Water options",
-        "description": "Sensors and the schedule. Dry-run defaults off. Turning it on only marks the plan as not-for-execution. v0.3 still does not water.",
+        "description": "Sensors and the schedule. A simulation hub also keeps the weather week and the starting soil here. Dry-run defaults off. v0.4 still does not water.",
+        "data": {
+          "scenario": "Weather week",
+          "bucket": "Starting soil"
+        },
+        "data_description": {
+          "scenario": "Used the next time the simulation runs. A custom days list replaces it for that one run.",
+          "bucket": "Full is field capacity. Half is half the root zone used. Raw is ready to water."
+        },
         "sections": {
           "sensors": {
             "name": "Sensors",
@@ -160,21 +221,25 @@
       "step": {
         "user": {
           "title": "Zone",
-          "description": "Name, the on/off entity, and the plant, soil, sprinkler, and sun. The next step is optional. Presets fill root depth, available water, intake, depletion, crop coefficient, precipitation rate, and efficiency. v0.3 stores the on/off entity and does not turn it on.",
+          "description": "On a live hub, pick the on/off entity, plant, soil, sprinkler, and sun. On a simulation hub there is no on/off entity. Optional area and slope are on this step. The next step is optional. Blank means the preset. Nothing is turned on.",
           "data": {
             "name": "Name",
             "valve_entity": "On/off entity",
             "plant_type": "Plant type",
             "soil_type": "Soil type",
             "sprinkler_type": "Sprinkler type",
-            "sun_exposure": "Sun exposure"
+            "sun_exposure": "Sun exposure",
+            "area_sqft": "Area",
+            "slope_pct": "Slope"
           },
           "data_description": {
-            "valve_entity": "Switch, valve, or input boolean. Stored only. Nothing is turned on.",
+            "valve_entity": "Switch, valve, or input boolean. Stored only. A simulation zone uses a virtual valve instead and nothing is turned on.",
             "plant_type": "Sets the crop coefficient, root depth, and depletion unless you override them.",
             "soil_type": "Sets available water and the intake rate.",
             "sprinkler_type": "Sets the precipitation rate and efficiency. Bubbler has no published rate, so the next step asks for one.",
-            "sun_exposure": "Scales the crop coefficient. Full sun is 1.0."
+            "sun_exposure": "Scales the crop coefficient. Full sun is 1.0.",
+            "area_sqft": "Optional. Used to estimate gallons. Leave blank if you do not know it.",
+            "slope_pct": "Optional. Blank uses 0%, the NRCS 0–5% intake band."
           }
         },
         "advanced": {
@@ -261,7 +326,7 @@
   "selector": {
     "mode": {
       "options": {
-        "auto": "Auto (still blocked in v0.3, and while dry-run is on)",
+        "auto": "Auto (still blocked in v0.4, and while dry-run is on)",
         "notify_only": "Notify only",
         "off": "Off"
       }
@@ -326,6 +391,22 @@
         "shade": "Shade"
       }
     },
+    "scenario": {
+      "options": {
+        "hot_dry": "Hot dry Texas summer week",
+        "mild_spring": "Mild spring week",
+        "rainy": "Rainy week",
+        "heat_then_storm": "Heat wave then storm",
+        "fall_cooldown": "Fall cooldown"
+      }
+    },
+    "bucket": {
+      "options": {
+        "full": "Full (field capacity)",
+        "half": "Half the root zone used",
+        "raw": "Ready to water (RAW)"
+      }
+    },
     "sprinkler_type": {
       "options": {
         "spray": "Spray heads",
@@ -368,7 +449,8 @@
       "schedule": { "name": "Next run" },
       "zone_plan": { "name": "Plan" },
       "flow": { "name": "Flow" },
-      "moisture": { "name": "Moisture deficit" }
+      "moisture": { "name": "Moisture deficit" },
+      "simulation": { "name": "Simulation" }
     },
     "switch": {
       "master_auto": { "name": "Master auto" },
@@ -378,7 +460,8 @@
       "adjustment": { "name": "Adjustment" }
     },
     "button": {
-      "run_now": { "name": "Run now" }
+      "run_now": { "name": "Run now" },
+      "simulate": { "name": "Run simulation" }
     }
   },
   "services": {
@@ -413,6 +496,10 @@
     "run_now": {
       "name": "Run now",
       "description": "Log the planned run. Does not call the zone's on/off entity."
+    },
+    "simulate": {
+      "name": "Simulate a week",
+      "description": "Play a weather week through the planner. Does not open a valve or change the stored bucket."
     }
   }
 }

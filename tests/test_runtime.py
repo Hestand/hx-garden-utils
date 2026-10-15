@@ -211,7 +211,7 @@ def _loaded_garden(hass: HomeAssistant, **entry_kwargs: Any) -> MockConfigEntry:
 async def test_v1_entry_migrates_without_changing_stored_overrides(
     hass: HomeAssistant,
 ) -> None:
-    """Version 2 keeps the numbers a v0.2 form already saved, including efficiency 1."""
+    """Version 3 keeps the numbers a v0.2 form already saved, including efficiency 1."""
     entry = _loaded_garden(
         hass,
         version=1,
@@ -238,7 +238,7 @@ async def test_v1_entry_migrates_without_changing_stored_overrides(
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 2
+    assert entry.version == 3
     assert entry.minor_version == 1
     zone = next(iter(entry.subentries.values()))
     assert zone.data[CONF_EFFICIENCY] == 1.0
@@ -283,4 +283,175 @@ async def test_minimal_zone_plans_from_presets(hass: HomeAssistant) -> None:
     assert zone.precipitation_rate_in_hr == pytest.approx(1.25)
     assert zone.max_cycle_min == 24
     assert zone.soak_min == 30
+    assert hass.states.get("switch.front_valve").state == "off"
+
+
+async def test_v2_entry_migrates_without_rewriting_zones(hass: HomeAssistant) -> None:
+    """Version 3 is a version bump. A 0.3 zone keeps the numbers it stored."""
+    entry = _loaded_garden(
+        hass,
+        version=2,
+        minor_version=1,
+        subentries_data=[
+            {
+                "data": {
+                    CONF_PLANT_TYPE: "st_augustine",
+                    CONF_SOIL_TYPE: "loam",
+                    CONF_SUN_EXPOSURE: "full_sun",
+                    CONF_SPRINKLER_TYPE: "spray",
+                    CONF_EFFICIENCY: 1.0,
+                    CONF_PRECIPITATION_RATE: 1.5,
+                    CONF_VALVE_ENTITY: "switch.front_valve",
+                },
+                "subentry_type": "zone",
+                "title": "Front",
+                "unique_id": "front",
+            }
+        ],
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.version == 3
+    zone = next(iter(entry.subentries.values()))
+    assert zone.data[CONF_EFFICIENCY] == 1.0
+    assert zone.data[CONF_PRECIPITATION_RATE] == 1.5
+
+
+async def test_simulation_service_returns_a_week_and_does_not_actuate(
+    hass: HomeAssistant,
+) -> None:
+    """The sensor, the button, and the service share one in-memory week."""
+    from custom_components.smart_water.const import (
+        CONF_AREA_SQFT,
+        CONF_BUCKET,
+        CONF_LATITUDE,
+        CONF_LONGITUDE,
+        CONF_SCENARIO,
+        CONF_SIMULATION,
+    )
+
+    hass.config.latitude = 31.5493
+    hass.config.longitude = -97.1467
+    hass.config.time_zone = "America/Chicago"
+    hass.states.async_set("switch.front_valve", "off")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Play yard",
+        version=3,
+        data={CONF_SIMULATION: True},
+        options={
+            CONF_ELEVATION_M: 219.0,
+            CONF_LATITUDE: 31.5493,
+            CONF_LONGITUDE: -97.1467,
+            CONF_DRY_RUN: False,
+            CONF_MODE: MODE_AUTO,
+            CONF_SUNRISE_BUFFER_MIN: 30,
+            CONF_PLAN_HOUR: 23,
+            CONF_SCENARIO: "hot_dry",
+            CONF_BUCKET: "full",
+        },
+        subentries_data=[
+            {
+                "data": {
+                    CONF_PLANT_TYPE: "st_augustine",
+                    CONF_SOIL_TYPE: "clay_loam",
+                    CONF_SPRINKLER_TYPE: "spray",
+                    CONF_SUN_EXPOSURE: "full_sun",
+                    CONF_AREA_SQFT: 1000,
+                    CONF_VALVE_ENTITY: "simulation.front_lawn",
+                },
+                "subentry_type": "zone",
+                "title": "Front lawn",
+                "unique_id": "front_lawn",
+            }
+        ],
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    sensor_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry.entry_id}_simulation"
+    )
+    button_id = registry.async_get_entity_id(
+        "button", DOMAIN, f"{entry.entry_id}_simulate"
+    )
+    assert sensor_id is not None
+    assert button_id is not None
+    state = hass.states.get(sensor_id)
+    assert state is not None
+    assert state.state != "Not run"
+    assert state.attributes["would_execute"] is False
+    assert "Front lawn" in state.attributes["markdown"]
+    assert hass.states.get("switch.front_valve").state == "off"
+    assert hass.states.get("simulation.front_lawn") is None
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        "simulate",
+        {
+            "hub": "Play yard",
+            "days": "- high_f: 100\n  low_f: 75\n  rain_in: 0\n",
+            "bucket": "raw",
+            "start_date": "2026-07-13",
+        },
+        blocking=True,
+        return_response=True,
+    )
+    await hass.async_block_till_done()
+    assert response["scenario_name"] == "Custom week"
+    assert response["would_execute"] is False
+    assert response["days"][0]["zones"][0]["waters"] is True
+    assert "markdown" in response
+    assert hass.states.get(sensor_id).attributes["scenario_name"] == "Custom week"
+    assert hass.states.get("switch.front_valve").state == "off"
+
+    await hass.services.async_call(
+        "button",
+        "press",
+        {"entity_id": button_id},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(sensor_id).attributes["scenario"] == "hot_dry"
+    assert hass.states.get("switch.front_valve").state == "off"
+
+
+async def test_live_hub_simulation_does_not_change_the_bucket(
+    hass: HomeAssistant,
+) -> None:
+    """A real yard can be simulated in memory. The stored deficit stays put."""
+    hass.config.latitude = 31.5493
+    hass.config.longitude = -97.1467
+    hass.config.time_zone = "America/Chicago"
+    hass.states.async_set(
+        "weather.home",
+        "sunny",
+        {
+            "temperature": 30,
+            "temperature_unit": "°C",
+            "humidity": 45,
+            "wind_speed": 2.0,
+            "wind_speed_unit": "m/s",
+            "precipitation_unit": "mm",
+        },
+    )
+    hass.states.async_set("switch.front_valve", "off")
+    entry = _entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    zone_id = next(iter(entry.subentries))
+    before = entry.runtime_data.store.zone(zone_id)["deficit_mm"]
+    response = await hass.services.async_call(
+        DOMAIN,
+        "simulate",
+        {"scenario": "mild_spring", "bucket": "half", "start_date": "2026-04-06"},
+        blocking=True,
+        return_response=True,
+    )
+    await hass.async_block_till_done()
+    assert response["would_execute"] is False
+    assert entry.runtime_data.store.zone(zone_id)["deficit_mm"] == before
     assert hass.states.get("switch.front_valve").state == "off"

@@ -22,6 +22,9 @@ ALBEDO = 0.23  # grass reference
 LATENT_HEAT_MJ_KG = 2.45
 # Interior coefficient for Eq. 50. Coastal sites are closer to 0.19.
 HARGREAVES_KRS = 0.16
+# Eq. 35 Angstrom coefficients when a local calibration is not available.
+ANGSTROM_A = 0.25
+ANGSTROM_B = 0.50
 
 METHOD_PENMAN = "penman_monteith"
 METHOD_HARGREAVES = "hargreaves"
@@ -117,6 +120,16 @@ def extraterrestrial_radiation_mj(latitude_deg: float, day_of_year: int) -> floa
 def radiation_mm(radiation_mj: float) -> float:
     """Convert MJ m⁻² day⁻¹ to equivalent evaporation millimeters."""
     return radiation_mj / LATENT_HEAT_MJ_KG
+
+
+def radiation_from_sunshine_mj(ra_mj: float, sunshine_fraction: float) -> float:
+    """FAO-56 Eq. 35, solar radiation Rs from relative sunshine duration n/N.
+
+    ``sunshine_fraction`` is n/N, from 0 (no sun) to 1 (clear all day). A
+    cloudiness fraction from the simulation form is ``1 - sunshine_fraction``.
+    """
+    fraction = min(1.0, max(0.0, sunshine_fraction))
+    return (ANGSTROM_A + ANGSTROM_B * fraction) * ra_mj
 
 
 def solar_radiation_from_temperature_mj(

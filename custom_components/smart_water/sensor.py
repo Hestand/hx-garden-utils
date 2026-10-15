@@ -11,7 +11,7 @@ from homeassistant.const import UnitOfPrecipitationDepth
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import SUBENTRY_ZONE
+from .const import CONF_SIMULATION, SUBENTRY_ZONE
 from .coordinator import SmartWaterConfigEntry
 from .entity import SmartWaterHubEntity, SmartWaterZoneEntity
 from .units import mm_to_inches
@@ -24,15 +24,16 @@ async def async_setup_entry(
 ) -> None:
     """Create hub sensors and one set of sensors per zone."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        [
-            ModeSensor(coordinator),
-            TonightPlanSensor(coordinator),
-            ET0Sensor(coordinator),
-            RainSensor(coordinator),
-            ScheduleSensor(coordinator),
-        ]
-    )
+    hub_sensors: list[SensorEntity] = [
+        ModeSensor(coordinator),
+        TonightPlanSensor(coordinator),
+        ET0Sensor(coordinator),
+        RainSensor(coordinator),
+        ScheduleSensor(coordinator),
+    ]
+    if entry.data.get(CONF_SIMULATION):
+        hub_sensors.append(SimulationSensor(coordinator))
+    async_add_entities(hub_sensors)
     for subentry in entry.subentries.values():
         if subentry.subentry_type != SUBENTRY_ZONE:
             continue
@@ -464,3 +465,46 @@ class MoistureSensor(_ZoneSensor):
         if zone is None:
             return {}
         return {"mode": zone.moisture_mode}
+
+
+class SimulationSensor(SmartWaterHubEntity, SensorEntity):
+    """The last simulated week. Only created for a simulation hub."""
+
+    _attr_translation_key = "simulation"
+    _attr_icon = "mdi:calendar-week"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_simulation"
+
+    @property
+    def native_value(self) -> str:
+        """Return the scenario and the week's total runtime."""
+        data = self.coordinator.data
+        simulation = None if data is None else data.simulation
+        if not simulation:
+            return "Not run"
+        name = simulation.get("scenario_name") or "Simulation"
+        total = float(simulation.get("total_runtime_min") or 0)
+        return f"{name} · {total:.0f} min"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Expose the day-by-day result and the markdown table."""
+        data = self.coordinator.data
+        simulation = None if data is None else data.simulation
+        if not simulation:
+            return {"would_execute": False}
+        return {
+            "scenario": simulation.get("scenario"),
+            "scenario_name": simulation.get("scenario_name"),
+            "bucket": simulation.get("bucket"),
+            "start_date": simulation.get("start_date"),
+            "would_execute": simulation.get("would_execute", False),
+            "note": simulation.get("note"),
+            "total_runtime_min": simulation.get("total_runtime_min"),
+            "summary": simulation.get("summary"),
+            "days": simulation.get("days"),
+            "markdown": simulation.get("markdown"),
+        }

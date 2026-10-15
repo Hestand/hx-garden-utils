@@ -4,12 +4,15 @@ from __future__ import annotations
 
 DOMAIN = "smart_water"
 NAME = "Smart Water"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
-# Stored on the hub. v0.3 still never waters; clearing dry-run only records intent.
+# Stored on the hub. v0.4 still never waters; clearing dry-run only records intent.
 CONF_DRY_RUN = "dry_run"
 CONF_MODE = "mode"
 CONF_WEATHER_ENTITY = "weather_entity"
+CONF_SIMULATION = "simulation"
+CONF_SCENARIO = "scenario"
+CONF_BUCKET = "bucket"
 CONF_ELEVATION_M = "elevation_m"
 CONF_LATITUDE = "latitude"
 CONF_LONGITUDE = "longitude"
@@ -71,7 +74,7 @@ MODES = (MODE_AUTO, MODE_NOTIFY_ONLY, MODE_OFF)
 
 SUBENTRY_ZONE = "zone"
 
-# Off by default. v0.3 still will not open a valve: there is no executor.
+# Off by default. v0.4 still will not open a valve: there is no executor.
 DEFAULT_DRY_RUN = False
 
 DEFAULT_ELEVATION_M = 219.0
@@ -154,6 +157,7 @@ SERVICE_SKIP_ZONE = "skip_zone"
 SERVICE_PAUSE_ZONE = "pause_zone"
 SERVICE_SET_ADJUSTMENT = "set_adjustment"
 SERVICE_RUN_NOW = "run_now"
+SERVICE_SIMULATE = "simulate"
 
 SERVICES = (
     SERVICE_CALCULATE_PLAN,
@@ -164,6 +168,7 @@ SERVICES = (
     SERVICE_PAUSE_ZONE,
     SERVICE_SET_ADJUSTMENT,
     SERVICE_RUN_NOW,
+    SERVICE_SIMULATE,
 )
 
 PLATFORMS: list[str] = ["sensor", "switch", "number", "button"]

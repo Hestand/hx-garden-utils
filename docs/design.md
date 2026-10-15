@@ -133,9 +133,9 @@ Waco follows the City of Waco year-round outdoor rules effective 1 July 2024. Fr
 
 `SmartWaterStore` uses Home Assistant `Store` version 1, key `smart_water.{entry_id}`. The file holds per-zone deficit, balance date, skip, enabled, adjustment, flow cursor, last run-now text, moisture deficit, the last plan, the last ET0, and the weather-day accumulator. Loading merges each zone over `fresh_zone()` and the weather dict over `fresh_day()`, so a 0.1 file gains the new keys without a migration. Storage version is not bumped, because a bump without a migration drops the file.
 
-The config entry version is 2. `async_migrate_entry` bumps a version 1 entry and does not rewrite zone data. Root depth, depletion, efficiency, slope, and precipitation rate saved by the 0.2 forms stay overrides, so an old efficiency of 1.0 is not replaced by the sprinkler preset. New zones leave those keys out. Storage version is still 1.
+The config entry version is 3. `async_migrate_entry` bumps an older entry and does not rewrite zone data. Root depth, depletion, efficiency, slope, and precipitation rate saved by the 0.2 forms stay overrides, so an old efficiency of 1.0 is not replaced by the sprinkler preset. New zones leave those keys out. Storage version is still 1. The store file may also hold a `simulation` object. Loading treats a missing key as no week yet.
 
-Setup is one hub form (name, optional weather, collapsed sensors, collapsed location and schedule) and two zone steps (the six required fields, then collapsed overrides). Suggested values are used only for entities the discovery step found and for numbers the zone already stored. Preset numbers are description text. Writing them into the inputs would save them and blank would stop meaning preset.
+Setup starts with a menu. A live hub is one form (name, optional weather, collapsed sensors, collapsed location and schedule) and two zone steps (the on/off entity plus four dropdowns, then collapsed overrides). A simulation hub drops the weather entity and the on/off entity and adds optional area and slope on the zone step. Suggested values are used only for entities the discovery step found and for numbers the zone already stored. Preset numbers are description text. Writing them into the inputs would save them and blank would stop meaning preset.
 
 Config forms use `homeassistant.helpers.selector` selectors. Number steps are at least 0.001. Latitude and longitude use step `"any"` because Home Assistant 2026.10 rejects a smaller step before the form exists, and that exception becomes a plain `400: Bad Request`.
 
@@ -193,6 +193,14 @@ Efficiency is the net/gross fraction, the same role as a lower-quarter distribut
 | MP rotator | 0.40 in/hr | 0.65 | Hunter MP Rotator design guide, standard nozzles, about 0.4 in/hr. MP800 is about 0.8 and must be typed in. Efficiency uses the WaterSense draft DULQ; ASABE/ICC 802 classes multi-stream nozzles with sprays. The rotor BMP 0.70 is the alternative if you audit them as rotors |
 | Drip | 0.50 in/hr | 0.875 | A municipal average-rate sheet assumes two 2 gph emitters over an 800 sq ft canopy. Not a universal drip rate. Efficiency is the midpoint of 0.85 surface and 0.90 subsurface from the 2021 IWAC landscape-efficiency webinar. EPA's "20–50% less than sprays" is not used as a number |
 | Bubbler | none | 1.0 | No published precipitation rate or distribution uniformity was found in FAO-56, the Irrigation Association guides, or the MP Rotator design note. Adjustable bubblers are sold around 0.25–2 gpm, which is not a rate without area. Efficiency stays 1.0 so an unpublished uniformity is not assumed |
+
+## Simulation
+
+A simulation hub is a separate config entry (`data.simulation` true), chosen from the first menu. It stores no weather entity. Zone on/off ids are `simulation.<slug>` labels created by the zone flow, including when an existing simulation zone is edited. The week runner calls `daily_et0`, `apply_daily_balance`, `build_zone_request`, and `build_plan`. Crop ET and total available water for the bucket step come from `build_zone_request`, so a stored override is the one the live coordinator would use. After a scheduled night the in-memory deficit loses `net_mm`, the same subtraction as `mark_watered`. That credit is not written to the live deficit.
+
+Cloudiness is FAO-56 equation 35. Relative sunshine is `1 − cloud`, and solar radiation is `(0.25 + 0.50 × n/N) × Ra`. The named weeks are example days with round numbers. They are not climate normals. Starting soil is field capacity, half of total available water, or readily available water (table depletion, because the starting deficit is computed with no ET0).
+
+The first refresh of a simulation hub that already has zones and an empty stored week runs the preset so the sensor is populated. Later refreshes do not rerun it. `smart_water.simulate` replaces the stored week and returns the same dict (`supports_response`). The Simulation sensor publishes the markdown and the day list. A live hub can call the service too. That call does not change its stored deficit and does not create the simulation sensor.
 
 ## What is stored and what is actuated
 
