@@ -1,0 +1,237 @@
+{
+  "title": "Smart Water",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smart Water hub",
+        "description": "v0.1 only plans. It never opens a valve. Elevation is used for Penman-Monteith air pressure. Home Assistant often stores 0; the central Texas site in the design notes is about 219 m. Leave latitude and longitude empty to use Home Assistant's location.",
+        "data": {
+          "name": "Name",
+          "weather_entity": "Weather entity",
+          "elevation_m": "Elevation",
+          "latitude": "Latitude override",
+          "longitude": "Longitude override"
+        }
+      },
+      "behavior": {
+        "title": "How the hub behaves",
+        "description": "Dry-run stays on unless you clear it on the next step and type ENABLE WATERING. Clearing it only stores the flag. This version still will not water. Notify only and Off both refuse execution. Auto is the mode a future executor would use, and it is still blocked while dry-run is on.",
+        "data": {
+          "dry_run": "Dry-run (do not water)",
+          "mode": "Mode",
+          "notify_target": "Notify service",
+          "rain_sensor": "Rain sensor",
+          "sunrise_buffer_min": "Minutes before sunrise to finish",
+          "plan_hour": "Hour to commit the daily balance and notify",
+          "earliest_hour": "Earliest start hour",
+          "forecast_skip_mm": "Skip when forecast rain is at least",
+          "max_daily_runtime_min": "Max valve-on minutes per night"
+        },
+        "data_description": {
+          "notify_target": "Example: mobile_app_phone, or notify.mobile_app_phone. Empty sends nothing.",
+          "forecast_skip_mm": "Leave empty to disable. A 0.25 inch rule is not assumed.",
+          "earliest_hour": "Local hour on the morning of the run. Empty means the plan only has to finish by sunrise."
+        }
+      },
+      "sensors": {
+        "title": "Optional weather sensors",
+        "description": "Leave these empty to use the weather entity. A solar sensor in W/m² (Tempest) is recorded and is not treated as a daily radiation total. Use a daily MJ/m² sensor if you have one. Pressure, when set, should be station pressure, not sea-level pressure.",
+        "data": {
+          "temperature_sensor": "Temperature sensor",
+          "humidity_sensor": "Humidity sensor",
+          "wind_sensor": "Wind sensor",
+          "pressure_sensor": "Pressure sensor",
+          "solar_radiation_sensor": "Solar radiation sensor",
+          "wind_height_m": "Wind sensor height"
+        }
+      },
+      "confirm_arm": {
+        "title": "Leave dry-run?",
+        "description": "Type ENABLE WATERING to store dry-run off. v0.1 has no executor and will still not open a valve or call Hydrawise. The phrase only records that a later version is allowed to consider watering.",
+        "data": {
+          "confirm": "Confirmation"
+        }
+      },
+      "reconfigure": {
+        "title": "Update the hub",
+        "data": {
+          "name": "Name",
+          "weather_entity": "Weather entity"
+        }
+      }
+    },
+    "error": {
+      "latitude_pair": "Set both latitude and longitude, or leave both empty.",
+      "invalid_confirmation": "Type ENABLE WATERING to continue. Dry-run was left on."
+    },
+    "abort": {
+      "reconfigure_successful": "Hub updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Smart Water options",
+        "description": "Dry-run is on by default. Turning it off asks for the confirmation phrase and still does not water in v0.1.",
+        "data": {
+          "elevation_m": "Elevation",
+          "latitude": "Latitude override",
+          "longitude": "Longitude override",
+          "dry_run": "Dry-run (do not water)",
+          "mode": "Mode",
+          "notify_target": "Notify service",
+          "rain_sensor": "Rain sensor",
+          "sunrise_buffer_min": "Minutes before sunrise to finish",
+          "plan_hour": "Hour to commit the daily balance and notify",
+          "earliest_hour": "Earliest start hour",
+          "forecast_skip_mm": "Skip when forecast rain is at least",
+          "max_daily_runtime_min": "Max valve-on minutes per night"
+        }
+      },
+      "sensors": {
+        "title": "Optional weather sensors",
+        "data": {
+          "temperature_sensor": "Temperature sensor",
+          "humidity_sensor": "Humidity sensor",
+          "wind_sensor": "Wind sensor",
+          "pressure_sensor": "Pressure sensor",
+          "solar_radiation_sensor": "Solar radiation sensor",
+          "wind_height_m": "Wind sensor height"
+        }
+      },
+      "confirm_arm": {
+        "title": "Leave dry-run?",
+        "description": "Type ENABLE WATERING. v0.1 will still not open a valve.",
+        "data": {
+          "confirm": "Confirmation"
+        }
+      }
+    },
+    "error": {
+      "invalid_confirmation": "Type ENABLE WATERING to continue. Dry-run was left on."
+    }
+  },
+  "config_subentries": {
+    "zone": {
+      "title": "Zone",
+      "step": {
+        "user": {
+          "title": "Zone",
+          "description": "Plant and soil set the starting crop coefficient, depletion fraction, root depth, and intake rate. You can edit the numbers on the next step.",
+          "data": {
+            "name": "Name",
+            "plant_type": "Plant type",
+            "soil_type": "Soil type",
+            "slope_pct": "Slope",
+            "sun_exposure": "Sun exposure"
+          }
+        },
+        "hydraulics": {
+          "title": "Watering hardware",
+          "description": "Enter a precipitation rate, or both flow and area. The rate you type is used when both are filled in. Efficiency defaults to 1 so no unverified distribution uniformity is assumed. The valve is stored for a later version and is not opened.",
+          "data": {
+            "precipitation_rate_in_hr": "Precipitation rate",
+            "flow_gpm": "Total flow",
+            "area_sqft": "Area",
+            "root_depth_in": "Root depth",
+            "depletion_fraction": "Management allowed depletion (p)",
+            "efficiency": "Efficiency",
+            "max_cycle_min": "Max cycle override",
+            "soak_min": "Soak override",
+            "priority": "Priority",
+            "valve_entity": "Valve",
+            "rain_sensor": "Rain sensor",
+            "kc_override": "Crop coefficient override",
+            "awc_override": "Available water override"
+          },
+          "data_description": {
+            "priority": "Lower numbers run first when two zones are both ready.",
+            "max_cycle_min": "Replaces the NRCS intake calculation. Use this after a pooling test.",
+            "efficiency": "1.0 applies the net deficit. Set a measured distribution uniformity below 1 if you have one."
+          }
+        }
+      },
+      "error": {
+        "name_exists": "A zone with this name already exists.",
+        "precipitation_rate": "Enter a precipitation rate, or both flow and area."
+      },
+      "abort": {
+        "reconfigure_successful": "Zone updated."
+      }
+    }
+  },
+  "selector": {
+    "mode": {
+      "options": {
+        "auto": "Auto (still blocked in v0.1, and while dry-run is on)",
+        "notify_only": "Notify only",
+        "off": "Off"
+      }
+    },
+    "plant_type": {
+      "options": {
+        "cool_season_turf": "Cool-season turf (Kc 0.8, p 0.40)",
+        "warm_season_turf": "Warm-season turf (Kc 0.6, p 0.50 unverified)",
+        "shrub": "Shrub (Kc 0.5, approximate)",
+        "native": "Native (Kc 0.3, approximate)",
+        "vegetable": "Vegetable (Kc 0.9, approximate)",
+        "tree": "Tree (Kc 0.5, approximate)"
+      }
+    },
+    "soil_type": {
+      "options": {
+        "sand": "Sand",
+        "sandy_loam": "Sandy loam",
+        "loam": "Loam",
+        "silt_loam": "Silt loam",
+        "silt_loam_compact": "Silt loam over compact soil",
+        "clay_loam": "Clay loam",
+        "clay": "Clay"
+      }
+    },
+    "sun_exposure": {
+      "options": {
+        "full_sun": "Full sun (factor 1.0)",
+        "part_sun": "Part sun (factor 0.8, approximate)",
+        "shade": "Shade (factor 0.6, approximate)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "mode": { "name": "Mode" },
+      "tonight_plan": { "name": "Tonight's plan" },
+      "et0": { "name": "ET0 today" },
+      "deficit": { "name": "Deficit" },
+      "raw": { "name": "Readily available water" },
+      "next_run": { "name": "Next planned run" },
+      "plan_reason": { "name": "Plan reason" }
+    },
+    "switch": {
+      "master_auto": { "name": "Master auto" },
+      "zone_enabled": { "name": "Enabled" }
+    }
+  },
+  "services": {
+    "calculate_plan": {
+      "name": "Calculate plan",
+      "description": "Build tonight's dry-run plan. Does not open a valve."
+    },
+    "reset_bucket": {
+      "name": "Reset bucket",
+      "description": "Set a zone's deficit to zero. Does not open a valve."
+    },
+    "set_bucket": {
+      "name": "Set bucket",
+      "description": "Set a zone's deficit in millimeters or inches. Does not open a valve."
+    },
+    "mark_watered": {
+      "name": "Mark watered",
+      "description": "Credit net irrigation that already happened. Does not open a valve."
+    },
+    "skip_zone": {
+      "name": "Skip zone",
+      "description": "Leave a zone out of the plan through a date."
+    }
+  }
+}
