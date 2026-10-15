@@ -232,3 +232,29 @@ simulate:
       selector:
         text:
           multiline: true
+
+stop_all:
+  name: Stop all watering
+  description: Turn off any zone Smart Water currently has on.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name. Needed only when more than one Smart Water hub is loaded.
+      selector:
+        text:
+
+reset_learning:
+  name: Reset moisture learning
+  description: Set a zone's learned available-water factor back to 1.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name, if you have more than one.
+      selector:
+        text:
+    zone:
+      name: Zone
+      description: Zone name.
+      required: true
+      selector:
+        text:

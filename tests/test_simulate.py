@@ -23,7 +23,7 @@ from smart_water.simulate import (
 )
 from smart_water.solar import next_sunrise
 
-WACO = SimSettings(
+SITE = SimSettings(
     latitude=31.5493,
     longitude=-97.1467,
     elevation_m=219,
@@ -58,20 +58,20 @@ def test_one_day_matches_the_live_planner() -> None:
     """ET, the bucket, and the timeline come from the live functions."""
     zone = _lawn()
     day = preset_week("hot_dry")[0]
-    result = run_week((zone,), (day,), WACO, bucket="full", scenario="hot_dry")
+    result = run_week((zone,), (day,), SITE, bucket="full", scenario="hot_dry")
     current = date(2026, 7, 13)
-    ra = extraterrestrial_radiation_mj(WACO.latitude, current.timetuple().tm_yday)
+    ra = extraterrestrial_radiation_mj(SITE.latitude, current.timetuple().tm_yday)
     rs = radiation_from_sunshine_mj(ra, 1.0 - day.cloud)
     et = daily_et0(
         ETInputs(
             t_max_c=day.high_c,
             t_min_c=day.low_c,
-            latitude_deg=WACO.latitude,
+            latitude_deg=SITE.latitude,
             day_of_year=current.timetuple().tm_yday,
-            elevation_m=WACO.elevation_m,
+            elevation_m=SITE.elevation_m,
             rh_mean_pct=day.humidity_pct,
             wind_m_s=day.wind_m_s,
-            wind_height_m=WACO.wind_height_m,
+            wind_height_m=SITE.wind_height_m,
             rs_mj_m2_day=rs,
         )
     )
@@ -101,10 +101,10 @@ def test_one_day_matches_the_live_planner() -> None:
         month=current.month,
     )
     evening = datetime(2026, 7, 13, 23, tzinfo=ZoneInfo("America/Chicago"))
-    finish_by = next_sunrise(WACO.latitude, WACO.longitude, evening).astimezone(
+    finish_by = next_sunrise(SITE.latitude, SITE.longitude, evening).astimezone(
         evening.tzinfo
-    ) - timedelta(minutes=WACO.sunrise_buffer_min)
-    schedule = rules_for("none", None, None, None)
+    ) - timedelta(minutes=SITE.sunrise_buffer_min)
+    schedule = rules_for(None, None, None)
     plan = build_plan(
         PlanRequest(
             zones=(request,),
@@ -114,7 +114,7 @@ def test_one_day_matches_the_live_planner() -> None:
             forecast_skip_mm=None,
             hub_rain_wet=False,
             mode="notify_only",
-            dry_run=False,
+            automatic=False,
             allowed_weekdays=schedule.allowed_weekdays,
             blackout_start_hour=schedule.blackout_start,
             blackout_end_hour=schedule.blackout_end,
@@ -141,7 +141,7 @@ def test_hot_dry_week_for_st_augustine_on_clay_loam() -> None:
     result = run_week(
         (_lawn(),),
         preset_week("hot_dry"),
-        WACO,
+        SITE,
         bucket="full",
         scenario="hot_dry",
     )
@@ -174,7 +174,7 @@ def test_custom_day_and_bucket_choices() -> None:
     cool = dict(lawn)
     cool["plant_type"] = "cool_season_turf"
     assert initial_deficit_mm("raw", cool, 7) < initial_deficit_mm("half", cool, 7)
-    result = run_week((_lawn(),), (day,), WACO, bucket="raw", scenario=None)
+    result = run_week((_lawn(),), (day,), SITE, bucket="raw", scenario=None)
     assert result["scenario_name"] == "Custom week"
     assert result["bucket"] == "raw"
     assert result["days"][0]["zones"][0]["waters"] is True
@@ -185,7 +185,7 @@ def test_overrides_and_skip_reasons_use_the_planner() -> None:
     overridden = run_week(
         (_lawn(kc_override=1.0),),
         preset_week("hot_dry")[:1],
-        WACO,
+        SITE,
         bucket="full",
     )
     assert overridden["days"][0]["zones"][0]["kc"] == pytest.approx(1.0)
@@ -196,7 +196,7 @@ def test_overrides_and_skip_reasons_use_the_planner() -> None:
         data=_lawn().data,
         skipped_until="2026-07-20",
     )
-    paused_week = run_week((paused,), preset_week("hot_dry"), WACO, bucket="raw")
+    paused_week = run_week((paused,), preset_week("hot_dry"), SITE, bucket="raw")
     assert all("Skipped until" in zone["reason"] for day in paused_week["days"] for zone in day["zones"])
     assert not any(zone["waters"] for day in paused_week["days"] for zone in day["zones"])
 
@@ -204,8 +204,8 @@ def test_overrides_and_skip_reasons_use_the_planner() -> None:
         (_lawn(),),
         preset_week("rainy"),
         SimSettings(
-            latitude=WACO.latitude,
-            longitude=WACO.longitude,
+            latitude=SITE.latitude,
+            longitude=SITE.longitude,
             elevation_m=219,
             timezone="America/Chicago",
             start=date(2026, 7, 13),
@@ -224,12 +224,12 @@ def test_overrides_and_skip_reasons_use_the_planner() -> None:
         (_lawn(),),
         preset_week("hot_dry"),
         SimSettings(
-            latitude=WACO.latitude,
-            longitude=WACO.longitude,
+            latitude=SITE.latitude,
+            longitude=SITE.longitude,
             elevation_m=219,
             timezone="America/Chicago",
             start=date(2026, 7, 13),
-            schedule_preset="waco_odd",
+            allowed_weekdays=("sun", "tue", "thu"),
         ),
         bucket="raw",
         scenario="hot_dry",
@@ -246,4 +246,4 @@ def test_bubbler_without_a_rate_is_rejected() -> None:
     zone = _lawn(sprinkler_type="bubbler")
     del zone.data["area_sqft"]
     with pytest.raises(ValueError):
-        run_week((zone,), preset_week("hot_dry")[:1], WACO)
+        run_week((zone,), preset_week("hot_dry")[:1], SITE)

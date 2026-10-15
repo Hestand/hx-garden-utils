@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceRegistry
 from homeassistant.helpers import entity_registry as er
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -34,6 +34,46 @@ from custom_components.smart_water.const import (
 from custom_components.smart_water.store import SmartWaterStore
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
+
+
+def _patch_valve(monkeypatch: pytest.MonkeyPatch, hass: HomeAssistant) -> list[str]:
+    """Record switch calls for the zone valve and set its state. Other calls pass through."""
+    calls: list[str] = []
+    original = ServiceRegistry.async_call
+
+    async def fake(
+        self,
+        domain,
+        service,
+        service_data=None,
+        blocking=False,
+        context=None,
+        target=None,
+        return_response=False,
+    ):
+        data = service_data or {}
+        entity = data.get("entity_id")
+        if entity == "switch.front_valve" and domain == "switch":
+            calls.append(service)
+            hass.states.async_set(entity, "on" if service == "turn_on" else "off")
+            return None
+        return await original(
+            self,
+            domain,
+            service,
+            service_data,
+            blocking,
+            context,
+            target,
+            return_response,
+        )
+
+    monkeypatch.setattr(ServiceRegistry, "async_call", fake)
+    return calls
+
+
+async def _instant_sleep(_seconds: float) -> None:
+    return None
 
 
 def _entry() -> MockConfigEntry:
@@ -71,7 +111,7 @@ def _entry() -> MockConfigEntry:
 
 
 async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
-    hass: HomeAssistant,
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A loaded hub publishes sensors and leaves the stored on/off entity alone."""
     hass.config.latitude = 31.5493
@@ -98,7 +138,8 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
 
     snapshot = entry.runtime_data.data
     assert snapshot.would_execute is False
-    assert "will not open valves" in snapshot.block_reason
+    assert snapshot.automatic is False
+    assert "automatic watering is off" in snapshot.block_reason
     assert snapshot.round_minutes is True
 
     registry = er.async_get(hass)
@@ -125,6 +166,13 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
         {"zone": "Front", "percent": 50},
         blocking=True,
     )
+    zone = entry.runtime_data.data.zones[zone_id]
+    assert zone.adjustment_pct == 50
+    assert zone.runtime_min == 16
+    assert zone.scheduled is True
+    calls = _patch_valve(monkeypatch, hass)
+    entry.runtime_data.executor._sleep = _instant_sleep
+
     await hass.services.async_call(
         DOMAIN,
         "run_now",
@@ -132,14 +180,17 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
         blocking=True,
     )
     await hass.async_block_till_done()
+    task = entry.runtime_data.executor._task
+    if task is not None:
+        await task
+    await hass.async_block_till_done()
 
     zone = entry.runtime_data.data.zones[zone_id]
-    assert zone.adjustment_pct == 50
-    assert zone.runtime_min == 16
-    assert zone.scheduled is True
     assert zone.valve_entity == "switch.front_valve"
-    assert zone.last_run_now is not None
-    assert "Not executed" in zone.last_run_now
+    assert zone.last_run is not None
+    assert zone.last_run["result"] == "ok"
+    assert calls[0] == "turn_on"
+    assert calls[-1] == "turn_off"
     assert hass.states.get("switch.front_valve").state == "off"
 
     plan_entity = next(
@@ -147,7 +198,7 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
     )
     plan_state = hass.states.get(plan_entity.entity_id)
     assert plan_state is not None
-    assert plan_state.state == "scheduled"
+    assert plan_state.state == "idle"
     assert plan_state.attributes["valve_entity"] == "switch.front_valve"
 
     await hass.services.async_call(
@@ -161,7 +212,7 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
     await stored.async_save()
     reloaded = SmartWaterStore(hass, entry.entry_id)
     await reloaded.async_load()
-    assert reloaded.zone(zone_id)["deficit_mm"] == pytest.approx(20)
+    assert reloaded.zone(zone_id)["deficit_mm"] == pytest.approx(9.84, abs=0.05)
     assert reloaded.zone(zone_id)["adjustment_pct"] == 50
     assert reloaded.zone(zone_id)["last_run_now"]
     assert reloaded.weather["date"]
@@ -238,7 +289,7 @@ async def test_v1_entry_migrates_without_changing_stored_overrides(
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 3
+    assert entry.version == 4
     assert entry.minor_version == 1
     zone = next(iter(entry.subentries.values()))
     assert zone.data[CONF_EFFICIENCY] == 1.0
@@ -311,7 +362,7 @@ async def test_v2_entry_migrates_without_rewriting_zones(hass: HomeAssistant) ->
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 3
+    assert entry.version == 4
     zone = next(iter(entry.subentries.values()))
     assert zone.data[CONF_EFFICIENCY] == 1.0
     assert zone.data[CONF_PRECIPITATION_RATE] == 1.5

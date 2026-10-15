@@ -146,13 +146,17 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert _field(fields, "location")["expanded"] is False
     assert _field(fields, CONF_LATITUDE)["selector"]["number"]["step"] == "any"
     assert _field(fields, CONF_LONGITUDE)["selector"]["number"]["step"] == "any"
-    assert _field(fields, "schedule_preset")["selector"]["select"]["options"] == [
-        "none",
-        "waco_odd",
-        "waco_even",
-        "custom",
+    assert _field(fields, "allowed_weekdays")["selector"]["select"]["options"] == [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun",
     ]
-    assert "boolean" in _field(fields, CONF_DRY_RUN)["selector"]
+    freeze = _field(fields, "freeze_skip_f")
+    assert freeze["selector"]["number"]["unit_of_measurement"] == "°F"
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -175,7 +179,7 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert result["result"].options[CONF_ELEVATION_M] == 219
     assert result["result"].options[CONF_MODE] == MODE_NOTIFY_ONLY
     assert CONF_TEMPERATURE_SENSOR not in result["result"].options
-    assert result["result"].version == 3
+    assert result["result"].version == 4
 
 
 async def test_user_flow_http_post_is_ok(hass: HomeAssistant, hass_client) -> None:
@@ -268,7 +272,7 @@ async def test_options_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert result["step_id"] == "init"
     assert _field(fields, CONF_LATITUDE)["selector"]["number"]["step"] == "any"
     assert _field(fields, CONF_LONGITUDE)["selector"]["number"]["step"] == "any"
-    assert "boolean" in _field(fields, CONF_DRY_RUN)["selector"]
+    assert _field(fields, "allowed_weekdays")["selector"]["select"]["multiple"] is True
     assert _field(fields, "location")["type"] == "expandable"
 
     result = await hass.config_entries.options.async_configure(
@@ -520,7 +524,7 @@ async def test_simulation_hub_uses_dropdowns_and_a_virtual_valve(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
-    assert entry.version == 3
+    assert entry.version == 4
     assert entry.data == {CONF_SIMULATION: True}
     assert entry.options[CONF_SCENARIO] == "hot_dry"
     assert entry.options[CONF_BUCKET] == "full"

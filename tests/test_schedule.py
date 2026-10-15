@@ -1,42 +1,57 @@
-"""Watering days and blackout windows, including the Waco preset."""
+"""Allowed watering days and blackout windows."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from smart_water.schedule import clip_blackout, day_allowed, rules_for, weekday_name
+from smart_water.schedule import (
+    clip_blackout,
+    day_allowed,
+    migrate_options,
+    rules_for,
+    weekday_name,
+)
 
 
-def test_waco_presets_fix_days_and_the_daytime_blackout() -> None:
-    odd = rules_for("waco_odd", ("mon",), 0, 1)
-    assert odd.allowed_weekdays == ("sun", "tue", "thu")
-    assert (odd.blackout_start, odd.blackout_end) == (10, 19)
-    even = rules_for("waco_even", None, None, None)
-    assert even.allowed_weekdays == ("mon", "wed", "sat")
-    assert "fri" not in odd.allowed_weekdays
-    assert "fri" not in even.allowed_weekdays
+def test_allowed_days_keep_weekday_order_and_an_empty_list() -> None:
+    rules = rules_for(("fri", "mon"), 8, 18)
+    assert rules.allowed_weekdays == ("mon", "fri")
+    assert rules.blackout_start == 8
+    assert rules.source == "days"
+    every = rules_for(None, 6, 20)
+    assert every.allowed_weekdays is None
+    assert every.blackout_start == 6
+    empty = rules_for((), None, None)
+    assert empty.allowed_weekdays == ()
 
 
-def test_custom_days_and_an_empty_list() -> None:
-    custom = rules_for("custom", ("fri", "mon"), 8, 18)
-    assert custom.allowed_weekdays == ("mon", "fri")
-    assert custom.blackout_start == 8
-    none = rules_for("none", ("mon",), 6, 20)
-    assert none.allowed_weekdays is None
-    assert none.blackout_start == 6
-    empty = rules_for("custom", (), None, None)
-    assert empty.allowed_weekdays is None
-
-
-def test_friday_is_not_a_waco_day_and_thursday_is_odd() -> None:
+def test_none_allows_every_day_and_an_empty_tuple_allows_none() -> None:
     friday = datetime(2026, 10, 16, 6, tzinfo=timezone.utc)
     thursday = datetime(2026, 10, 15, 6, tzinfo=timezone.utc)
     assert weekday_name(friday) == "fri"
     assert weekday_name(thursday) == "thu"
-    odd = rules_for("waco_odd", None, None, None).allowed_weekdays
+    odd = ("sun", "tue", "thu")
     assert day_allowed(friday, odd) is False
     assert day_allowed(thursday, odd) is True
     assert day_allowed(friday, None) is True
+    assert day_allowed(friday, ()) is False
+
+
+def test_retired_presets_migrate_to_day_sets() -> None:
+    odd = migrate_options(
+        {"schedule_preset": "waco_odd", "dry_run": False, "elevation_m": 219}
+    )
+    assert odd["allowed_weekdays"] == ["sun", "tue", "thu"]
+    assert (odd["blackout_start_hour"], odd["blackout_end_hour"]) == (10, 19)
+    assert "schedule_preset" not in odd
+    assert "dry_run" not in odd
+    assert odd["elevation_m"] == 219
+    even = migrate_options({"schedule_preset": "waco_even"})
+    assert even["allowed_weekdays"] == ["mon", "wed", "sat"]
+    assert "fri" not in even["allowed_weekdays"]
+    every = migrate_options({"schedule_preset": "none", "blackout_start_hour": 9})
+    assert every["allowed_weekdays"] == ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    assert every["blackout_start_hour"] == 9
 
 
 def test_blackout_clip_morning_and_evening() -> None:

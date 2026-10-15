@@ -513,6 +513,49 @@ def resolved_efficiency(data: dict[str, object]) -> float:
     return sprinkler_efficiency(sprinkler)
 
 
+# Sustained wind at or above these speeds skips overhead irrigation.
+# Oklahoma State HLA-6610 says not to water in high wind and does not publish
+# a speed. University of Florida overhead-irrigation guidance treats wind
+# above about 10 mph as unsuitable. The Irrigation Association's 2013 wind
+# paper shows smaller droplets drift more, so sprays use 10 mph, rotors 15,
+# and MP rotators the midpoint (12). Drip and bubblers are not aerial.
+WIND_SKIP_MPH: dict[str, float | None] = {
+    "spray": 10.0,
+    "mp_rotator": 12.0,
+    "rotor": 15.0,
+    "drip": None,
+    "bubbler": None,
+}
+
+# AgriLife Water-Wise: established turf no more than 1–2 times a week, watered
+# to about 6 inches. Three days is the short end of twice a week. Shrubs,
+# trees, and native plantings wait a week. Vegetables and flowers wait 2.
+MIN_INTERVAL_DAYS: dict[str, int] = {
+    "st_augustine": 3,
+    "bermuda": 3,
+    "zoysia": 3,
+    "buffalo": 3,
+    "warm_season_turf": 3,
+    "cool_season_turf": 3,
+    "shrub": 7,
+    "tree": 7,
+    "native": 7,
+    "drip_bed": 7,
+    "vegetable": 2,
+    "flower_bed": 2,
+}
+
+
+def wind_skip_mph(sprinkler_type: str) -> float | None:
+    """Default sustained-wind skip, or None when wind does not apply."""
+    return WIND_SKIP_MPH.get(sprinkler_type)
+
+
+def min_interval_days(plant_type: str) -> int | None:
+    """Days between waterings, or None when the planting has no default."""
+    return MIN_INTERVAL_DAYS.get(plant_type)
+
+
 def preset_placeholders(
     *,
     plant_type: str,

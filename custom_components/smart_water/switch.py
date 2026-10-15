@@ -1,4 +1,4 @@
-"""Switches. Turning these on never clears dry-run and never opens a valve."""
+"""Switches. The master switch is automatic watering. It does not call a valve itself."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import SUBENTRY_ZONE
 from .coordinator import SmartWaterConfigEntry
 from .entity import SmartWaterHubEntity, SmartWaterZoneEntity
-from .safety import mode_after_master_switch
 
 
 async def async_setup_entry(
@@ -17,7 +16,7 @@ async def async_setup_entry(
     entry: SmartWaterConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Create the master switch and one enabled switch per zone."""
+    """Create the automatic-watering switch and one enabled switch per zone."""
     coordinator = entry.runtime_data
     async_add_entities([MasterAutoSwitch(coordinator)])
     for subentry in entry.subentries.values():
@@ -30,10 +29,11 @@ async def async_setup_entry(
 
 
 class MasterAutoSwitch(SmartWaterHubEntity, SwitchEntity):
-    """On when the hub mode is not off.
+    """Automatic watering for this hub. Off on a new install and after an upgrade.
 
-    Off forces mode off. On restores notify-only while dry-run is set, and
-    never writes dry_run to false. The on position still does not water.
+    Turning it on does not by itself call a valve. The executor runs the plan
+    on the next refresh when the switch is on and the mode is not off.
+    Turning it off stops a run that is already going.
     """
 
     _attr_translation_key = "master_auto"
@@ -45,42 +45,34 @@ class MasterAutoSwitch(SmartWaterHubEntity, SwitchEntity):
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_master_auto"
 
     @property
-    def is_on(self) -> bool | None:
-        """Return true when the mode is auto or notify-only."""
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.mode != "off"
+    def is_on(self) -> bool:
+        """Return whether automatic watering is enabled."""
+        return bool(self.coordinator.store.automatic)
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Repeat the guard so the on state cannot be read as permission to water."""
+        """Show the mode and whether a plan would actually run."""
         data = self.coordinator.data
         if data is None:
-            return {}
+            return {"automatic": self.is_on}
         return {
             "mode": data.mode,
-            "dry_run": data.dry_run,
-            "would_execute": False,
+            "automatic": data.automatic,
+            "would_execute": data.would_execute,
             "block_reason": data.block_reason,
         }
 
     async def async_turn_on(self, **kwargs: object) -> None:
-        """Enable the hub without leaving dry-run."""
-        data = self.coordinator.data
-        if data is None:
-            return
-        mode = mode_after_master_switch(
-            mode=data.mode, dry_run=data.dry_run, turn_on=True
-        )
-        await self.coordinator.async_set_mode(mode)
+        """Allow the executor to run the nightly plan."""
+        await self.coordinator.async_set_automatic(True)
 
     async def async_turn_off(self, **kwargs: object) -> None:
-        """Set the hub mode to off. The bucket keeps updating."""
-        await self.coordinator.async_set_mode("off")
+        """Stop automatic watering and turn off a zone that is running."""
+        await self.coordinator.async_set_automatic(False)
 
 
 class ZoneEnabledSwitch(SmartWaterZoneEntity, SwitchEntity):
-    """Include or exclude a zone from the plan. This does not move a valve."""
+    """Include or exclude a zone from the plan. This does not move a valve by itself."""
 
     _attr_translation_key = "zone_enabled"
     _attr_icon = "mdi:water"

@@ -1,28 +1,37 @@
 """Smart Water custom integration.
 
-v0.4 computes the water balance, the nightly plan, and an optional
-simulated week. It does not apply them. There is no valve service, no
-switch turn-on, and no controller API.
-See ``safety.py``. A later executor will use each zone's stored on/off entity.
+v0.5 plans the week and, when the Automatic watering switch is on, runs
+each zone's stored on/off entity one at a time. The executor uses
+switch, valve, and input_boolean services. It does not call Hydrawise.
 """
 
 from __future__ import annotations
 
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import Event
+
 from .const import DOMAIN, PLATFORMS
+from .schedule import migrate_options
 
 __all__ = ["DOMAIN"]
 
 
 async def async_migrate_entry(hass, entry) -> bool:
-    """Keep older hubs. Stored zone numbers stay overrides.
+    """Move schedule options to allowed days. Zone numbers stay as stored.
 
-    Version 3 does not rewrite zone data. A simulation hub is a new entry
-    with ``simulation`` set. Existing hubs stay live hubs.
+    Version 4 rewrites hub options only. A retired odd- or even-address
+    preset becomes its weekday set and a 10:00–19:00 blackout. The dry-run
+    option is removed. Automatic watering stays off in the store.
     """
-    if entry.version > 3:
+    if entry.version > 4:
         return False
-    if entry.version < 3:
-        hass.config_entries.async_update_entry(entry, version=3, minor_version=1)
+    if entry.version < 4:
+        hass.config_entries.async_update_entry(
+            entry,
+            options=migrate_options(dict(entry.options)),
+            version=4,
+            minor_version=1,
+        )
     return True
 
 
@@ -34,13 +43,28 @@ async def async_setup(hass, config) -> bool:
 async def async_setup_entry(hass, entry) -> bool:
     """Set up one hub from a config entry."""
     from .coordinator import SmartWaterCoordinator
+    from .executor import WateringExecutor
     from .services import async_setup_services
     from .store import SmartWaterStore
 
     store = SmartWaterStore(hass, entry.entry_id)
     await store.async_load()
     coordinator = SmartWaterCoordinator(hass, entry, store)
+    executor = WateringExecutor(hass, store)
+    coordinator.executor = executor
+    executor.skip_checker = coordinator.live_skip
+    executor.rain_since = coordinator.rain_since_mark
+    executor.on_cycle_done = coordinator.async_credit_cycle
+    executor.on_status = coordinator.poke_status
+    executor.max_run_min_fn = coordinator.max_run_minutes
     entry.runtime_data = coordinator
+    # A restart must not leave a zone running. This happens before entities exist.
+    await executor.async_quiesce()
+
+    async def _stop(_event: Event) -> None:
+        await executor.stop()
+
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop))
     await coordinator.async_config_entry_first_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     coordinator.async_track_plan_time()
@@ -52,11 +76,14 @@ async def async_setup_entry(hass, entry) -> bool:
 
 
 async def async_unload_entry(hass, entry) -> bool:
-    """Unload a hub and drop services when it was the last one."""
+    """Turn zones off, unload a hub, and drop services when it was the last one."""
     from homeassistant.config_entries import ConfigEntryState
 
     from .services import async_unload_services
 
+    coordinator = getattr(entry, "runtime_data", None)
+    if coordinator is not None and coordinator.executor is not None:
+        await coordinator.executor.stop()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if not unload_ok:
         return False

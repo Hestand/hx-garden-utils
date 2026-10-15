@@ -1,10 +1,10 @@
-"""Nightly dry-run plan.
+"""Nightly watering plan.
 
 The planner decides which zones are due, splits each run with cycle-and-soak,
-and lays the cycles on one shared timeline so only one valve would be open.
+and lays the cycles on one shared timeline so only one valve is open.
 While one zone soaks, another zone may run. The timeline is then shifted so
-the last cycle ends at sunrise minus the buffer. Nothing in this module
-opens a valve or calls a service.
+the last cycle ends at sunrise minus the buffer. This module does not call
+a service. The executor applies the timeline when automatic watering is on.
 
 If the timeline is longer than the allowed window, cycle lengths are scaled
 down and a warning is attached. Soak times are kept, because shortening them
@@ -48,6 +48,7 @@ from .presets import (
 )
 from .safety import block_reason, would_execute
 from .schedule import clip_blackout, day_allowed, weekday_name
+from .skips import SkipInputs, skip_reason
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,24 @@ class ZoneRequest:
     sprinkler_type: str = "spray"
     ignores_schedule: bool = False
     intake_override_in_hr: float | None = None
+    temp_f: float | None = None
+    forecast_low_f: float | None = None
+    freeze_f: float | None = None
+    wind_mph: float | None = None
+    wind_limit_mph: float | None = None
+    recent_rain_mm: float = 0.0
+    recent_rain_skip_mm: float | None = None
+    recent_rain_hours: int = 12
+    moisture_full: float | None = None
+    moisture_skip_full: float | None = None
+    days_since_water: int | None = None
+    min_interval_days: int | None = None
+    dormancy: str = "active"
+    dormancy_detail: str = ""
+    maintenance_due: bool = False
+    maintenance_mm: float = 0.0
+    target_depth_mm: float | None = None
+    currently_raining: bool = False
 
 
 def build_zone_request(
@@ -91,6 +110,26 @@ def build_zone_request(
     skipped_until: str | None = None,
     adjustment_pct: float = DEFAULT_ADJUSTMENT_PCT,
     drip_ignores_schedule: bool = False,
+    awc_factor: float = 1.0,
+    etc_factor: float = 1.0,
+    temp_f: float | None = None,
+    forecast_low_f: float | None = None,
+    freeze_f: float | None = None,
+    wind_mph: float | None = None,
+    wind_limit_mph: float | None = None,
+    recent_rain_mm: float = 0.0,
+    recent_rain_skip_mm: float | None = None,
+    recent_rain_hours: int = 12,
+    moisture_full: float | None = None,
+    moisture_skip_full: float | None = None,
+    days_since_water: int | None = None,
+    min_interval_days: int | None = None,
+    dormancy: str = "active",
+    dormancy_detail: str = "",
+    maintenance_due: bool = False,
+    maintenance_mm: float = 0.0,
+    target_depth_mm: float | None = None,
+    currently_raining: bool = False,
 ) -> ZoneRequest:
     """Resolve one zone the way the nightly plan does.
 
@@ -125,9 +164,9 @@ def build_zone_request(
         ),
         efficiency=resolved_efficiency(data),
         deficit_mm=deficit_mm,
-        taw_mm=limits.taw_mm,
-        raw_mm=limits.raw_mm,
-        etc_mm=0.0 if limits.etc_mm is None else limits.etc_mm,
+        taw_mm=limits.taw_mm * awc_factor,
+        raw_mm=limits.raw_mm * awc_factor,
+        etc_mm=(0.0 if limits.etc_mm is None else limits.etc_mm) * etc_factor,
         kc=limits.kc,
         p=limits.p,
         enabled=enabled,
@@ -140,6 +179,24 @@ def build_zone_request(
         adjustment_pct=adjustment_pct,
         sprinkler_type=sprinkler,
         ignores_schedule=drip_ignores_schedule and sprinkler == SPRINKLER_DRIP,
+        temp_f=temp_f,
+        forecast_low_f=forecast_low_f,
+        freeze_f=freeze_f,
+        wind_mph=wind_mph,
+        wind_limit_mph=wind_limit_mph,
+        recent_rain_mm=recent_rain_mm,
+        recent_rain_skip_mm=recent_rain_skip_mm,
+        recent_rain_hours=recent_rain_hours,
+        moisture_full=moisture_full,
+        moisture_skip_full=moisture_skip_full,
+        days_since_water=days_since_water,
+        min_interval_days=min_interval_days,
+        dormancy=dormancy,
+        dormancy_detail=dormancy_detail,
+        maintenance_due=maintenance_due,
+        maintenance_mm=maintenance_mm,
+        target_depth_mm=target_depth_mm,
+        currently_raining=currently_raining,
     )
 
 
@@ -154,9 +211,9 @@ class PlanRequest:
     forecast_skip_mm: float | None
     hub_rain_wet: bool
     mode: str
-    dry_run: bool
+    automatic: bool = False
     max_daily_runtime_min: int | None = None
-    days_ahead: int = 1
+    days_ahead: int = 0
     allowed_weekdays: tuple[str, ...] | None = None
     blackout_start_hour: int | None = None
     blackout_end_hour: int | None = None
@@ -201,11 +258,11 @@ class TimelineEvent:
 
 @dataclass(frozen=True)
 class NightPlan:
-    """A complete dry-run plan."""
+    """A complete plan. ``would_execute`` is true only when automatic watering may run."""
 
     finish_by: datetime
     earliest_start: datetime | None
-    dry_run: bool
+    automatic: bool
     mode: str
     would_execute: bool
     block_reason: str
@@ -223,7 +280,7 @@ class NightPlan:
                 if self.earliest_start is None
                 else self.earliest_start.isoformat()
             ),
-            "dry_run": self.dry_run,
+            "automatic": self.automatic,
             "mode": self.mode,
             "would_execute": self.would_execute,
             "block_reason": self.block_reason,
@@ -354,14 +411,23 @@ def short_status(plan: NightPlan | None) -> str:
         return "No plan yet"
     scheduled = [zone for zone in plan.zones if zone.scheduled]
     minutes = sum(zone.runtime_min for zone in scheduled)
-    text = f"dry-run · {len(scheduled)} zones · {minutes} min"
+    prefix = "automatic" if plan.would_execute else "planned"
+    text = f"{prefix} · {len(scheduled)} zones · {minutes} min"
     if plan.warning:
         text += " · warning"
     return text[:255]
 
 
-def _summary(plan_zones: list[ZonePlan], timeline: tuple[TimelineEvent, ...], warning: str | None, blocked: str) -> str:
-    lines = [f"DRY-RUN — {blocked}."]
+def _summary(
+    plan_zones: list[ZonePlan],
+    timeline: tuple[TimelineEvent, ...],
+    warning: str | None,
+    blocked: str,
+    *,
+    automatic: bool,
+) -> str:
+    label = "AUTOMATIC" if automatic and not blocked else "PLANNED"
+    lines = [f"{label} — {blocked}."] if blocked else [f"{label}."]
     if warning:
         lines.append(f"Warning: {warning}")
     scheduled = [zone for zone in plan_zones if zone.scheduled]
@@ -391,7 +457,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
     if request.earliest_start is not None and request.earliest_start.tzinfo is None:
         raise ValueError("earliest_start must be timezone-aware")
 
-    blocked = block_reason(dry_run=request.dry_run, mode=request.mode)
+    blocked = block_reason(automatic=request.automatic, mode=request.mode)
     warnings: list[str] = []
     finish_by, earliest, blackout_note = clip_blackout(
         request.finish_by,
@@ -418,39 +484,51 @@ def build_plan(request: PlanRequest) -> NightPlan:
     )
 
     for zone in sorted(request.zones, key=lambda item: (item.priority, item.name)):
+        trigger = zone.raw_mm if zone.target_depth_mm is None else zone.target_depth_mm
         due, due_reason = zone_is_due(
             zone.deficit_mm,
-            zone.raw_mm,
+            trigger,
             zone.taw_mm,
             zone.etc_mm,
             days_ahead=request.days_ahead,
         )
-        reason = due_reason
-        scheduled_candidate = due
-        if not zone.enabled:
-            scheduled_candidate = False
-            reason = "Zone is disabled."
-        elif zone.skipped_until is not None and zone.skipped_until >= finish_day:
-            scheduled_candidate = False
-            reason = f"Skipped until {zone.skipped_until}."
-        elif request.hub_rain_wet or zone.rain_sensor_wet:
-            scheduled_candidate = False
-            reason = "Skipped because the rain sensor is wet."
-        elif forecast_skip:
-            scheduled_candidate = False
-            reason = (
-                "Skipped because forecast rain is "
-                f"{request.forecast_precip_mm:.1f} mm."
+        if zone.target_depth_mm is not None:
+            due_reason = due_reason.replace("RAW", "target depth")
+        blocked_reason = skip_reason(
+            SkipInputs(
+                enabled=zone.enabled,
+                skipped_until=zone.skipped_until,
+                finish_day=finish_day,
+                hub_rain_wet=request.hub_rain_wet,
+                rain_sensor_wet=zone.rain_sensor_wet,
+                currently_raining=zone.currently_raining,
+                recent_rain_mm=zone.recent_rain_mm,
+                recent_rain_skip_mm=zone.recent_rain_skip_mm,
+                recent_rain_hours=zone.recent_rain_hours,
+                temp_f=zone.temp_f,
+                forecast_low_f=zone.forecast_low_f,
+                freeze_f=zone.freeze_f,
+                wind_mph=zone.wind_mph,
+                wind_limit_mph=zone.wind_limit_mph,
+                moisture_full=zone.moisture_full,
+                moisture_skip_full=zone.moisture_skip_full,
+                forecast_skip=forecast_skip,
+                forecast_mm=request.forecast_precip_mm,
+                allowed_day=day_allowed(finish_by, request.allowed_weekdays),
+                ignores_schedule=zone.ignores_schedule,
+                weekday=weekday_name(finish_by),
+                window_closed=window_closed,
+                due=due,
+                due_reason=due_reason,
+                days_since_water=zone.days_since_water,
+                min_interval_days=zone.min_interval_days,
+                dormancy=zone.dormancy,
+                dormancy_detail=zone.dormancy_detail,
+                maintenance_due=zone.maintenance_due,
             )
-        elif (
-            not zone.ignores_schedule
-            and not day_allowed(finish_by, request.allowed_weekdays)
-        ):
-            scheduled_candidate = False
-            reason = f"Not an allowed watering day ({weekday_name(finish_by)})."
-        elif window_closed and due:
-            scheduled_candidate = False
-            reason = f"{due_reason} The watering window is closed."
+        )
+        reason = due_reason if blocked_reason is None else blocked_reason
+        scheduled_candidate = blocked_reason is None
 
         cycles: tuple[int | float, ...] = ()
         runtime: int | float = 0
@@ -458,6 +536,13 @@ def build_plan(request: PlanRequest) -> NightPlan:
         soak = 0
         net_mm = 0.0
         adjusted_mm = zone.deficit_mm * zone.adjustment_pct / 100.0
+        if (
+            scheduled_candidate
+            and zone.dormancy == "dormant"
+            and zone.maintenance_due
+            and zone.maintenance_mm > 0
+        ):
+            adjusted_mm = min(adjusted_mm, zone.maintenance_mm)
         if scheduled_candidate and adjusted_mm <= 0:
             scheduled_candidate = False
             reason = "Adjustment percent is 0."
@@ -595,13 +680,16 @@ def build_plan(request: PlanRequest) -> NightPlan:
         )
 
     warning = " ".join(warnings) if warnings else None
-    summary = _summary(final_zones, timeline, warning, blocked)
+    executing = would_execute(automatic=request.automatic, mode=request.mode)
+    summary = _summary(
+        final_zones, timeline, warning, blocked, automatic=executing
+    )
     return NightPlan(
         finish_by=request_finish,
         earliest_start=request_earliest,
-        dry_run=request.dry_run,
+        automatic=request.automatic,
         mode=request.mode,
-        would_execute=would_execute(dry_run=request.dry_run, mode=request.mode),
+        would_execute=executing,
         block_reason=blocked,
         warning=warning,
         summary=summary,

@@ -30,6 +30,8 @@ async def async_setup_entry(
         ET0Sensor(coordinator),
         RainSensor(coordinator),
         ScheduleSensor(coordinator),
+        WateringScheduleSensor(coordinator),
+        WateringNowSensor(coordinator),
     ]
     if entry.data.get(CONF_SIMULATION):
         hub_sensors.append(SimulationSensor(coordinator))
@@ -47,6 +49,8 @@ async def async_setup_entry(
                 ZonePlanSensor(coordinator, zone_id),
                 FlowSensor(coordinator, zone_id),
                 MoistureSensor(coordinator, zone_id),
+                LastRunSensor(coordinator, zone_id),
+                DormancySensor(coordinator, zone_id),
             ],
             config_subentry_id=zone_id,
         )
@@ -77,7 +81,7 @@ class ModeSensor(SmartWaterHubEntity, SensorEntity):
         if data is None:
             return {}
         return {
-            "dry_run": data.dry_run,
+            "automatic": data.automatic,
             "would_execute": data.would_execute,
             "block_reason": data.block_reason,
             "last_error": data.last_error,
@@ -104,7 +108,7 @@ class TonightPlanSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Return the full plan. would_execute stays false until an executor exists."""
+        """Return the full plan, including whether automatic watering would run it."""
         data = self.coordinator.data
         if data is None or data.plan is None:
             return {"would_execute": False}
@@ -112,7 +116,7 @@ class TonightPlanSensor(SmartWaterHubEntity, SensorEntity):
         return {
             "summary": plan.summary,
             "warning": plan.warning,
-            "dry_run": plan.dry_run,
+            "automatic": plan.automatic,
             "would_execute": plan.would_execute,
             "block_reason": plan.block_reason,
             "finish_by": plan.finish_by.isoformat(),
@@ -357,12 +361,12 @@ class ScheduleSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Show the preset and the blackout that shaped the window."""
+        """Show the allowed days and the blackout that shaped the window."""
         data = self.coordinator.data
         if data is None:
             return {}
         return {
-            "preset": data.schedule_source,
+            "source": data.schedule_source,
             "allowed_weekdays": list(data.allowed_weekdays or []),
             "blackout_start": data.blackout_start,
             "blackout_end": data.blackout_end,
@@ -464,7 +468,141 @@ class MoistureSensor(_ZoneSensor):
         zone = self._zone()
         if zone is None:
             return {}
-        return {"mode": zone.moisture_mode}
+        return {
+            "mode": zone.moisture_mode,
+            "learn_factor": round(zone.learn_factor, 3),
+            "learn_confidence": round(zone.learn_confidence, 2),
+        }
+
+
+class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
+    """The next seven days of planned watering."""
+
+    _attr_translation_key = "watering_schedule"
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_watering_schedule"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return how many waterings are planned and when the next one is."""
+        data = self.coordinator.data
+        if data is None or not data.schedule_days:
+            return "No watering in the next 7 days"
+        planned = [
+            (day["date"], zone)
+            for day in data.schedule_days
+            for zone in day.get("zones", [])
+            if zone.get("scheduled")
+        ]
+        if not planned:
+            return "No watering in the next 7 days"
+        day, zone = planned[0]
+        return f"{len(planned)} waterings · next {day} {zone['name']}"[:255]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Days, skip reasons, and a markdown table for a Lovelace card."""
+        data = self.coordinator.data
+        if data is None:
+            return {}
+        return {
+            "days": data.schedule_days or [],
+            "markdown": data.schedule_markdown,
+            "note": (
+                "Later days repeat today's crop ET and assume no rain."
+            ),
+        }
+
+
+class WateringNowSensor(SmartWaterHubEntity, SensorEntity):
+    """The zone currently on, or Idle."""
+
+    _attr_translation_key = "watering_now"
+    _attr_icon = "mdi:sprinkler"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_watering_now"
+
+    @property
+    def native_value(self) -> str:
+        """Return the running zone name."""
+        executor = self.coordinator.executor
+        if executor is not None and executor.current_name:
+            return executor.current_name
+        data = self.coordinator.data
+        if data is None:
+            return "Idle"
+        return data.watering_now or "Idle"
+
+
+class LastRunSensor(_ZoneSensor):
+    """What the last cycle of this zone actually did."""
+
+    _attr_translation_key = "last_run"
+    _attr_icon = "mdi:history"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the last-run sensor."""
+        super().__init__(coordinator, zone_id, "last_run")
+
+    @property
+    def native_value(self) -> str:
+        """Return the result, or none when the zone has not run."""
+        zone = self._zone()
+        if zone is None or not zone.last_run:
+            return "none"
+        return str(zone.last_run.get("result") or "none")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """When, how long, and how much."""
+        zone = self._zone()
+        if zone is None or not zone.last_run:
+            return {}
+        run = zone.last_run
+        return {
+            "at": run.get("at"),
+            "minutes": run.get("minutes"),
+            "net_mm": run.get("net_mm"),
+            "gallons": run.get("gallons"),
+            "result": run.get("result"),
+        }
+
+
+class DormancySensor(_ZoneSensor):
+    """Active, slow, or dormant, from the recent air-temperature mean."""
+
+    _attr_translation_key = "dormancy"
+    _attr_icon = "mdi:snowflake-thermometer"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the dormancy sensor."""
+        super().__init__(coordinator, zone_id, "dormancy")
+
+    @property
+    def native_value(self) -> str | None:
+        """Return active, slow, or dormant."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.dormancy
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """The rolling mean behind the status."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {
+            "mean_f": zone.dormancy_mean_f,
+            "detail": zone.dormancy_detail,
+        }
 
 
 class SimulationSensor(SmartWaterHubEntity, SensorEntity):

@@ -33,6 +33,16 @@ def temperature_c(value: float, unit: str | None) -> float:
     return value
 
 
+def temperature_f(celsius: float) -> float:
+    """Convert Celsius to Fahrenheit."""
+    return celsius * 9.0 / 5.0 + 32.0
+
+
+def speed_mph(meters_per_second: float) -> float:
+    """Convert m/s to miles per hour."""
+    return meters_per_second / 0.44704
+
+
 def depth_mm(value: float, unit: str | None) -> float:
     """Convert a precipitation or water-depth reading to millimeters."""
     if unit in {"in", "inch", "inches"}:

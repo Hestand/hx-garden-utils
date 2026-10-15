@@ -1,8 +1,8 @@
 # Smart Water design
 
-Version 0.3.0 computes a nightly irrigation plan and exposes it as sensors. It does not water. `safety.EXECUTION_IMPLEMENTED` is false, so `would_execute` is false for every mode, including auto with dry-run off.
+Version 0.5.0 computes a nightly irrigation plan and, when the hub's Automatic watering switch is on, runs it. The switch is off on a new install and stays off across the upgrade, so an existing hub does not start watering by itself. `would_execute` is true only when that switch is on and the mode is not `off`. Notify-only does not block a run. Run now ignores the switch.
 
-A later executor will turn on the entity stored in `valve_entity`. That selector accepts `switch`, `valve`, and `input_boolean`, which covers a Home Assistant valve, a switch, or a controller zone that Home Assistant already exposes as one of those. The executor must call that entity. It must not call Hydrawise APIs or `hydrawise.start_watering`.
+`executor.py` turns on the entity stored in `valve_entity`. That selector accepts `switch`, `valve`, and `input_boolean`. The services are `switch.turn_on` / `turn_off`, `valve.open_valve` / `close_valve`, and `input_boolean.turn_on` / `turn_off`. It does not call a controller API or `hydrawise.start_watering`. Simulation entity ids (`simulation.*`) are never passed to a service.
 
 ## Layout
 
@@ -15,15 +15,20 @@ A later executor will turn on the entity stored in `valve_entity`. That selector
 | `discover.py` | Suggest a weather entity and Tempest-style sensors during setup. No Home Assistant import |
 | `soil.py` | Looks up the presets for the bucket and the cycle-and-soak math |
 | `cycle_soak.py` | Runtime, max cycle, and soak |
-| `schedule.py` | Allowed weekdays and blackout, including the Waco preset |
+| `schedule.py` | Allowed weekdays and an optional blackout. Retired day presets are migrated here |
+| `skips.py` | Rain, freeze, wind, moisture, days, interval, and dormancy |
+| `dormancy.py` | 7-day air-temperature mean and optional winter maintenance |
+| `learn.py` | Slow available-water factor from a moisture sensor |
+| `week_plan.py` | Next 7 days, reusing the planner |
 | `moisture.py` | Sensor deficit, correct, and override |
 | `flow.py` | Delivered volume versus expected, leak and low-flow labels |
 | `planner.py` | Due check, one-valve timeline, sunrise finish |
-| `coordinator.py` | Hourly read, evening commit, snapshots |
+| `executor.py` | One sequence of on/off commands, with confirmation |
+| `coordinator.py` | Hourly read, evening commit, arming, and bucket credit |
 | `store.py` | Restart persistence, storage version 1 |
-| `safety.py` | The execution guard |
+| `safety.py` | `would_execute` from the automatic switch and the mode |
 
-Platforms are sensor, switch, number, and button. Zones are config subentries. The hub options flow edits behavior and sensors. Nothing in those platforms calls an on/off service.
+Platforms are sensor, switch, number, and button. Zones are config subentries. The hub options flow edits behavior and sensors. The only on/off service calls are in `executor.py`.
 
 ## Weather and ET
 
@@ -46,7 +51,9 @@ Rain accumulation:
 | Cumulative | First sample is a baseline and adds nothing. Later increases add. A drop (counter reset) is ignored. |
 | Rate | mm/h, trapezoid between samples, 6 hour maximum gap. |
 
-If a rain-amount sensor is configured, forecast rain is not used for today's bucket even when the sensor is briefly unavailable. Tomorrow's forecast is still the skip check. Effective rain is the FAO-56 rule already in `balance.py`: precipitation below 0.2 × ET0 is ignored. The rain sensor publishes the raw total, the effective total, and whether the day was ignored.
+Today's bucket uses the rain-amount sensor only. Forecast precipitation is never copied into today's rain. Tomorrow's forecast is still the optional skip check, and that check is off until a threshold is set. Effective rain is the FAO-56 rule already in `balance.py`: precipitation below 0.2 × ET0 is ignored. The rain sensor publishes the raw total, the effective total, and whether the day was ignored.
+
+Positive rain deltas are stored as events and kept for about 48 hours, including across midnight, so the recent-rain skip can see the last 12 hours. A daily-total decrease corrects only events from that same calendar day. A midnight reset to zero does not erase yesterday.
 
 When the weather entity is unavailable and a temperature sensor has a usable range, the "weather unavailable" error is cleared so the sensor path can stand alone.
 
@@ -58,9 +65,9 @@ The evening update, or an early `calculate_plan`, commits one day:
 
 `Dr = clamp(Dr + ETc − effective rain − irrigation, 0, TAW)`
 
-The same calendar day does not commit twice. Irrigation during the day is only `mark_watered` or a manual bucket set. The daily job does not credit the plan as if it had run.
+The same calendar day does not commit twice. A finished cycle subtracts the net depth that was actually applied: minutes/60 × precipitation rate × efficiency, converted to millimeters, unless a flow total increased during the cycle. In that case the credit is gallons / (area × 0.623) × efficiency. `mark_watered` and the bucket services still adjust the deficit directly. The daily job does not credit a plan that has not run.
 
-A zone is due when deficit ≥ RAW, or when deficit plus the look-ahead days of ETc would reach RAW. The depth placed on the timeline is the current deficit times the adjustment percent, not the extra projected days.
+A zone is due when deficit ≥ RAW, or ≥ a target depth when the zone sets one. The plan look-ahead defaults to 0, so tomorrow's ET does not make tonight due. The depth placed on the timeline is the current deficit times the adjustment percent. After a zone is due, the minimum interval still applies: 3 days for turf, 7 for shrubs, trees, native plantings, and drip beds, 2 for vegetables and flowers. A zone with no `last_watered` date is not blocked by the interval. The live coordinator passes the interval. The simulation week does not, so the example weeks stay a weather exercise.
 
 ## Moisture
 
@@ -103,20 +110,43 @@ The deadline starts as the next sunrise minus the buffer (default 30 minutes). `
 - A deadline in the morning (before the blackout, or exactly at its start) may begin at midnight.
 - A deadline after the blackout may begin at the blackout end.
 
-Allowed weekdays are checked against that clipped deadline. An empty list means every day. Drip skips the weekday check only when the hub option is on. It does not get its own timeline, so the blackout still applies.
+Allowed weekdays are checked against that clipped deadline. None means every day. An empty selection means no day. Drip skips the weekday check only when the hub option is on. It does not get its own timeline, so the blackout still applies.
 
 If the timeline is longer than the window, cycle lengths scale down and soak is kept. A daily runtime cap scales the same way. The plan carries a warning instead of pretending a soak-bound timeline fits.
 
-## Schedule presets
+## Allowed days
 
-| Preset | Days | Blackout |
-| --- | --- | --- |
-| `none` | Any | Optional hours from the form |
-| `custom` | The selected weekdays, or any day if none are selected | Optional hours from the form |
-| `waco_odd` | Sun, Tue, Thu | 10:00–19:00, fixed |
-| `waco_even` | Mon, Wed, Sat | 10:00–19:00, fixed |
+The form is a multi-select of Monday through Sunday. A new hub selects every day. The blackout hours stay optional.
 
-Waco follows the City of Waco year-round outdoor rules effective 1 July 2024. Friday is not a watering day. The city does not apply the same weekday limit to buried drip. This integration's drip exception is weekday-only and defaults off. A yard that is only drip can stay on preset `none`.
+Config version 4 migration rewrites hub options and does not rewrite zone numbers. A stored odd-address preset becomes Sunday, Tuesday, and Thursday with blackout 10:00–19:00. A stored even-address preset becomes Monday, Wednesday, and Saturday with the same blackout. Any other value, including a missing preset, allows every day and keeps a blackout the user already saved. The dry-run option is dropped. Automatic watering is a store flag, default false, and is not copied from dry-run.
+
+## Skips
+
+`skip_reason` returns the first match: disabled, skipped-until, rain sensor, currently raining, recent rain at or above the threshold, temperature or forecast low at or below the freeze limit, wind at or above the sprinkler limit, moisture fuller than the threshold, optional forecast rain, a day that is not allowed, a closed window, the minimum interval, dormancy without maintenance due, then not due. Manual run-now sets `include_schedule` false, so it still applies the safety checks and skips the day, window, interval, and dormancy stop.
+
+Defaults, and the citations, are in the README. Freeze is 40°F. Recent rain is 2.5 mm in 12 hours, a practical default rather than a published duration. Wind is 10 / 12 / 15 mph for spray, MP rotator, and rotor. Drip and bubbler have no wind skip. The moisture threshold is `1 − p` unless the zone sets a percent. Forecast skip stays unset.
+
+The executor calls the same checks again immediately before each cycle, and scales or skips the cycle when rain since the plan was armed has already covered part of that zone's net depth.
+
+## Dormancy
+
+`dormancy.classify` needs at least three distinct daily mean air temperatures and then uses up to seven. Warm-season grasses (Bermuda, Zoysia, Buffalo, and the generic warm-season row) are slow below 55°F and dormant below 50°F. St. Augustine is slow below 60°F and dormant below 55°F, five degrees higher because AgriLife ranks it as more winter-injury susceptible. That shift is a judgment, not a separate published cutoff. Cool-season turf is slow at a 7-day mean of 80°F or more and has no temperature-only full stop. Anything that is not turf stays active. Slow multiplies that day's crop ET by 0.5. Dormant removes the zone from the regular plan.
+
+Winter maintenance is off unless the zone enables it. When it is on, a dormant zone that is also at RAW, under the recent-rain limit, and at least 21 days since the last watering (or never watered) is capped at 0.25 inch. The air mean is a proxy for soil temperature.
+
+## Learning
+
+When a moisture sensor is present and learning is not turned off, one update per day adjusts an available-water factor. Model fraction full is `1 − deficit / (TAW × factor)`. TAW in that formula is the unscaled total; the factor scales it. The step is `0.05 × (sensor full − model full)`, clamped to 0.7–1.3. Those bounds are engineering limits. Confidence is `min(1, samples / 14)`. The update is skipped when today's rain is at least 2.5 mm, when the zone was watered today or yesterday, or when today's sample was already applied. It is computed before the plan and stored after the plan, so it affects the next day. It is not written into the available-water override. `reset_learning` sets the factor to 1, confidence to 0, and the sample count to 0.
+
+## Executor
+
+One task runs the timeline in order. Soak gaps are already in the automatic start times, so automatic jobs do not add a second soak sleep. A manual run places soak sleeps between its own cycles. Two entities are never on together.
+
+Each command is confirmed against the entity state. Valve `opening` and `closing` count as success. Up to three attempts, one second apart. A failure is logged. If turn-on never confirms, that cycle is not slept and the result says the entity could not be turned on. The `finally` of a cycle turns the entity off, including when the task is cancelled. Startup calls `async_quiesce` before the first refresh and turns off `watering_entity` when one was saved. Home Assistant's stop event, entry unload, and `stop_all` do the same.
+
+The per-run cap (default 60 minutes, hub option `max_run_min`) is the sum of valve-on minutes in that sequence. A cycle is also shortened so it ends by `finish_by`. Under half a minute after shortening, the cycle is skipped. Manual runs have no `finish_by`.
+
+An empty automatic job list does not call `start`, so a quiet night does not cancel a manual run that is already going. Bucket credit runs outside the build lock and refreshes the snapshot without starting another sequence.
 
 ## Overrides
 
@@ -127,13 +157,16 @@ Waco follows the City of Waco year-round outdoor rules effective 1 July 2024. Fr
 | Adjustment percent | Scales planned net depth. Does not change the stored deficit. 0 means not scheduled. Also a number entity, 0–300, step 1 |
 | Set / reset bucket | Absolute deficit, clamped to TAW |
 | Mark watered | Subtracts a net depth, or refills when the depth is omitted |
-| Run now | Logs the current plan and stores `last_run_now`. Does not credit the bucket and does not call the on/off entity. The button calls the same method |
+| Run now | Builds cycle-and-soak for the adjusted deficit and runs it, even when automatic watering is off. Credits each cycle. Still applies freeze, wind, rain, and moisture. The button calls the same method |
+| Stop all | Cancels the sequence and turns the recorded entity off |
+| Reset learning | Factor 1, confidence 0, samples 0 |
+| Automatic watering | Store flag. On does not write options unless the mode is off, in which case the mode becomes auto and the entry reloads. Off stops the executor and does not change the mode |
 
 ## Persistence and config
 
 `SmartWaterStore` uses Home Assistant `Store` version 1, key `smart_water.{entry_id}`. The file holds per-zone deficit, balance date, skip, enabled, adjustment, flow cursor, last run-now text, moisture deficit, the last plan, the last ET0, and the weather-day accumulator. Loading merges each zone over `fresh_zone()` and the weather dict over `fresh_day()`, so a 0.1 file gains the new keys without a migration. Storage version is not bumped, because a bump without a migration drops the file.
 
-The config entry version is 3. `async_migrate_entry` bumps an older entry and does not rewrite zone data. Root depth, depletion, efficiency, slope, and precipitation rate saved by the 0.2 forms stay overrides, so an old efficiency of 1.0 is not replaced by the sprinkler preset. New zones leave those keys out. Storage version is still 1. The store file may also hold a `simulation` object. Loading treats a missing key as no week yet.
+The config entry version is 4. `async_migrate_entry` bumps an older entry, rewrites schedule options through `migrate_options`, and does not rewrite zone data. Root depth, depletion, efficiency, slope, and precipitation rate saved by the 0.2 forms stay overrides, so an old efficiency of 1.0 is not replaced by the sprinkler preset. New zones leave those keys out. Storage version is still 1. The store file may also hold `automatic` (default false), `watering_entity`, `temp_history`, `armed_date`, `plan_marked_at`, and a `simulation` object. Loading treats a missing key as the fresh-hub default, so an older file does not come back with automatic watering on.
 
 Setup starts with a menu. A live hub is one form (name, optional weather, collapsed sensors, collapsed location and schedule) and two zone steps (the on/off entity plus four dropdowns, then collapsed overrides). A simulation hub drops the weather entity and the on/off entity and adds optional area and slope on the zone step. Suggested values are used only for entities the discovery step found and for numbers the zone already stored. Preset numbers are description text. Writing them into the inputs would save them and blank would stop meaning preset.
 
@@ -204,8 +237,8 @@ The first refresh of a simulation hub that already has zones and an empty stored
 
 ## What is stored and what is actuated
 
-Stored and unused by any service call: `valve_entity`.
+Stored: `valve_entity`, the bucket, last run, the learned factor, dormancy, and `watering_entity` while a cycle is on.
 
-Computed and published: ET0, rain and effective rain, deficit, RAW, the nightly timeline, the next-run timestamp, the per-zone plan, flow status, moisture deficit, adjustment.
+Computed and published: ET0, rain and effective rain, deficit, RAW, the nightly timeline, the next-run timestamp, the 7-day watering schedule, currently watering, the per-zone plan, last run, dormancy, flow status, moisture deficit, adjustment.
 
-Actuated: nothing. The only `hass.services.async_call` sites are `weather.get_forecasts` and the user-configured notify target.
+Actuated, and only from `executor.py`: the zone's switch, valve, or input boolean. Other `hass.services.async_call` sites are `weather.get_forecasts` and the user-configured notify target. A simulation hub never reaches the executor with a real entity id. `would_execute` on a simulated week is false.

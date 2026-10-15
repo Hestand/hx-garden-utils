@@ -9,7 +9,7 @@ it. A sensor that already reports daily MJ is not integrated.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .const import (
     RAIN_KIND_CUMULATIVE,
@@ -37,6 +37,7 @@ def fresh_day(date: str) -> dict[str, object]:
         "effective_rain_mm": 0.0,
         "rain_ignored": False,
         "precip_source": "none",
+        "rain_events": [],
     }
 
 
@@ -63,7 +64,18 @@ def note_rain(
     between samples.
     """
     if kind == RAIN_KIND_DAILY:
+        previous = track.get("rain_cursor")
         track["rain_mm"] = max(0.0, value_mm)
+        if previous is None:
+            _add_rain_event(track, at, float(track["rain_mm"]))
+        else:
+            delta = float(track["rain_mm"]) - max(0.0, float(previous))
+            if delta > 0:
+                _add_rain_event(track, at, delta)
+            elif delta < 0:
+                # A lower daily total is a correction of today's count, not a
+                # deletion of rain that already fell on an earlier date.
+                _reduce_rain_events(track, at, -delta, same_day=True)
         track["rain_cursor"] = value_mm
         track["rain_last_at"] = at.isoformat()
         return
@@ -73,8 +85,9 @@ def note_rain(
             track["rain_cursor"] = value_mm
         else:
             delta = value_mm - float(cursor)
-            if delta >= 0:
+            if delta > 0:
                 track["rain_mm"] = float(track["rain_mm"]) + delta
+                _add_rain_event(track, at, delta)
             track["rain_cursor"] = value_mm
         track["rain_last_at"] = at.isoformat()
         return
@@ -88,9 +101,74 @@ def note_rain(
         hours = (at - previous).total_seconds() / 3600.0
         if 0 < hours <= _MAX_GAP_HOURS:
             average = (float(cursor) + value_mm) / 2.0
-            track["rain_mm"] = float(track["rain_mm"]) + max(0.0, average) * hours
+            added = max(0.0, average) * hours
+            track["rain_mm"] = float(track["rain_mm"]) + added
+            _add_rain_event(track, at, added)
     track["rain_cursor"] = value_mm
     track["rain_last_at"] = at.isoformat()
+
+
+def _event_time(event: dict[str, object], fallback: datetime) -> datetime:
+    moment = datetime.fromisoformat(str(event["at"]))
+    if moment.tzinfo is None and fallback.tzinfo is not None:
+        moment = moment.replace(tzinfo=fallback.tzinfo)
+    return moment
+
+
+def _add_rain_event(track: dict[str, object], at: datetime, mm: float) -> None:
+    """Record a positive amount and drop events older than 48 hours."""
+    if mm <= 0:
+        return
+    events = [dict(event) for event in list(track.get("rain_events") or [])]
+    events.append({"at": at.isoformat(), "mm": mm})
+    track["rain_events"] = _prune_events(events, at)
+
+
+def _reduce_rain_events(
+    track: dict[str, object], at: datetime, mm: float, *, same_day: bool
+) -> None:
+    """Shrink the newest matching events by ``mm``."""
+    events = [dict(event) for event in list(track.get("rain_events") or [])]
+    remaining = mm
+    day = at.date().isoformat()
+    for event in reversed(events):
+        if remaining <= 0:
+            break
+        moment = _event_time(event, at)
+        if same_day and moment.date().isoformat() != day:
+            continue
+        take = min(float(event["mm"]), remaining)
+        event["mm"] = float(event["mm"]) - take
+        remaining -= take
+    track["rain_events"] = _prune_events(
+        [event for event in events if float(event["mm"]) > 0], at
+    )
+
+
+def _prune_events(events: list[dict[str, object]], at: datetime) -> list[dict[str, object]]:
+    cutoff = at - timedelta(hours=48)
+    kept = []
+    for event in events:
+        if _event_time(event, at) >= cutoff:
+            kept.append(event)
+    return kept
+
+
+def rain_between(
+    track: dict[str, object], since: datetime, until: datetime
+) -> float:
+    """Sum recorded rain with timestamps in ``[since, until]``."""
+    total = 0.0
+    for event in list(track.get("rain_events") or []):
+        moment = _event_time(dict(event), until)
+        if since <= moment <= until:
+            total += float(event["mm"])
+    return total
+
+
+def rain_in_hours(track: dict[str, object], hours: float, at: datetime) -> float:
+    """Sum recorded rain in the last ``hours`` ending at ``at``."""
+    return rain_between(track, at - timedelta(hours=hours), at)
 
 
 def note_solar_w(track: dict[str, object], watts_m2: float, at: datetime) -> None:

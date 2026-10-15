@@ -1,4 +1,8 @@
-"""Services that change the plan or the bucket. None of them open a valve."""
+"""Services that change the plan, the bucket, or a running cycle.
+
+``run_now`` opens the zone's on/off entity. ``stop_all`` turns it off.
+Nothing in this file calls Hydrawise.
+"""
 
 from __future__ import annotations
 
@@ -31,8 +35,10 @@ from .const import (
     SERVICE_RUN_NOW,
     SERVICE_SET_ADJUSTMENT,
     SERVICE_SET_BUCKET,
+    SERVICE_RESET_LEARNING,
     SERVICE_SIMULATE,
     SERVICE_SKIP_ZONE,
+    SERVICE_STOP_ALL,
     SERVICES,
 )
 from .simulate import BUCKETS, SCENARIOS
@@ -115,7 +121,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         return
 
     async def calculate_plan(call: ServiceCall) -> None:
-        """Rebuild the dry-run plan. This does not water."""
+        """Rebuild the plan. An automatic hub can arm tonight's run."""
         notify = bool(call.data.get("notify", True))
         hub = call.data.get("hub")
         targets = [
@@ -177,11 +183,31 @@ def async_setup_services(hass: HomeAssistant) -> None:
         await coordinator.async_set_adjustment(zone_id, float(call.data["percent"]))
 
     async def run_now(call: ServiceCall) -> None:
-        """Log the planned run. No valve, switch, or controller service is called."""
+        """Run one zone now, even when automatic watering is off."""
         _entry, coordinator, zone_id = _find_zone(
             hass, call.data["zone"], call.data.get("hub")
         )
         await coordinator.async_run_now(zone_id)
+
+    async def stop_all(call: ServiceCall) -> None:
+        """Turn off every zone this hub left on."""
+        hub = call.data.get("hub")
+        targets = [
+            coordinator
+            for entry, coordinator in _coordinators(hass)
+            if _hub_matches(entry, hub)
+        ]
+        if not targets:
+            raise ServiceValidationError("No Smart Water hub is loaded.")
+        for coordinator in targets:
+            await coordinator.async_stop_all()
+
+    async def reset_learning(call: ServiceCall) -> None:
+        """Reset a zone's learned available-water factor."""
+        _entry, coordinator, zone_id = _find_zone(
+            hass, call.data["zone"], call.data.get("hub")
+        )
+        await coordinator.async_reset_learning(zone_id)
 
     async def simulate(call: ServiceCall) -> dict[str, Any]:
         """Play a weather week through the planner. Does not call a valve."""
@@ -323,6 +349,23 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
         supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_STOP_ALL,
+        stop_all,
+        schema=vol.Schema({vol.Optional("hub"): str}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESET_LEARNING,
+        reset_learning,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Required("zone"): str,
+            }
+        ),
     )
     _LOGGER.debug("Registered Smart Water services")
 

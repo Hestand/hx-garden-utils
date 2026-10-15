@@ -8,7 +8,7 @@ import pytest
 
 from smart_water.balance import root_zone
 from smart_water.planner import PlanRequest, ZoneRequest, build_plan
-from smart_water.safety import EXECUTION_IMPLEMENTED, block_reason, mode_after_master_switch
+from smart_water.safety import EXECUTION_IMPLEMENTED, block_reason, would_execute
 
 
 def _zone(**overrides: object) -> ZoneRequest:
@@ -52,32 +52,26 @@ def _request(*zones: ZoneRequest, **overrides: object) -> PlanRequest:
         forecast_skip_mm=None,
         hub_rain_wet=False,
         mode="notify_only",
-        dry_run=True,
+        automatic=False,
     )
     base.update(overrides)
     return PlanRequest(**base)  # type: ignore[arg-type]
 
 
-def test_v01_never_reports_that_it_would_water() -> None:
-    assert EXECUTION_IMPLEMENTED is False
-    assert block_reason(dry_run=False, mode="auto")
-    assert "no executor" in block_reason(dry_run=False, mode="auto")
+def test_automatic_off_does_not_report_that_it_would_water() -> None:
+    assert EXECUTION_IMPLEMENTED is True
+    assert "automatic watering is off" in block_reason(automatic=False, mode="auto")
+    assert would_execute(automatic=False, mode="auto") is False
+    assert would_execute(automatic=True, mode="auto") is True
+    assert would_execute(automatic=True, mode="off") is False
     plan = build_plan(_request())
     assert plan.would_execute is False
-    assert plan.dry_run is True
-    assert plan.summary.startswith("DRY-RUN")
-    assert "will not open valves" in plan.summary
-
-
-def test_master_switch_cannot_clear_dry_run() -> None:
-    assert (
-        mode_after_master_switch(mode="off", dry_run=True, turn_on=True) == "notify_only"
-    )
-    assert mode_after_master_switch(mode="auto", dry_run=True, turn_on=True) == "auto"
-    assert mode_after_master_switch(mode="auto", dry_run=False, turn_on=False) == "off"
-    assert (
-        mode_after_master_switch(mode="off", dry_run=False, turn_on=True) == "auto"
-    )
+    assert plan.automatic is False
+    assert plan.summary.startswith("PLANNED")
+    assert "automatic watering is off" in plan.summary
+    armed = build_plan(_request(automatic=True, mode="auto"))
+    assert armed.would_execute is True
+    assert armed.summary.startswith("AUTOMATIC")
 
 
 def test_clay_loam_plan_uses_four_minute_cycles_and_ends_at_sunrise() -> None:
@@ -97,7 +91,9 @@ def test_clay_loam_plan_uses_four_minute_cycles_and_ends_at_sunrise() -> None:
 
 
 def test_zones_are_interleaved_during_soak_and_never_overlap() -> None:
-    front = _zone(zone_id="front", name="Front Yard", priority=1, deficit_mm=12.0)
+    # Days-ahead is 0, so the deficit has to be past RAW (about 14.1 mm
+    # for this clay loam) before the zone is scheduled.
+    front = _zone(zone_id="front", name="Front Yard", priority=1, deficit_mm=20.0)
     bed = _zone(
         zone_id="bed",
         name="Bed",

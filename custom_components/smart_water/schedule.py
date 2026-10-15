@@ -1,31 +1,27 @@
-"""Allowed watering days and blackout hours.
+"""Allowed watering days and an optional blackout window.
 
-The Waco preset follows the City of Waco year-round outdoor rules (effective
-1 July 2024): odd addresses water Sunday, Tuesday, and Thursday; even
-addresses water Monday, Wednesday, and Saturday; Friday is off; no watering
-from 10:00 to 19:00. The window is one interval that ends at the sunrise
-deadline, so a blackout keeps only the legal stretch that still ends then.
+``allowed_weekdays`` of None means every day (older hubs that never chose).
+An explicit empty selection means no day is allowed. A blackout is a local
+hour range the shared timeline must stay outside of. Drip can ignore the
+weekday list when the hub option says so; the blackout still applies.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
-from .const import (
-    SCHEDULE_CUSTOM,
-    SCHEDULE_NONE,
-    SCHEDULE_WACO_EVEN,
-    SCHEDULE_WACO_ODD,
-    WACO_BLACKOUT_END,
-    WACO_BLACKOUT_START,
-    WACO_EVEN_DAYS,
-    WACO_ODD_DAYS,
-    WEEKDAYS,
-)
+from .const import WEEKDAYS
 
-_WEEKDAY_INDEX = {name: index for index, name in enumerate(WEEKDAYS)}
-
+# Retired option values from hubs set up before allowed days replaced presets.
+# They exist only so migration can map a stored string onto a day set.
+_RETIRED_ODD = "waco_odd"
+_RETIRED_EVEN = "waco_even"
+_RETIRED_ODD_DAYS = ("sun", "tue", "thu")
+_RETIRED_EVEN_DAYS = ("mon", "wed", "sat")
+_RETIRED_BLACKOUT_START = 10
+_RETIRED_BLACKOUT_END = 19
 
 @dataclass(frozen=True)
 class ScheduleRules:
@@ -37,23 +33,61 @@ class ScheduleRules:
     source: str
 
 
+def normalize_weekdays(
+    allowed: list[str] | tuple[str, ...] | None,
+) -> tuple[str, ...] | None:
+    """None stays None (every day). Any list is filtered into weekday order.
+
+    An empty list stays empty, which allows no day.
+    """
+    if allowed is None:
+        return None
+    chosen = {str(day) for day in allowed}
+    return tuple(day for day in WEEKDAYS if day in chosen)
+
+
 def rules_for(
-    preset: str | None,
     allowed_weekdays: list[str] | tuple[str, ...] | None,
     blackout_start: int | None,
     blackout_end: int | None,
 ) -> ScheduleRules:
-    """Turn a preset, or custom days and hours, into one rule set."""
-    if preset == SCHEDULE_WACO_ODD:
-        return ScheduleRules(WACO_ODD_DAYS, WACO_BLACKOUT_START, WACO_BLACKOUT_END, preset)
-    if preset == SCHEDULE_WACO_EVEN:
-        return ScheduleRules(
-            WACO_EVEN_DAYS, WACO_BLACKOUT_START, WACO_BLACKOUT_END, preset
-        )
-    if preset == SCHEDULE_CUSTOM:
-        days = tuple(day for day in WEEKDAYS if allowed_weekdays and day in allowed_weekdays)
-        return ScheduleRules(days or None, blackout_start, blackout_end, preset)
-    return ScheduleRules(None, blackout_start, blackout_end, preset or SCHEDULE_NONE)
+    """Turn stored days and hours into one rule set."""
+    return ScheduleRules(
+        normalize_weekdays(allowed_weekdays),
+        blackout_start,
+        blackout_end,
+        "days",
+    )
+
+
+def migrate_options(options: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite hub options onto allowed days. Zone data is not touched.
+
+    A retired odd-address preset becomes Sun/Tue/Thu and a 10:00–19:00
+    blackout. The even-address preset becomes Mon/Wed/Sat with the same
+    blackout. Anything else, including a missing preset, allows every day
+    and keeps a blackout the user already stored. The old dry-run flag is
+    dropped; automatic watering stays off in the store until the user
+    turns the switch on.
+    """
+    updated = dict(options)
+    preset = updated.pop("schedule_preset", None)
+    updated.pop("dry_run", None)
+    if preset == _RETIRED_ODD:
+        updated["allowed_weekdays"] = list(_RETIRED_ODD_DAYS)
+        updated["blackout_start_hour"] = _RETIRED_BLACKOUT_START
+        updated["blackout_end_hour"] = _RETIRED_BLACKOUT_END
+    elif preset == _RETIRED_EVEN:
+        updated["allowed_weekdays"] = list(_RETIRED_EVEN_DAYS)
+        updated["blackout_start_hour"] = _RETIRED_BLACKOUT_START
+        updated["blackout_end_hour"] = _RETIRED_BLACKOUT_END
+    elif preset == "custom":
+        days = updated.get("allowed_weekdays") or []
+        if not days:
+            updated["allowed_weekdays"] = list(WEEKDAYS)
+    else:
+        updated["allowed_weekdays"] = list(WEEKDAYS)
+    return updated
 
 
 def weekday_name(moment: datetime) -> str:
@@ -62,8 +96,11 @@ def weekday_name(moment: datetime) -> str:
 
 
 def day_allowed(moment: datetime, allowed: tuple[str, ...] | None) -> bool:
-    """True when ``allowed`` is empty or contains this weekday."""
-    if not allowed:
+    """True when ``allowed`` is None or contains this weekday.
+
+    None means every day. An empty tuple means no day.
+    """
+    if allowed is None:
         return True
     return weekday_name(moment) in allowed
 

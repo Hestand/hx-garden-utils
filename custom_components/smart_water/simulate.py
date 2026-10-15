@@ -24,7 +24,6 @@ from .const import (
     DEFAULT_ELEVATION_M,
     DEFAULT_PLAN_HOUR,
     DEFAULT_ROUND_MINUTES,
-    DEFAULT_SCHEDULE_PRESET,
     DEFAULT_SUNRISE_BUFFER_MIN,
     DEFAULT_WIND_HEIGHT_M,
 )
@@ -33,7 +32,6 @@ from .et import ETInputs
 from .flow import expected_gallons
 from .planner import NightPlan, PlanRequest, build_plan, build_zone_request
 from .presets import resolved_root_depth_in, stored_float
-from .safety import would_execute
 from .schedule import rules_for
 from .solar import next_sunrise
 from .units import inches_to_mm, mm_to_inches, speed_m_s, temperature_c
@@ -180,7 +178,6 @@ class SimSettings:
     earliest_hour: int | None = None
     forecast_skip_mm: float | None = None
     max_daily_runtime_min: int | None = None
-    schedule_preset: str = DEFAULT_SCHEDULE_PRESET
     allowed_weekdays: tuple[str, ...] | None = None
     blackout_start_hour: int | None = None
     blackout_end_hour: int | None = None
@@ -298,7 +295,6 @@ def run_week(
     tz = ZoneInfo(settings.timezone)
     start = settings.start or datetime.now(tz).date()
     schedule = rules_for(
-        settings.schedule_preset,
         settings.allowed_weekdays,
         settings.blackout_start_hour,
         settings.blackout_end_hour,
@@ -400,7 +396,7 @@ def run_week(
         "scenario_name": name,
         "bucket": bucket,
         "start_date": start.isoformat(),
-        "would_execute": would_execute(dry_run=settings.dry_run, mode=settings.mode),
+        "would_execute": False,
         "note": "Virtual run only. No valve, switch, or controller was called.",
         "total_runtime_min": total_runtime,
         "days": day_rows,
@@ -559,7 +555,7 @@ def _plan_evening(
             forecast_skip_mm=settings.forecast_skip_mm,
             hub_rain_wet=False,
             mode=settings.mode,
-            dry_run=settings.dry_run,
+            automatic=False,
             max_daily_runtime_min=settings.max_daily_runtime_min,
             allowed_weekdays=schedule_days,
             blackout_start_hour=blackout_start,

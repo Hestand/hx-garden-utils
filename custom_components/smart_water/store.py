@@ -27,6 +27,15 @@ def fresh_zone() -> dict[str, Any]:
         "flow_last_at": None,
         "last_run_now": None,
         "moisture_deficit_mm": None,
+        "last_watered": None,
+        "last_run": None,
+        "learn_factor": 1.0,
+        "learn_confidence": 0.0,
+        "learn_samples": 0,
+        "learn_date": None,
+        "dormancy": "active",
+        "dormancy_mean_f": None,
+        "dormancy_detail": "",
     }
 
 
@@ -47,6 +56,11 @@ class SmartWaterStore:
         self.et0_date: str | None = None
         self.weather: dict[str, Any] = fresh_day("")
         self.simulation: dict[str, Any] | None = None
+        self.automatic = False
+        self.watering_entity: str | None = None
+        self.temp_history: list[dict[str, Any]] = []
+        self.armed_date: str | None = None
+        self.plan_marked_at: str | None = None
 
     async def async_load(self) -> None:
         """Load the last saved state."""
@@ -65,6 +79,12 @@ class SmartWaterStore:
         self.weather = {**fresh_day(str(saved_weather.get("date") or "")), **saved_weather}
         saved_simulation = data.get("simulation")
         self.simulation = dict(saved_simulation) if isinstance(saved_simulation, dict) else None
+        self.automatic = bool(data.get("automatic", False))
+        watering = data.get("watering_entity")
+        self.watering_entity = str(watering) if watering else None
+        self.temp_history = list(data.get("temp_history") or [])
+        self.armed_date = data.get("armed_date")
+        self.plan_marked_at = data.get("plan_marked_at")
 
     def zone(self, zone_id: str) -> dict[str, Any]:
         """Return mutable state for a zone, creating it at field capacity."""
@@ -77,7 +97,13 @@ class SmartWaterStore:
     def weather_for(self, date: str) -> dict[str, Any]:
         """Return today's accumulation, resetting it when the date changes."""
         if self.weather.get("date") != date:
+            events = list(self.weather.get("rain_events") or [])
+            cursor = self.weather.get("rain_cursor")
+            last_at = self.weather.get("rain_last_at")
             self.weather = fresh_day(date)
+            self.weather["rain_events"] = events
+            self.weather["rain_cursor"] = cursor
+            self.weather["rain_last_at"] = last_at
         return self.weather
 
     def prune(self, zone_ids: set[str]) -> None:
@@ -99,5 +125,10 @@ class SmartWaterStore:
                 "et0_date": self.et0_date,
                 "weather": self.weather,
                 "simulation": self.simulation,
+                "automatic": self.automatic,
+                "watering_entity": self.watering_entity,
+                "temp_history": self.temp_history,
+                "armed_date": self.armed_date,
+                "plan_marked_at": self.plan_marked_at,
             }
         )

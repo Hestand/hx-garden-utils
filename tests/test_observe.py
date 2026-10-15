@@ -12,8 +12,10 @@ from smart_water.observe import (
     note_solar_w,
     note_temperature,
     observed_temperature_range,
+    rain_in_hours,
     uv_index_to_w_m2,
 )
+from smart_water.store import SmartWaterStore
 
 
 def _at(hour: int, minute: int = 0) -> datetime:
@@ -52,6 +54,21 @@ def test_rain_rate_uses_the_trapezoid_and_drops_long_gaps() -> None:
     assert track["rain_mm"] == pytest.approx(6.0)
     note_rain(track, kind="rate", value_mm=4.0, at=_at(10) + timedelta(hours=7))
     assert track["rain_mm"] == pytest.approx(6.0)
+
+
+def test_a_downward_daily_total_does_not_invent_rain_and_events_survive_midnight() -> None:
+    track = fresh_day("2026-10-15")
+    note_rain(track, kind="daily_total", value_mm=4.0, at=_at(8))
+    note_rain(track, kind="daily_total", value_mm=1.5, at=_at(9))
+    assert rain_in_hours(track, 12, _at(10)) == pytest.approx(1.5)
+
+    store = SmartWaterStore.__new__(SmartWaterStore)
+    store.weather = track
+    rolled = store.weather_for("2026-10-16")
+    assert rolled["rain_mm"] == 0
+    assert rain_in_hours(rolled, 48, _at(10) + timedelta(hours=20)) == pytest.approx(1.5)
+    note_rain(rolled, kind="daily_total", value_mm=0.0, at=_at(10) + timedelta(hours=20))
+    assert rain_in_hours(rolled, 48, _at(10) + timedelta(hours=20)) == pytest.approx(1.5)
 
 
 def test_solar_integral_and_uv_fallback() -> None:

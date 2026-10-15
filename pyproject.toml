@@ -1,7 +1,7 @@
 [project]
 name = "smart-water"
-version = "0.4.0"
-description = "Home Assistant irrigation planner. Computes the plan and does not open valves."
+version = "0.5.0"
+description = "Home Assistant irrigation planner and zone controller."
 requires-python = ">=3.12"
 
 [tool.pytest.ini_options]

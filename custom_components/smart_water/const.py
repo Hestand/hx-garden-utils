@@ -4,9 +4,10 @@ from __future__ import annotations
 
 DOMAIN = "smart_water"
 NAME = "Smart Water"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
-# Stored on the hub. v0.4 still never waters; clearing dry-run only records intent.
+# Retired option key. v0.5 stores the automatic-watering switch in the hub
+# store (default off) and drops this option on migration.
 CONF_DRY_RUN = "dry_run"
 CONF_MODE = "mode"
 CONF_WEATHER_ENTITY = "weather_entity"
@@ -66,6 +67,19 @@ CONF_FLOW_SENSOR = "flow_sensor"
 CONF_FLOW_KIND = "flow_kind"
 CONF_FLOW_LOW_RATIO = "flow_low_ratio"
 CONF_FLOW_LEAK_RATIO = "flow_leak_ratio"
+CONF_FREEZE_SKIP_F = "freeze_skip_f"
+CONF_RECENT_RAIN_HOURS = "recent_rain_hours"
+CONF_RECENT_RAIN_MM = "recent_rain_mm"
+CONF_MAX_RUN_MIN = "max_run_min"
+CONF_MIN_INTERVAL_DAYS = "min_interval_days"
+CONF_TARGET_DEPTH_IN = "target_depth_in"
+CONF_WIND_SKIP_MPH = "wind_skip_mph"
+CONF_MOISTURE_SKIP_PCT = "moisture_skip_pct"
+CONF_DORMANT_BELOW_F = "dormant_below_f"
+CONF_SLOW_BELOW_F = "slow_below_f"
+CONF_HEAT_ABOVE_F = "heat_above_f"
+CONF_MAINTENANCE_WATERING = "maintenance_watering"
+CONF_MOISTURE_LEARN = "moisture_learn"
 
 MODE_AUTO = "auto"
 MODE_NOTIFY_ONLY = "notify_only"
@@ -74,8 +88,15 @@ MODES = (MODE_AUTO, MODE_NOTIFY_ONLY, MODE_OFF)
 
 SUBENTRY_ZONE = "zone"
 
-# Off by default. v0.4 still will not open a valve: there is no executor.
+# Kept so a stored v0.4 option still has a name. Migration discards it.
 DEFAULT_DRY_RUN = False
+# Inclusive freeze cutoff. Oklahoma State HLA-6610 says not to water below 40°F.
+DEFAULT_FREEZE_SKIP_F = 40.0
+# Practical recent-rain gate. Not a published hour or depth; both are overridable.
+DEFAULT_RECENT_RAIN_HOURS = 12
+DEFAULT_RECENT_RAIN_MM = 2.5
+# One automatic or manual run cannot leave a zone on longer than this, combined.
+DEFAULT_MAX_RUN_MIN = 60
 
 DEFAULT_ELEVATION_M = 219.0
 DEFAULT_SUNRISE_BUFFER_MIN = 30
@@ -89,7 +110,6 @@ DEFAULT_MOISTURE_WEIGHT = 0.5
 DEFAULT_FLOW_LOW_RATIO = 0.5
 DEFAULT_FLOW_LEAK_RATIO = 1.5
 DEFAULT_SPRINKLER_TYPE = "spray"
-DEFAULT_SCHEDULE_PRESET = "none"
 DEFAULT_RAIN_KIND = "daily_total"
 DEFAULT_MOISTURE_MODE = "off"
 DEFAULT_MOISTURE_KIND = "relative"
@@ -104,24 +124,7 @@ RAIN_KIND_CUMULATIVE = "cumulative"
 RAIN_KIND_RATE = "rate"
 RAIN_KINDS = (RAIN_KIND_DAILY, RAIN_KIND_CUMULATIVE, RAIN_KIND_RATE)
 
-SCHEDULE_NONE = "none"
-SCHEDULE_WACO_ODD = "waco_odd"
-SCHEDULE_WACO_EVEN = "waco_even"
-SCHEDULE_CUSTOM = "custom"
-SCHEDULE_PRESETS = (
-    SCHEDULE_NONE,
-    SCHEDULE_WACO_ODD,
-    SCHEDULE_WACO_EVEN,
-    SCHEDULE_CUSTOM,
-)
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-# City of Waco year-round outdoor rules, effective 1 July 2024.
-# Odd addresses: Sun/Tue/Thu. Even: Mon/Wed/Sat. No Friday.
-# No watering 10:00–19:00. https://www.waco-texas.com/Departments/Water-Treatment/Water-Conservation
-WACO_ODD_DAYS = ("sun", "tue", "thu")
-WACO_EVEN_DAYS = ("mon", "wed", "sat")
-WACO_BLACKOUT_START = 10
-WACO_BLACKOUT_END = 19
 
 SPRINKLER_SPRAY = "spray"
 SPRINKLER_ROTOR = "rotor"
@@ -158,6 +161,8 @@ SERVICE_PAUSE_ZONE = "pause_zone"
 SERVICE_SET_ADJUSTMENT = "set_adjustment"
 SERVICE_RUN_NOW = "run_now"
 SERVICE_SIMULATE = "simulate"
+SERVICE_STOP_ALL = "stop_all"
+SERVICE_RESET_LEARNING = "reset_learning"
 
 SERVICES = (
     SERVICE_CALCULATE_PLAN,
@@ -169,6 +174,8 @@ SERVICES = (
     SERVICE_SET_ADJUSTMENT,
     SERVICE_RUN_NOW,
     SERVICE_SIMULATE,
+    SERVICE_STOP_ALL,
+    SERVICE_RESET_LEARNING,
 )
 
 PLATFORMS: list[str] = ["sensor", "switch", "number", "button"]

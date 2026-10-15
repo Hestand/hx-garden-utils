@@ -6,8 +6,8 @@ hub asks for a name, an example week, and a starting soil, and its zones
 have no on/off entity. Every derived number stays blank unless the user
 types an override; blank means the preset in ``presets.py``.
 
-v0.4 still will not open a valve. There is no executor. A later executor
-will use the stored on/off entity and will not call Hydrawise.
+Automatic watering is a switch, default off. It is not a config option.
+The executor calls each zone's stored on/off entity and does not call Hydrawise.
 """
 
 from __future__ import annotations
@@ -40,8 +40,8 @@ from .const import (
     CONF_BLACKOUT_START_HOUR,
     CONF_BUCKET,
     CONF_DEPLETION,
+    CONF_DORMANT_BELOW_F,
     CONF_DRIP_IGNORES_SCHEDULE,
-    CONF_DRY_RUN,
     CONF_EARLIEST_HOUR,
     CONF_EFFICIENCY,
     CONF_ELEVATION_M,
@@ -52,17 +52,24 @@ from .const import (
     CONF_FLOW_LOW_RATIO,
     CONF_FLOW_SENSOR,
     CONF_FORECAST_SKIP_MM,
+    CONF_FREEZE_SKIP_F,
+    CONF_HEAT_ABOVE_F,
     CONF_HUMIDITY_SENSOR,
     CONF_INTAKE_IN_HR,
     CONF_KC_OVERRIDE,
     CONF_LATITUDE,
     CONF_LONGITUDE,
+    CONF_MAINTENANCE_WATERING,
     CONF_MAX_CYCLE_MIN,
     CONF_MAX_DAILY_RUNTIME_MIN,
+    CONF_MAX_RUN_MIN,
+    CONF_MIN_INTERVAL_DAYS,
     CONF_MODE,
     CONF_MOISTURE_KIND,
+    CONF_MOISTURE_LEARN,
     CONF_MOISTURE_MODE,
     CONF_MOISTURE_SENSOR,
+    CONF_MOISTURE_SKIP_PCT,
     CONF_MOISTURE_WEIGHT,
     CONF_NOTIFY_TARGET,
     CONF_PLAN_HOUR,
@@ -73,11 +80,13 @@ from .const import (
     CONF_RAIN_AMOUNT_SENSOR,
     CONF_RAIN_KIND,
     CONF_RAIN_SENSOR,
+    CONF_RECENT_RAIN_HOURS,
+    CONF_RECENT_RAIN_MM,
     CONF_ROUND_MINUTES,
     CONF_ROOT_DEPTH_IN,
     CONF_SCENARIO,
-    CONF_SCHEDULE_PRESET,
     CONF_SIMULATION,
+    CONF_SLOW_BELOW_F,
     CONF_SLOPE_PCT,
     CONF_SOAK_MIN,
     CONF_SOIL_TYPE,
@@ -85,14 +94,19 @@ from .const import (
     CONF_SPRINKLER_TYPE,
     CONF_SUN_EXPOSURE,
     CONF_SUNRISE_BUFFER_MIN,
+    CONF_TARGET_DEPTH_IN,
     CONF_TEMPERATURE_SENSOR,
     CONF_UV_SENSOR,
     CONF_VALVE_ENTITY,
     CONF_WEATHER_ENTITY,
     CONF_WIND_HEIGHT_M,
     CONF_WIND_SENSOR,
-    DEFAULT_DRY_RUN,
+    CONF_WIND_SKIP_MPH,
     DEFAULT_ELEVATION_M,
+    DEFAULT_FREEZE_SKIP_F,
+    DEFAULT_MAX_RUN_MIN,
+    DEFAULT_RECENT_RAIN_HOURS,
+    DEFAULT_RECENT_RAIN_MM,
     DEFAULT_FLOW_KIND,
     DEFAULT_FLOW_LEAK_RATIO,
     DEFAULT_FLOW_LOW_RATIO,
@@ -103,7 +117,6 @@ from .const import (
     DEFAULT_PRIORITY,
     DEFAULT_RAIN_KIND,
     DEFAULT_ROUND_MINUTES,
-    DEFAULT_SCHEDULE_PRESET,
     DEFAULT_SPRINKLER_TYPE,
     DEFAULT_SUNRISE_BUFFER_MIN,
     DEFAULT_WIND_HEIGHT_M,
@@ -114,7 +127,6 @@ from .const import (
     MOISTURE_KINDS,
     MOISTURE_MODES,
     RAIN_KINDS,
-    SCHEDULE_PRESETS,
     SPRINKLER_BUBBLER,
     SPRINKLER_TYPES,
     SUBENTRY_ZONE,
@@ -140,6 +152,16 @@ _PLANT_KEYS = (
     CONF_INTAKE_IN_HR,
     CONF_DEPLETION,
     CONF_KC_OVERRIDE,
+    CONF_MIN_INTERVAL_DAYS,
+    CONF_TARGET_DEPTH_IN,
+    CONF_FREEZE_SKIP_F,
+    CONF_WIND_SKIP_MPH,
+    CONF_MOISTURE_SKIP_PCT,
+    CONF_DORMANT_BELOW_F,
+    CONF_SLOW_BELOW_F,
+    CONF_HEAT_ABOVE_F,
+    CONF_MAINTENANCE_WATERING,
+    CONF_MOISTURE_LEARN,
 )
 _HARDWARE_KEYS = (
     CONF_PRECIPITATION_RATE,
@@ -178,7 +200,6 @@ _LOCATION_KEYS = (
     CONF_ELEVATION_M,
     CONF_LATITUDE,
     CONF_LONGITUDE,
-    CONF_DRY_RUN,
     CONF_MODE,
     CONF_NOTIFY_TARGET,
     CONF_RAIN_SENSOR,
@@ -188,8 +209,11 @@ _LOCATION_KEYS = (
     CONF_FORECAST_SKIP_MM,
     CONF_MAX_DAILY_RUNTIME_MIN,
     CONF_ROUND_MINUTES,
-    CONF_SCHEDULE_PRESET,
     CONF_ALLOWED_WEEKDAYS,
+    CONF_FREEZE_SKIP_F,
+    CONF_RECENT_RAIN_HOURS,
+    CONF_RECENT_RAIN_MM,
+    CONF_MAX_RUN_MIN,
     CONF_BLACKOUT_START_HOUR,
     CONF_BLACKOUT_END_HOUR,
     CONF_DRIP_IGNORES_SCHEDULE,
@@ -338,7 +362,6 @@ def _location_fields() -> dict[Any, Any]:
         # coordinate precision on Home Assistant 2026.10.
         vol.Optional(CONF_LATITUDE): _number(-90, 90, "any"),
         vol.Optional(CONF_LONGITUDE): _number(-180, 180, "any"),
-        vol.Required(CONF_DRY_RUN, default=DEFAULT_DRY_RUN): _BOOL,
         vol.Required(CONF_MODE, default=MODE_NOTIFY_ONLY): _select(MODES, "mode"),
         vol.Optional(CONF_NOTIFY_TARGET): _TEXT,
         vol.Optional(CONF_RAIN_SENSOR): _BINARY,
@@ -350,10 +373,21 @@ def _location_fields() -> dict[Any, Any]:
         vol.Optional(CONF_FORECAST_SKIP_MM): _number(0, 100, 0.1, "mm"),
         vol.Optional(CONF_MAX_DAILY_RUNTIME_MIN): _number(1, 600, 1, "min"),
         vol.Required(CONF_ROUND_MINUTES, default=DEFAULT_ROUND_MINUTES): _BOOL,
-        vol.Required(CONF_SCHEDULE_PRESET, default=DEFAULT_SCHEDULE_PRESET): _select(
-            SCHEDULE_PRESETS, "schedule_preset"
+        vol.Required(CONF_ALLOWED_WEEKDAYS, default=list(WEEKDAYS)): _select(
+            WEEKDAYS, "weekday", multiple=True
         ),
-        vol.Optional(CONF_ALLOWED_WEEKDAYS): _select(WEEKDAYS, "weekday", multiple=True),
+        vol.Required(CONF_FREEZE_SKIP_F, default=DEFAULT_FREEZE_SKIP_F): _number(
+            20, 50, 1, "°F"
+        ),
+        vol.Required(CONF_RECENT_RAIN_HOURS, default=DEFAULT_RECENT_RAIN_HOURS): _number(
+            0, 72, 1, "h"
+        ),
+        vol.Required(CONF_RECENT_RAIN_MM, default=DEFAULT_RECENT_RAIN_MM): _number(
+            0, 50, 0.1, "mm"
+        ),
+        vol.Required(CONF_MAX_RUN_MIN, default=DEFAULT_MAX_RUN_MIN): _number(
+            1, 240, 1, "min"
+        ),
         vol.Optional(CONF_BLACKOUT_START_HOUR): _number(0, 23, 1),
         vol.Optional(CONF_BLACKOUT_END_HOUR): _number(0, 23, 1),
         vol.Required(CONF_DRIP_IGNORES_SCHEDULE, default=False): _BOOL,
@@ -449,6 +483,16 @@ def _advanced_schema() -> vol.Schema:
                         vol.Optional(CONF_INTAKE_IN_HR): _number(0.01, 5, 0.01, "in/h"),
                         vol.Optional(CONF_DEPLETION): _number(0.1, 0.8, 0.01),
                         vol.Optional(CONF_KC_OVERRIDE): _number(0, 1.5, 0.01),
+                        vol.Optional(CONF_MIN_INTERVAL_DAYS): _number(0, 60, 1, "d"),
+                        vol.Optional(CONF_TARGET_DEPTH_IN): _number(0.1, 12, 0.1, "in"),
+                        vol.Optional(CONF_FREEZE_SKIP_F): _number(20, 50, 1, "°F"),
+                        vol.Optional(CONF_WIND_SKIP_MPH): _number(0, 40, 1, "mph"),
+                        vol.Optional(CONF_MOISTURE_SKIP_PCT): _number(0, 100, 1, "%"),
+                        vol.Optional(CONF_DORMANT_BELOW_F): _number(20, 80, 1, "°F"),
+                        vol.Optional(CONF_SLOW_BELOW_F): _number(20, 90, 1, "°F"),
+                        vol.Optional(CONF_HEAT_ABOVE_F): _number(60, 110, 1, "°F"),
+                        vol.Optional(CONF_MAINTENANCE_WATERING): _BOOL,
+                        vol.Optional(CONF_MOISTURE_LEARN): _BOOL,
                     }
                 ),
                 {"collapsed": True},
@@ -524,7 +568,7 @@ def _has_climate(weather: Any, temperature: Any) -> bool:
 class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
     """Set up a Smart Water hub."""
 
-    VERSION = 3
+    VERSION = 4
     MINOR_VERSION = 1
 
     @staticmethod
@@ -632,7 +676,8 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         name = str(draft.pop("name"))
         scenario = str(draft.pop(CONF_SCENARIO, DEFAULT_SCENARIO))
         bucket = str(draft.pop(CONF_BUCKET, DEFAULT_BUCKET))
-        draft.setdefault(CONF_DRY_RUN, DEFAULT_DRY_RUN)
+        draft.pop("dry_run", None)
+        draft.pop("schedule_preset", None)
         draft.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
         draft[CONF_SCENARIO] = scenario
         draft[CONF_BUCKET] = bucket
@@ -646,7 +691,8 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         draft = _drop_blanks(flat)
         name = str(draft.pop("name"))
         weather = draft.pop(CONF_WEATHER_ENTITY, None)
-        draft.setdefault(CONF_DRY_RUN, DEFAULT_DRY_RUN)
+        draft.pop("dry_run", None)
+        draft.pop("schedule_preset", None)
         draft.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
         data: dict[str, Any] = {}
         if weather:
@@ -732,7 +778,8 @@ class SmartWaterOptionsFlow(OptionsFlow):
                 errors["base"] = "need_weather"
             else:
                 data = _drop_blanks(flat)
-                data.setdefault(CONF_DRY_RUN, DEFAULT_DRY_RUN)
+                data.pop("dry_run", None)
+                data.pop("schedule_preset", None)
                 data.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
                 return self.async_create_entry(data=data)
         suggested = user_input or {

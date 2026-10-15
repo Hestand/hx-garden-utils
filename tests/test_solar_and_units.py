@@ -21,10 +21,10 @@ def test_known_sunrises_are_within_a_few_minutes() -> None:
     nyc = sunrise_utc(40.7128, -74.0060, date(2024, 6, 21))
     assert nyc.hour == 9
     assert nyc.minute == pytest.approx(25, abs=3)
-    # Waco-area coordinates, 15 Oct 2026, about 7:34 AM CDT (12:34 UTC).
-    waco = sunrise_utc(31.46, -97.23, date(2026, 10, 15))
-    assert waco.hour == 12
-    assert waco.minute == pytest.approx(34, abs=5)
+    # Design-site coordinates, 15 Oct 2026, about 7:34 AM CDT (12:34 UTC).
+    site = sunrise_utc(31.46, -97.23, date(2026, 10, 15))
+    assert site.hour == 12
+    assert site.minute == pytest.approx(34, abs=5)
 
 
 def test_next_sunrise_is_strictly_after_the_moment() -> None:
