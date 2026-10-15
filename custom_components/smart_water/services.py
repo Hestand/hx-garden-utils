@@ -34,6 +34,7 @@ from .const import (
     SERVICES,
 )
 from .coordinator import SmartWaterCoordinator
+from .presets import resolved_root_depth_in
 from .units import inches_to_mm
 
 _LOGGER = logging.getLogger(__name__)
@@ -96,7 +97,7 @@ def _taw(entry_data: dict[str, Any]) -> float:
         soil_type=entry_data[CONF_SOIL_TYPE],
         plant_type=entry_data[CONF_PLANT_TYPE],
         sun_exposure=entry_data[CONF_SUN_EXPOSURE],
-        root_depth_in=float(entry_data[CONF_ROOT_DEPTH_IN]),
+        root_depth_in=resolved_root_depth_in(entry_data),
         p_table=entry_data.get(CONF_DEPLETION),
         kc_override=entry_data.get(CONF_KC_OVERRIDE),
         awc_override=entry_data.get(CONF_AWC_OVERRIDE),

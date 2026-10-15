@@ -1,6 +1,6 @@
 """Smart Water custom integration.
 
-v0.2 computes the water balance and the nightly plan. It does not apply
+v0.3 computes the water balance and the nightly plan. It does not apply
 them. There is no valve service, no switch turn-on, and no controller API.
 See ``safety.py``. A later executor will use each zone's stored on/off entity.
 """
@@ -10,6 +10,20 @@ from __future__ import annotations
 from .const import DOMAIN, PLATFORMS
 
 __all__ = ["DOMAIN"]
+
+
+async def async_migrate_entry(hass, entry) -> bool:
+    """Keep v0.1 and v0.2 hubs. Stored zone numbers stay overrides.
+
+    Version 2 does not rewrite zone data. Root depth, depletion, efficiency,
+    slope, and precipitation rate saved by the old forms remain in effect.
+    Blank fields, which only new zones have, use the presets.
+    """
+    if entry.version > 2:
+        return False
+    if entry.version < 2:
+        hass.config_entries.async_update_entry(entry, version=2, minor_version=1)
+    return True
 
 
 async def async_setup(hass, config) -> bool:

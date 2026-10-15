@@ -4,9 +4,9 @@ from __future__ import annotations
 
 DOMAIN = "smart_water"
 NAME = "Smart Water"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
-# Stored on the hub. v0.2 still never waters; clearing dry-run only records intent.
+# Stored on the hub. v0.3 still never waters; clearing dry-run only records intent.
 CONF_DRY_RUN = "dry_run"
 CONF_MODE = "mode"
 CONF_WEATHER_ENTITY = "weather_entity"
@@ -53,6 +53,7 @@ CONF_PRIORITY = "priority"
 CONF_VALVE_ENTITY = "valve_entity"
 CONF_KC_OVERRIDE = "kc_override"
 CONF_AWC_OVERRIDE = "awc_override"
+CONF_INTAKE_IN_HR = "intake_in_hr"
 CONF_MOISTURE_SENSOR = "moisture_sensor"
 CONF_MOISTURE_MODE = "moisture_mode"
 CONF_MOISTURE_KIND = "moisture_kind"
@@ -70,7 +71,7 @@ MODES = (MODE_AUTO, MODE_NOTIFY_ONLY, MODE_OFF)
 
 SUBENTRY_ZONE = "zone"
 
-# Off by default. v0.2 still will not open a valve: there is no executor.
+# Off by default. v0.3 still will not open a valve: there is no executor.
 DEFAULT_DRY_RUN = False
 
 DEFAULT_ELEVATION_M = 219.0

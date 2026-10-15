@@ -44,6 +44,7 @@ from .const import (
     CONF_UV_SENSOR,
     CONF_AREA_SQFT,
     CONF_AWC_OVERRIDE,
+    CONF_INTAKE_IN_HR,
     CONF_DEPLETION,
     CONF_DRY_RUN,
     CONF_EARLIEST_HOUR,
@@ -79,7 +80,6 @@ from .const import (
     CONF_WIND_SENSOR,
     DEFAULT_ADJUSTMENT_PCT,
     DEFAULT_DRY_RUN,
-    DEFAULT_EFFICIENCY,
     DEFAULT_ELEVATION_M,
     DEFAULT_FLOW_KIND,
     DEFAULT_FLOW_LEAK_RATIO,
@@ -110,6 +110,12 @@ from .observe import note_rain, note_solar_w, note_temperature, observed_tempera
 from .schedule import rules_for
 from .et import ETInputs, daily_et0
 from .planner import NightPlan, PlanRequest, ZoneRequest, build_plan, short_status
+from .presets import (
+    resolved_efficiency,
+    resolved_root_depth_in,
+    resolved_slope_pct,
+    sprinkler_precip,
+)
 from .safety import would_execute
 from .solar import next_sunrise
 from .store import SmartWaterStore
@@ -421,7 +427,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             subentry = self.config_entry.subentries[subentry_id]
             state = self.store.zone(subentry_id)
             try:
-                limits = self._limits(subentry.data, et0)
+                limits = self._limits(subentry.data, et0, now.month)
             except (KeyError, ValueError) as err:
                 error = f"{subentry.title}: {err}"
                 continue
@@ -644,16 +650,17 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         gallons = volume_gallons(value, unit) if kind != "rate" else rate_gpm(value, unit)
         note_flow(state, kind=kind, gallons=gallons, at=now, today=today)
 
-    def _limits(self, data: dict[str, Any], et0: float | None):
+    def _limits(self, data: dict[str, Any], et0: float | None, month: int | None = None):
         return root_zone(
             soil_type=data[CONF_SOIL_TYPE],
             plant_type=data[CONF_PLANT_TYPE],
             sun_exposure=data[CONF_SUN_EXPOSURE],
-            root_depth_in=float(data[CONF_ROOT_DEPTH_IN]),
+            root_depth_in=resolved_root_depth_in(data),
             p_table=_optional_float(data, CONF_DEPLETION),
             kc_override=_optional_float(data, CONF_KC_OVERRIDE),
             awc_override=_optional_float(data, CONF_AWC_OVERRIDE),
             et0_mm=et0,
+            month=month,
         )
 
     def _build_plan(
@@ -685,11 +692,13 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 continue
             data = dict(subentry.data)
             state = self.store.zone(subentry.subentry_id)
-            limits = self._limits(data, et0)
+            limits = self._limits(data, et0, now.month)
+            sprinkler = str(data.get(CONF_SPRINKLER_TYPE, DEFAULT_SPRINKLER_TYPE))
             pr = resolve_precipitation_rate(
                 _optional_float(data, CONF_PRECIPITATION_RATE),
                 _optional_float(data, CONF_FLOW_GPM),
                 _optional_float(data, CONF_AREA_SQFT),
+                sprinkler_precip(sprinkler),
             )
             zone_wet = _is_wet(self.hass, data.get(CONF_RAIN_SENSOR) or None)
             requests.append(
@@ -697,9 +706,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                     zone_id=subentry.subentry_id,
                     name=subentry.title,
                     soil_type=data[CONF_SOIL_TYPE],
-                    slope_pct=float(data[CONF_SLOPE_PCT]),
+                    slope_pct=resolved_slope_pct(data),
                     precipitation_rate_in_hr=pr,
-                    efficiency=float(data.get(CONF_EFFICIENCY, DEFAULT_EFFICIENCY)),
+                    efficiency=resolved_efficiency(data),
                     deficit_mm=float(state["deficit_mm"]),
                     taw_mm=limits.taw_mm,
                     raw_mm=limits.raw_mm,
@@ -720,6 +729,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                         if data.get(CONF_SOAK_MIN) in (None, "")
                         else int(data[CONF_SOAK_MIN])
                     ),
+                    intake_override_in_hr=_optional_float(data, CONF_INTAKE_IN_HR),
                     adjustment_pct=float(
                         state.get("adjustment_pct", DEFAULT_ADJUSTMENT_PCT)
                     ),
@@ -859,7 +869,11 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                     continue
                 state = self.store.zone(subentry.subentry_id)
                 try:
-                    limits = self._limits(dict(subentry.data), et0)
+                    limits = self._limits(
+                        dict(subentry.data),
+                        et0,
+                        dt_util.now(self._timezone()).month,
+                    )
                     taw, raw, p, kc, etc = (
                         limits.taw_mm,
                         limits.raw_mm,

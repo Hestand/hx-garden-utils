@@ -1,6 +1,6 @@
 [project]
 name = "smart-water"
-version = "0.2.0"
+version = "0.3.0"
 description = "Home Assistant irrigation planner. Computes the plan and does not open valves."
 requires-python = ">=3.12"
 

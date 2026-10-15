@@ -33,7 +33,7 @@ def block_reason(*, dry_run: bool, mode: str) -> str:
 
 
 def would_execute(*, dry_run: bool, mode: str) -> bool:
-    """Return whether the integration may water. Always false in v0.2."""
+    """Return whether the integration may water. Always false in v0.3."""
     if not EXECUTION_IMPLEMENTED:
         return False
     return not dry_run and mode == MODE_AUTO

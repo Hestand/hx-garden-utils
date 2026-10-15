@@ -77,10 +77,11 @@ def root_zone(
     kc_override: float | None = None,
     awc_override: float | None = None,
     et0_mm: float | None = None,
+    month: int | None = None,
 ) -> RootZone:
     """Build TAW and RAW for one zone from soil, plant, and today's ET0."""
     awc = available_water(soil_type, awc_override)
-    kc = crop_coefficient(plant_type, sun_exposure, kc_override)
+    kc = crop_coefficient(plant_type, sun_exposure, kc_override, month)
     etc = None if et0_mm is None else kc * et0_mm
     taw = total_available_water_mm(awc, root_depth_in)
     # A missing p uses the plant-table value. The FAO ET adjustment still runs.

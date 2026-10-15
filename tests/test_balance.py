@@ -51,13 +51,14 @@ def test_warm_season_turf_kc_is_0_6() -> None:
         p_table=None,
         et0_mm=5.0,
     )
-    # Loam midpoint of 0.13–0.19 is 0.16. TAW = 1000 × 0.16 × 0.1524.
+    # Loam midpoint of FAO-56 Table 19 (0.13–0.18) is 0.155.
+    # TAW = 1000 × 0.155 × 0.1524 = 23.622 mm.
     assert zone.kc == pytest.approx(0.6)
-    assert zone.awc == pytest.approx(0.16)
-    assert zone.taw_mm == pytest.approx(24.384, abs=0.001)
+    assert zone.awc == pytest.approx(0.155)
+    assert zone.taw_mm == pytest.approx(23.622, abs=0.001)
     # Table p 0.50, ETc 3.0 → p = 0.50 + 0.04 × (5 − 3) = 0.58.
     assert zone.p == pytest.approx(0.58)
-    assert zone.raw_mm == pytest.approx(0.58 * 24.384, abs=0.001)
+    assert zone.raw_mm == pytest.approx(0.58 * 23.622, abs=0.001)
 
 
 def test_kc_override_replaces_sun_factor() -> None:

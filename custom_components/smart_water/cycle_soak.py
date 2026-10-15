@@ -40,12 +40,15 @@ def resolve_precipitation_rate(
     precipitation_rate_in_hr: float | None,
     flow_gpm: float | None,
     area_sqft: float | None,
+    preset_in_hr: float | None = None,
 ) -> float:
-    """Prefer a user-entered rate. Otherwise compute it from GPM and area."""
+    """Prefer a user-entered rate, then GPM and area, then the sprinkler preset."""
     if precipitation_rate_in_hr is not None and precipitation_rate_in_hr > 0:
         return precipitation_rate_in_hr
     if flow_gpm is not None and area_sqft is not None:
         return precipitation_rate_in_per_hr(flow_gpm, area_sqft)
+    if preset_in_hr is not None and preset_in_hr > 0:
+        return preset_in_hr
     raise ValueError("set a precipitation rate in/hr, or both GPM and area")
 
 
@@ -100,6 +103,7 @@ def plan_cycles(
     soak_override_min: int | None = None,
     whole_minutes: bool = True,
     sprinkler_type: str | None = None,
+    intake_override_in_hr: float | None = None,
 ) -> CycleSoak:
     """Turn a net irrigation depth into cycles and a soak.
 
@@ -111,7 +115,10 @@ def plan_cycles(
         raise ValueError("efficiency must be in (0, 1]")
     if precipitation_rate_in_hr <= 0:
         raise ValueError("precipitation rate must be positive")
-    intake = intake_rate_in_per_hr(soil_type, slope_pct)
+    if intake_override_in_hr is not None and intake_override_in_hr > 0:
+        intake = intake_override_in_hr
+    else:
+        intake = intake_rate_in_per_hr(soil_type, slope_pct)
     computed_max = max_cycle_minutes(intake, precipitation_rate_in_hr)
     unlimited = 60.0 * intake / precipitation_rate_in_hr
     exceeded = unlimited < 1.0 and max_cycle_override_min is None

@@ -48,6 +48,7 @@ class ZoneRequest:
     adjustment_pct: float = 100.0
     sprinkler_type: str = "spray"
     ignores_schedule: bool = False
+    intake_override_in_hr: float | None = None
 
 
 @dataclass(frozen=True)
@@ -380,6 +381,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
                 soak_override_min=zone.soak_override_min,
                 whole_minutes=request.whole_minutes,
                 sprinkler_type=zone.sprinkler_type,
+                intake_override_in_hr=zone.intake_override_in_hr,
             )
             cycles = cycle_plan.cycles_min
             runtime = cycle_plan.total_runtime_min

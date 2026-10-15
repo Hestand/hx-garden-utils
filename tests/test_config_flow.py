@@ -1,7 +1,7 @@
 """Config-flow forms must serialize the way the config HTTP API does.
 
 Home Assistant 2026.10 turns a probatio.Invalid raised while building a step
-into a plain ``400: Bad Request``. The user, options, and zone forms are
+into a plain ``400: Bad Request``. The hub, options, and zone forms are
 checked by starting each flow and running the same serializer as
 ``homeassistant.helpers.data_entry_flow``.
 """
@@ -17,6 +17,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.data_entry_flow import _BaseFlowManagerView
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 import probatio
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -31,19 +32,37 @@ from custom_components.smart_water.const import (
     CONF_MODE,
     CONF_PLAN_HOUR,
     CONF_PLANT_TYPE,
+    CONF_PRECIPITATION_RATE,
     CONF_PRIORITY,
     CONF_ROOT_DEPTH_IN,
     CONF_SLOPE_PCT,
     CONF_SOIL_TYPE,
+    CONF_SPRINKLER_TYPE,
     CONF_SUNRISE_BUFFER_MIN,
     CONF_SUN_EXPOSURE,
+    CONF_TEMPERATURE_SENSOR,
+    CONF_VALVE_ENTITY,
     CONF_WEATHER_ENTITY,
     DOMAIN,
     MODE_NOTIFY_ONLY,
     SUBENTRY_ZONE,
 )
+from custom_components.smart_water.presets import plant_kc
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
+
+
+def _check_steps(fields: list[dict[str, Any]]) -> None:
+    for field in fields:
+        if field.get("type") == "expandable":
+            assert isinstance(field.get("schema"), list) and field["schema"]
+            _check_steps(field["schema"])
+            continue
+        assert "selector" in field, field
+        number = field["selector"].get("number")
+        if number and "step" in number:
+            step = number["step"]
+            assert step == "any" or float(step) >= 0.001, field
 
 
 def _serialize(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -51,26 +70,26 @@ def _serialize(result: dict[str, Any]) -> list[dict[str, Any]]:
     assert result["type"] is FlowResultType.FORM
     prepared = _BaseFlowManagerView._prepare_result_json(None, result)  # type: ignore[arg-type]
     fields = prepared["data_schema"]
-    # The view used to call voluptuous_serialize.convert(..., custom_serializer=cv.custom_serializer).
-    # 2026.10 renders that through probatio.to_field_list with the same hook.
     direct = probatio.to_field_list(
         result["data_schema"], custom_serializer=cv.custom_serializer
     )
     assert fields == direct
     json.dumps(fields)
     assert isinstance(fields, list) and fields
-    for field in fields:
-        assert "name" in field
-        assert "selector" in field, field
-        number = field["selector"].get("number")
-        if number and "step" in number:
-            step = number["step"]
-            assert step == "any" or float(step) >= 0.001, field
+    _check_steps(fields)
     return fields
 
 
 def _field(fields: list[dict[str, Any]], name: str) -> dict[str, Any]:
-    return next(field for field in fields if field["name"] == name)
+    for field in fields:
+        if field["name"] == name:
+            return field
+        if field.get("type") == "expandable":
+            try:
+                return _field(field["schema"], name)
+            except StopIteration:
+                continue
+    raise StopIteration(name)
 
 
 def _hub_entry(**kwargs: Any) -> MockConfigEntry:
@@ -91,64 +110,56 @@ def _hub_entry(**kwargs: Any) -> MockConfigEntry:
     )
 
 
+def _sections() -> dict[str, dict[str, Any]]:
+    return {"sensors": {}, "location": {}}
+
+
 async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
-    """The UI's first POST must return a serializable user form, then the later steps."""
+    """One hub form holds the name, weather, and two collapsed sections."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "user"}
     )
     fields = _serialize(result)
     assert result["step_id"] == "user"
-    assert _field(fields, CONF_LATITUDE)["selector"]["number"]["step"] == "any"
-    assert _field(fields, CONF_LONGITUDE)["selector"]["number"]["step"] == "any"
     assert "text" in _field(fields, "name")["selector"]
     assert _field(fields, CONF_WEATHER_ENTITY)["selector"]["entity"]["domain"] == [
         "weather"
     ]
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {
-            "name": "Garden",
-            CONF_WEATHER_ENTITY: "weather.home",
-            CONF_ELEVATION_M: 219,
-        },
-    )
-    assert result["step_id"] == "behavior"
-    fields = _serialize(result)
-    assert "boolean" in _field(fields, CONF_DRY_RUN)["selector"]
-    assert _field(fields, CONF_MODE)["selector"]["select"]["options"] == [
-        "auto",
-        "notify_only",
-        "off",
-    ]
+    assert _field(fields, "sensors")["type"] == "expandable"
+    assert _field(fields, "sensors")["expanded"] is False
+    assert _field(fields, "location")["expanded"] is False
+    assert _field(fields, CONF_LATITUDE)["selector"]["number"]["step"] == "any"
+    assert _field(fields, CONF_LONGITUDE)["selector"]["number"]["step"] == "any"
     assert _field(fields, "schedule_preset")["selector"]["select"]["options"] == [
         "none",
         "waco_odd",
         "waco_even",
         "custom",
     ]
-    assert _field(fields, "round_minutes")["selector"]["boolean"] == {}
+    assert "boolean" in _field(fields, CONF_DRY_RUN)["selector"]
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"name": "Garden", **_sections()},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["base"] == "need_weather"
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
-            CONF_DRY_RUN: False,
-            CONF_MODE: MODE_NOTIFY_ONLY,
-            CONF_SUNRISE_BUFFER_MIN: 30,
-            CONF_PLAN_HOUR: 23,
+            "name": "Garden",
+            CONF_WEATHER_ENTITY: "weather.home",
+            **_sections(),
         },
     )
-    assert result["step_id"] == "sensors"
-    fields = _serialize(result)
-    assert _field(fields, "temperature_sensor")["selector"]["entity"]["domain"] == [
-        "sensor"
-    ]
-    assert _field(fields, "uv_sensor")["selector"]["entity"]["domain"] == ["sensor"]
-    assert _field(fields, "rain_kind")["selector"]["select"]["options"] == [
-        "daily_total",
-        "cumulative",
-        "rate",
-    ]
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Garden"
+    assert result["result"].data == {CONF_WEATHER_ENTITY: "weather.home"}
+    assert result["result"].options[CONF_ELEVATION_M] == 219
+    assert result["result"].options[CONF_MODE] == MODE_NOTIFY_ONLY
+    assert CONF_TEMPERATURE_SENSOR not in result["result"].options
+    assert result["result"].version == 2
 
 
 async def test_user_flow_http_post_is_ok(hass: HomeAssistant, hass_client) -> None:
@@ -169,8 +180,64 @@ async def test_user_flow_http_post_is_ok(hass: HomeAssistant, hass_client) -> No
     assert latitude["selector"]["number"]["step"] == "any"
 
 
+async def test_temperature_sensor_can_replace_weather(hass: HomeAssistant) -> None:
+    """A hub with only a temperature sensor is enough."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "name": "Sensors only",
+            "sensors": {CONF_TEMPERATURE_SENSOR: "sensor.tempest_air_temperature"},
+            "location": {},
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert CONF_WEATHER_ENTITY not in result["result"].data
+    assert (
+        result["result"].options[CONF_TEMPERATURE_SENSOR]
+        == "sensor.tempest_air_temperature"
+    )
+
+
+async def test_tempest_entities_are_suggested(hass: HomeAssistant) -> None:
+    """A Tempest name is prefilled. An indoor thermometer is not."""
+    hass.states.async_set("weather.tempest", "sunny", {"friendly_name": "Tempest"})
+    hass.states.async_set("weather.other", "sunny", {"friendly_name": "Other"})
+    hass.states.async_set(
+        "sensor.tempest_air_temperature",
+        "30",
+        {
+            "device_class": "temperature",
+            "unit_of_measurement": "°C",
+            "friendly_name": "Air Temperature",
+        },
+    )
+    hass.states.async_set(
+        "sensor.kitchen_temperature",
+        "22",
+        {
+            "device_class": "temperature",
+            "unit_of_measurement": "°C",
+            "friendly_name": "Kitchen",
+        },
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    fields = _serialize(result)
+    assert _field(fields, CONF_WEATHER_ENTITY)["description"]["suggested_value"] == (
+        "weather.tempest"
+    )
+    assert _field(fields, "sensors")["expanded"] is True
+    assert _field(fields, CONF_TEMPERATURE_SENSOR)["description"]["suggested_value"] == (
+        "sensor.tempest_air_temperature"
+    )
+
+
 async def test_options_flow_forms_serialize(hass: HomeAssistant) -> None:
-    """Hub options, including the sensor step, must serialize."""
+    """Hub options are one form with the same two sections."""
     entry = _hub_entry()
     entry.add_to_hass(hass)
 
@@ -180,23 +247,19 @@ async def test_options_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert _field(fields, CONF_LATITUDE)["selector"]["number"]["step"] == "any"
     assert _field(fields, CONF_LONGITUDE)["selector"]["number"]["step"] == "any"
     assert "boolean" in _field(fields, CONF_DRY_RUN)["selector"]
+    assert _field(fields, "location")["type"] == "expandable"
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {
-            CONF_ELEVATION_M: 219,
-            CONF_DRY_RUN: False,
-            CONF_MODE: MODE_NOTIFY_ONLY,
-            CONF_SUNRISE_BUFFER_MIN: 30,
-            CONF_PLAN_HOUR: 23,
-        },
+        _sections(),
     )
-    assert result["step_id"] == "sensors"
-    _serialize(result)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_ELEVATION_M] == 219
+    assert result["data"][CONF_MODE] == MODE_NOTIFY_ONLY
 
 
-async def test_zone_subentry_flow_forms_serialize(hass: HomeAssistant) -> None:
-    """Adding a zone is a subentry flow. Both of its steps must serialize."""
+async def test_zone_quick_setup_leaves_presets_blank(hass: HomeAssistant) -> None:
+    """The short zone form stores the dropdowns. Empty advanced fields stay absent."""
     entry = _hub_entry()
     entry.add_to_hass(hass)
 
@@ -207,8 +270,13 @@ async def test_zone_subentry_flow_forms_serialize(hass: HomeAssistant) -> None:
     fields = _serialize(result)
     assert result["step_id"] == "user"
     assert "text" in _field(fields, "name")["selector"]
-    assert _field(fields, CONF_PLANT_TYPE)["selector"]["select"]["options"]
-    assert _field(fields, CONF_SLOPE_PCT)["selector"]["number"]["unit_of_measurement"] == "%"
+    plants = _field(fields, CONF_PLANT_TYPE)["selector"]["select"]["options"]
+    assert plants[:4] == ["st_augustine", "bermuda", "zoysia", "buffalo"]
+    assert _field(fields, CONF_VALVE_ENTITY)["selector"]["entity"]["domain"] == [
+        "switch",
+        "valve",
+        "input_boolean",
+    ]
     assert _field(fields, "sprinkler_type")["selector"]["select"]["options"] == [
         "spray",
         "rotor",
@@ -216,45 +284,118 @@ async def test_zone_subentry_flow_forms_serialize(hass: HomeAssistant) -> None:
         "drip",
         "bubbler",
     ]
+    assert all(field["name"] != CONF_SLOPE_PCT for field in fields)
 
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"],
         {
             "name": "Front lawn",
-            CONF_PLANT_TYPE: "cool_season_turf",
-            CONF_SOIL_TYPE: "clay_loam",
-            CONF_SLOPE_PCT: 6,
+            CONF_VALVE_ENTITY: "switch.front_valve",
+            CONF_PLANT_TYPE: "st_augustine",
+            CONF_SOIL_TYPE: "loam",
+            CONF_SPRINKLER_TYPE: "spray",
             CONF_SUN_EXPOSURE: "full_sun",
         },
     )
-    assert result["step_id"] == "hydraulics"
+    assert result["step_id"] == "advanced"
     fields = _serialize(result)
+    assert _field(fields, "plant_overrides")["expanded"] is False
+    assert _field(fields, "hardware_overrides")["expanded"] is False
     assert (
         _field(fields, "precipitation_rate_in_hr")["selector"]["number"][
             "unit_of_measurement"
         ]
         == "in/h"
     )
-    assert _field(fields, "valve_entity")["selector"]["entity"]["domain"] == [
-        "switch",
-        "valve",
-        "input_boolean",
-    ]
+    assert "description" not in _field(fields, CONF_ROOT_DEPTH_IN)
+    assert "description" not in _field(fields, CONF_EFFICIENCY)
+    month = dt_util.now().month
+    assert result["description_placeholders"]["root_depth"] == "6"
+    assert result["description_placeholders"]["awc"] == "0.155"
+    assert result["description_placeholders"]["precip"] == "1.25"
+    assert result["description_placeholders"]["efficiency"] == "0.6"
+    assert result["description_placeholders"]["kc"] == f"{plant_kc('st_augustine', month):.2f}"
     assert _field(fields, "moisture_mode")["selector"]["select"]["options"] == [
         "off",
         "correct",
         "override",
     ]
-    assert _field(fields, "flow_kind")["selector"]["select"]["options"] == [
-        "total",
-        "rate",
-    ]
     assert _field(fields, "moisture_weight")["selector"]["number"]["step"] == 0.05
-    assert _field(fields, "flow_leak_ratio")["selector"]["number"]["step"] == 0.05
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            "plant_overrides": {},
+            "hardware_overrides": {},
+            "measurement_overrides": {},
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    data = result["data"]
+    assert data[CONF_PLANT_TYPE] == "st_augustine"
+    assert data[CONF_SOIL_TYPE] == "loam"
+    assert data[CONF_SPRINKLER_TYPE] == "spray"
+    assert data[CONF_VALVE_ENTITY] == "switch.front_valve"
+    assert data[CONF_PRIORITY] == 10
+    for absent in (
+        CONF_ROOT_DEPTH_IN,
+        CONF_DEPLETION,
+        CONF_EFFICIENCY,
+        CONF_PRECIPITATION_RATE,
+        CONF_SLOPE_PCT,
+        "kc_override",
+        "awc_override",
+        "intake_in_hr",
+    ):
+        assert absent not in data
 
 
-async def test_reconfigure_forms_serialize(hass: HomeAssistant) -> None:
-    """Hub and zone reconfigure forms use the same selectors and must serialize."""
+async def test_bubbler_requires_a_rate(hass: HomeAssistant) -> None:
+    """Bubbler has no published precipitation rate, so the advanced step asks."""
+    entry = _hub_entry()
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_ZONE),
+        context={"source": SOURCE_USER},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            "name": "Tree",
+            CONF_VALVE_ENTITY: "valve.tree",
+            CONF_PLANT_TYPE: "tree",
+            CONF_SOIL_TYPE: "clay",
+            CONF_SPRINKLER_TYPE: "bubbler",
+            CONF_SUN_EXPOSURE: "part_sun",
+        },
+    )
+    assert result["description_placeholders"]["precip"] == "none published"
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            "plant_overrides": {},
+            "hardware_overrides": {},
+            "measurement_overrides": {},
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["base"] == "precipitation_rate"
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            "plant_overrides": {},
+            "hardware_overrides": {CONF_PRECIPITATION_RATE: 1.0},
+            "measurement_overrides": {},
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_PRECIPITATION_RATE] == 1.0
+    assert CONF_EFFICIENCY not in result["data"]
+
+
+async def test_reconfigure_suggests_stored_overrides_only(hass: HomeAssistant) -> None:
+    """Saving again must keep a stored efficiency. Unset fields stay unset."""
     entry = _hub_entry(
         subentries_data=[
             {
@@ -263,10 +404,12 @@ async def test_reconfigure_forms_serialize(hass: HomeAssistant) -> None:
                     CONF_SOIL_TYPE: "loam",
                     CONF_SLOPE_PCT: 2,
                     CONF_SUN_EXPOSURE: "full_sun",
+                    CONF_SPRINKLER_TYPE: "spray",
                     CONF_ROOT_DEPTH_IN: 6,
                     CONF_DEPLETION: 0.4,
                     CONF_EFFICIENCY: 1.0,
                     CONF_PRIORITY: 10,
+                    CONF_VALVE_ENTITY: "switch.lawn",
                 },
                 "subentry_type": SUBENTRY_ZONE,
                 "title": "Lawn",
@@ -282,9 +425,43 @@ async def test_reconfigure_forms_serialize(hass: HomeAssistant) -> None:
     assert _field(fields, CONF_WEATHER_ENTITY)["selector"]["entity"]["domain"] == [
         "weather"
     ]
+    assert _field(fields, CONF_WEATHER_ENTITY)["optional"] is True
 
     subentry_id = next(iter(entry.subentries))
     result = await entry.start_subentry_reconfigure_flow(hass, subentry_id)
     fields = _serialize(result)
     assert result["step_id"] == "user"
-    assert _field(fields, CONF_PLANT_TYPE)["selector"]["select"]["options"]
+    assert _field(fields, CONF_VALVE_ENTITY)["description"]["suggested_value"] == (
+        "switch.lawn"
+    )
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            "name": "Lawn",
+            CONF_VALVE_ENTITY: "switch.lawn",
+            CONF_PLANT_TYPE: "cool_season_turf",
+            CONF_SOIL_TYPE: "loam",
+            CONF_SPRINKLER_TYPE: "spray",
+            CONF_SUN_EXPOSURE: "full_sun",
+        },
+    )
+    fields = _serialize(result)
+    assert _field(fields, CONF_EFFICIENCY)["description"]["suggested_value"] == 1.0
+    assert _field(fields, CONF_ROOT_DEPTH_IN)["description"]["suggested_value"] == 6
+    assert _field(fields, CONF_SLOPE_PCT)["description"]["suggested_value"] == 2
+    assert "description" not in _field(fields, CONF_PRECIPITATION_RATE)
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        {
+            "plant_overrides": {CONF_ROOT_DEPTH_IN: 6, CONF_DEPLETION: 0.4},
+            "hardware_overrides": {CONF_EFFICIENCY: 1.0, CONF_SLOPE_PCT: 2},
+            "measurement_overrides": {},
+        },
+    )
+    assert result["type"] is FlowResultType.ABORT
+    saved = entry.subentries[subentry_id].data
+    assert saved[CONF_EFFICIENCY] == 1.0
+    assert saved[CONF_ROOT_DEPTH_IN] == 6
+    assert CONF_PRECIPITATION_RATE not in saved

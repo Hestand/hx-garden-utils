@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -21,6 +23,7 @@ from custom_components.smart_water.const import (
     CONF_ROOT_DEPTH_IN,
     CONF_SLOPE_PCT,
     CONF_SOIL_TYPE,
+    CONF_SPRINKLER_TYPE,
     CONF_SUNRISE_BUFFER_MIN,
     CONF_SUN_EXPOSURE,
     CONF_VALVE_ENTITY,
@@ -169,3 +172,115 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
         "forecast",
         "sensor",
     }
+
+
+def _loaded_garden(hass: HomeAssistant, **entry_kwargs: Any) -> MockConfigEntry:
+    hass.config.latitude = 31.5493
+    hass.config.longitude = -97.1467
+    hass.config.time_zone = "America/Chicago"
+    hass.states.async_set(
+        "weather.home",
+        "sunny",
+        {
+            "temperature": 30,
+            "temperature_unit": "°C",
+            "humidity": 45,
+            "wind_speed": 2.0,
+            "wind_speed_unit": "m/s",
+            "precipitation_unit": "mm",
+        },
+    )
+    hass.states.async_set("switch.front_valve", "off")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Garden",
+        data={CONF_WEATHER_ENTITY: "weather.home"},
+        options={
+            CONF_ELEVATION_M: 219.0,
+            CONF_DRY_RUN: False,
+            CONF_MODE: MODE_AUTO,
+            CONF_SUNRISE_BUFFER_MIN: 30,
+            CONF_PLAN_HOUR: 23,
+        },
+        **entry_kwargs,
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_v1_entry_migrates_without_changing_stored_overrides(
+    hass: HomeAssistant,
+) -> None:
+    """Version 2 keeps the numbers a v0.2 form already saved, including efficiency 1."""
+    entry = _loaded_garden(
+        hass,
+        version=1,
+        minor_version=1,
+        subentries_data=[
+            {
+                "data": {
+                    CONF_PLANT_TYPE: "warm_season_turf",
+                    CONF_SOIL_TYPE: "clay_loam",
+                    CONF_SLOPE_PCT: 6,
+                    CONF_SUN_EXPOSURE: "full_sun",
+                    CONF_ROOT_DEPTH_IN: 6,
+                    CONF_DEPLETION: 0.5,
+                    CONF_EFFICIENCY: 1.0,
+                    CONF_PRIORITY: 1,
+                    CONF_PRECIPITATION_RATE: 1.5,
+                    CONF_VALVE_ENTITY: "switch.front_valve",
+                },
+                "subentry_type": "zone",
+                "title": "Front",
+                "unique_id": "front",
+            }
+        ],
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.version == 2
+    assert entry.minor_version == 1
+    zone = next(iter(entry.subentries.values()))
+    assert zone.data[CONF_EFFICIENCY] == 1.0
+    assert zone.data[CONF_PRECIPITATION_RATE] == 1.5
+    assert zone.data[CONF_ROOT_DEPTH_IN] == 6
+
+
+async def test_minimal_zone_plans_from_presets(hass: HomeAssistant) -> None:
+    """A zone with only the quick-setup fields uses spray, loam, and St. Augustine."""
+    entry = _loaded_garden(
+        hass,
+        version=2,
+        subentries_data=[
+            {
+                "data": {
+                    CONF_PLANT_TYPE: "st_augustine",
+                    CONF_SOIL_TYPE: "loam",
+                    CONF_SUN_EXPOSURE: "full_sun",
+                    CONF_SPRINKLER_TYPE: "spray",
+                    CONF_VALVE_ENTITY: "switch.front_valve",
+                },
+                "subentry_type": "zone",
+                "title": "Front",
+                "unique_id": "front",
+            }
+        ],
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    await hass.services.async_call(
+        DOMAIN,
+        "set_bucket",
+        {"zone": "Front", "deficit_mm": 20},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    zone_id = next(iter(entry.subentries))
+    zone = entry.runtime_data.data.zones[zone_id]
+    # 20 mm at spray 1.25 in/hr and efficiency 0.60 is 63 whole minutes.
+    assert zone.runtime_min == 63
+    assert zone.scheduled is True
+    assert zone.precipitation_rate_in_hr == pytest.approx(1.25)
+    assert zone.max_cycle_min == 24
+    assert zone.soak_min == 30
+    assert hass.states.get("switch.front_valve").state == "off"
