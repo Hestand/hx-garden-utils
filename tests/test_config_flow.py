@@ -179,7 +179,7 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert result["result"].options[CONF_ELEVATION_M] == 219
     assert result["result"].options[CONF_MODE] == MODE_NOTIFY_ONLY
     assert CONF_TEMPERATURE_SENSOR not in result["result"].options
-    assert result["result"].version == 4
+    assert result["result"].version == 5
 
 
 async def test_user_flow_http_post_is_ok(hass: HomeAssistant, hass_client) -> None:
@@ -524,7 +524,7 @@ async def test_simulation_hub_uses_dropdowns_and_a_virtual_valve(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
-    assert entry.version == 4
+    assert entry.version == 5
     assert entry.data == {CONF_SIMULATION: True}
     assert entry.options[CONF_SCENARIO] == "hot_dry"
     assert entry.options[CONF_BUCKET] == "full"

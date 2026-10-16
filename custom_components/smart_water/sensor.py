@@ -7,11 +7,16 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfPrecipitationDepth
+from homeassistant.const import (
+    CURRENCY_DOLLAR,
+    UnitOfPrecipitationDepth,
+    UnitOfVolume,
+    UnitOfVolumeFlowRate,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_SIMULATION, SUBENTRY_ZONE
+from .const import CONF_COST_PER_1000_GAL, CONF_SIMULATION, SUBENTRY_ZONE
 from .coordinator import SmartWaterConfigEntry
 from .entity import SmartWaterHubEntity, SmartWaterZoneEntity
 from .units import mm_to_inches
@@ -32,7 +37,11 @@ async def async_setup_entry(
         ScheduleSensor(coordinator),
         WateringScheduleSensor(coordinator),
         WateringNowSensor(coordinator),
+        WaterUseSensor(coordinator),
+        WaterSavedSensor(coordinator),
     ]
+    if entry.options.get(CONF_COST_PER_1000_GAL) not in (None, ""):
+        hub_sensors.append(WaterCostSensor(coordinator))
     if entry.data.get(CONF_SIMULATION):
         hub_sensors.append(SimulationSensor(coordinator))
     async_add_entities(hub_sensors)
@@ -51,6 +60,10 @@ async def async_setup_entry(
                 MoistureSensor(coordinator, zone_id),
                 LastRunSensor(coordinator, zone_id),
                 DormancySensor(coordinator, zone_id),
+                LearnedGpmSensor(coordinator, zone_id),
+                LastRunGpmSensor(coordinator, zone_id),
+                ZoneWaterUseSensor(coordinator, zone_id),
+                ZoneWaterSavedSensor(coordinator, zone_id),
             ],
             config_subentry_id=zone_id,
         )
@@ -571,6 +584,7 @@ class LastRunSensor(_ZoneSensor):
             "minutes": run.get("minutes"),
             "net_mm": run.get("net_mm"),
             "gallons": run.get("gallons"),
+            "gpm": run.get("gpm"),
             "result": run.get("result"),
         }
 
@@ -603,6 +617,205 @@ class DormancySensor(_ZoneSensor):
             "mean_f": zone.dormancy_mean_f,
             "detail": zone.dormancy_detail,
         }
+
+
+class LearnedGpmSensor(_ZoneSensor):
+    """Median gallons per minute learned from finished runs."""
+
+    _attr_translation_key = "learned_gpm"
+    _attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
+    _attr_native_unit_of_measurement = UnitOfVolumeFlowRate.GALLONS_PER_MINUTE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:speedometer"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the learned-GPM sensor."""
+        super().__init__(coordinator, zone_id, "learned_gpm")
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the learned rate, or none until enough runs exist."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.learned_gpm
+
+
+class LastRunGpmSensor(_ZoneSensor):
+    """Gallons per minute measured on the last finished cycle."""
+
+    _attr_translation_key = "last_run_gpm"
+    _attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
+    _attr_native_unit_of_measurement = UnitOfVolumeFlowRate.GALLONS_PER_MINUTE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:gauge"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the last-run GPM sensor."""
+        super().__init__(coordinator, zone_id, "last_run_gpm")
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the last measured rate."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.last_run_gpm
+
+
+class ZoneWaterUseSensor(_ZoneSensor):
+    """Lifetime gallons for one zone. Period totals are attributes."""
+
+    _attr_translation_key = "water_use"
+    _attr_device_class = SensorDeviceClass.WATER
+    _attr_native_unit_of_measurement = UnitOfVolume.GALLONS
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:water"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the zone water-use sensor."""
+        super().__init__(coordinator, zone_id, "water_use")
+
+    @property
+    def native_value(self) -> float:
+        """Return lifetime gallons. This value does not reset."""
+        zone = self._zone()
+        if zone is None:
+            return 0.0
+        return zone.water_total_gal
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Today, this week, and this month, summed from the date log."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {
+            "today_gal": zone.water_today_gal,
+            "week_gal": zone.water_week_gal,
+            "month_gal": zone.water_month_gal,
+        }
+
+
+class ZoneWaterSavedSensor(_ZoneSensor):
+    """This week's gallons versus a fixed timer. Can be negative."""
+
+    _attr_translation_key = "water_saved"
+    _attr_native_unit_of_measurement = UnitOfVolume.GALLONS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:water-check"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the zone savings sensor."""
+        super().__init__(coordinator, zone_id, "water_saved")
+
+    @property
+    def native_value(self) -> float | None:
+        """Return baseline minus actual for the last seven days."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.saved_week_gal
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """The fixed-timer gallons this comparison uses."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {"baseline_week_gal": zone.baseline_week_gal}
+
+
+class WaterUseSensor(SmartWaterHubEntity, SensorEntity):
+    """Lifetime gallons for the hub, for the Home Assistant water dashboard."""
+
+    _attr_translation_key = "water_use"
+    _attr_device_class = SensorDeviceClass.WATER
+    _attr_native_unit_of_measurement = UnitOfVolume.GALLONS
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:water"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_water_use"
+
+    @property
+    def native_value(self) -> float:
+        """Return the sum of zone lifetime gallons."""
+        return _hub_gallons(self.coordinator, "water_total_gal")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Period sums. These reset and are not the long-term statistic."""
+        return {
+            "today_gal": _hub_gallons(self.coordinator, "water_today_gal"),
+            "week_gal": _hub_gallons(self.coordinator, "water_week_gal"),
+            "month_gal": _hub_gallons(self.coordinator, "water_month_gal"),
+        }
+
+
+class WaterSavedSensor(SmartWaterHubEntity, SensorEntity):
+    """Hub gallons saved this week against each zone's fixed-timer baseline."""
+
+    _attr_translation_key = "water_saved"
+    _attr_native_unit_of_measurement = UnitOfVolume.GALLONS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:water-check"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_water_saved"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the sum of zone savings, or none when no zone has a volume."""
+        data = self.coordinator.data
+        if data is None:
+            return None
+        values = [
+            zone.saved_week_gal
+            for zone in data.zones.values()
+            if zone.saved_week_gal is not None
+        ]
+        if not values:
+            return None
+        return round(sum(values), 3)
+
+
+class WaterCostSensor(SmartWaterHubEntity, SensorEntity):
+    """Lifetime water cost. Created only when a price per 1,000 gallons is set."""
+
+    _attr_translation_key = "water_cost"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = CURRENCY_DOLLAR
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:currency-usd"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_water_cost"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return dollars for the hub's lifetime gallons."""
+        return self.coordinator.lifetime_cost()
+
+
+def _hub_gallons(coordinator, field: str) -> float:
+    data = coordinator.data
+    if data is None:
+        return 0.0
+    return round(sum(getattr(zone, field) for zone in data.zones.values()), 3)
 
 
 class SimulationSensor(SmartWaterHubEntity, SensorEntity):

@@ -248,6 +248,108 @@ def test_fractional_runtime_stays_off_the_whole_minute_grid() -> None:
     assert all(isinstance(minutes, float) for minutes in plan.zones[0].cycles)
 
 
+def test_nightly_valve_cap_keeps_the_schedule_at_or_under_60() -> None:
+    """A 63-minute sequence is trimmed to the cap and the last cycle still ends at dawn."""
+    zone = _zone(
+        soil_type="loam",
+        slope_pct=0,
+        precipitation_rate_in_hr=1.25,
+        efficiency=0.60,
+        deficit_mm=20.0,
+        raw_mm=8.0,
+        taw_mm=24.0,
+        max_cycle_override_min=24,
+        soak_override_min=30,
+    )
+    uncapped = build_plan(_request(zone))
+    assert uncapped.zones[0].runtime_min == 63
+    plan = build_plan(_request(zone, max_run_min=60))
+    assert plan.zones[0].scheduled is True
+    assert plan.zones[0].runtime_min == 60
+    assert plan.zones[0].carried_min == pytest.approx(3)
+    assert plan.zones[0].completed is False
+    assert sum(event.duration_min for event in plan.timeline) <= 60
+    assert plan.timeline[-1].end == plan.finish_by
+    assert plan.warning is not None
+    assert "capped at 60" in plan.warning
+
+
+def test_three_zones_interleave_inside_the_nightly_cap() -> None:
+    """One zone's soak is another's run, and the night stays within the valve cap."""
+    front = _zone(
+        zone_id="front",
+        name="Front lawn",
+        priority=1,
+        deficit_mm=12.0,
+        raw_mm=8.0,
+        precipitation_rate_in_hr=1.5,
+        efficiency=1.0,
+        max_cycle_override_min=6,
+        soak_override_min=30,
+    )
+    back = _zone(
+        zone_id="back",
+        name="Back lawn",
+        priority=1,
+        soil_type="sandy_loam",
+        slope_pct=0,
+        deficit_mm=8.0,
+        raw_mm=5.0,
+        precipitation_rate_in_hr=0.5,
+        efficiency=1.0,
+        max_cycle_override_min=12,
+        soak_override_min=20,
+        sprinkler_type="rotor",
+    )
+    bed = _zone(
+        zone_id="bed",
+        name="Shrub bed",
+        priority=1,
+        soil_type="loam",
+        slope_pct=0,
+        deficit_mm=6.0,
+        raw_mm=4.0,
+        precipitation_rate_in_hr=0.5,
+        efficiency=1.0,
+        max_cycle_override_min=10,
+        soak_override_min=0,
+        sprinkler_type="drip",
+    )
+    plan = build_plan(_request(front, back, bed, max_run_min=60))
+    names = {event.zone_name for event in plan.timeline}
+    assert names == {"Front lawn", "Back lawn", "Shrub bed"}
+    assert sum(event.duration_min for event in plan.timeline) <= 60
+    _assert_one_valve(plan.timeline)
+    _assert_soaks(plan)
+    front_events = [event for event in plan.timeline if event.zone_id == "front"]
+    assert len(front_events) >= 2
+    guest = next(event for event in plan.timeline if event.zone_id != "front")
+    assert front_events[0].end <= guest.start
+    assert guest.end <= front_events[1].start
+    assert plan.timeline[-1].end == plan.finish_by
+
+
+def test_hourly_wind_moves_the_deadline_earlier() -> None:
+    finish = datetime(2026, 7, 14, 6, 30, tzinfo=timezone.utc)
+    hourly = (
+        (datetime(2026, 7, 14, 5, 0, tzinfo=timezone.utc), 8.0),
+        (datetime(2026, 7, 14, 6, 0, tzinfo=timezone.utc), 14.0),
+    )
+    plan = build_plan(
+        _request(
+            _zone(wind_limit_mph=10),
+            finish_by=finish,
+            earliest_start=datetime(2026, 7, 14, 4, 0, tzinfo=timezone.utc),
+            hourly_wind=hourly,
+            max_run_min=60,
+        )
+    )
+    assert plan.finish_by == datetime(2026, 7, 14, 6, 0, tzinfo=timezone.utc)
+    assert plan.timeline[-1].end == plan.finish_by
+    assert plan.warning is not None
+    assert "wind" in plan.warning.lower()
+
+
 def _assert_one_valve(timeline: tuple) -> None:
     ordered = sorted(timeline, key=lambda event: event.start)
     for previous, current in zip(ordered, ordered[1:]):

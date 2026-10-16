@@ -12,7 +12,7 @@
       },
       "live": {
         "title": "Smart Water hub",
-        "description": "Name the hub, then pick a weather entity or open Sensors and pick a temperature sensor. A Tempest station is filled in when one is found. Location and schedule already have defaults. This version plans and records. It does not open a valve.",
+        "description": "Name the hub, then pick a weather entity or open Sensors and pick a temperature sensor. A Tempest station is filled in when one is found. Location and schedule already have defaults. Automatic watering stays off until you turn the switch on.",
         "data": {
           "name": "Name",
           "weather_entity": "Weather entity"
@@ -66,7 +66,17 @@
               "freeze_skip_f": "Skip when temperature is at or below",
               "recent_rain_hours": "Recent rain window",
               "recent_rain_mm": "Skip when recent rain is at least",
-              "max_run_min": "Maximum minutes on per run"
+              "max_run_min": "Maximum valve-on minutes per night",
+              "flow_high_pct": "High flow alert",
+              "flow_low_pct": "Low flow alert",
+              "flow_learn_runs": "Runs before flow alerts",
+              "flow_idle_gpm": "Flow while nothing is running",
+              "flow_high_action": "When flow is high",
+              "flow_low_action": "When flow is low",
+              "flow_idle_action": "When flow is seen with every zone off",
+              "cost_per_1000_gal": "Cost per 1,000 gallons",
+              "weekly_budget_gal": "Weekly gallon budget",
+              "weekly_summary": "Weekly summary"
             },
             "data_description": {
               "elevation_m": "Used for Penman-Monteith air pressure when no pressure sensor is set. Home Assistant often stores 0.",
@@ -83,7 +93,17 @@
               "freeze_skip_f": "Default 40\u00b0F (Oklahoma State HLA-6610). Uses the current temperature or the forecast low.",
               "recent_rain_hours": "Default 12 hours. A practical window, not a published cutoff.",
               "recent_rain_mm": "Default 2.5 mm (0.1 in) inside that window.",
-              "max_run_min": "Default 60. One run cannot leave zones on longer than this, combined."
+              "max_run_min": "Default 60. Valve-on minutes for one night, all zones together. Soak time does not count. The schedule never shows more than this. The rest stays in the bucket.",
+              "flow_high_pct": "Default 30% above the learned gallons per minute. A broken head or a leak.",
+              "flow_low_pct": "Default 25% below the learned gallons per minute. A clog, a stuck valve, or low pressure.",
+              "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median.",
+              "flow_idle_gpm": "Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on. A main-line leak.",
+              "flow_high_action": "Notify only, or skip that zone until you reset flow learning.",
+              "flow_low_action": "Notify only, or skip that zone until you reset flow learning.",
+              "flow_idle_action": "Notify only, or stop watering and skip every zone until you reset flow learning.",
+              "cost_per_1000_gal": "Optional. Adds a cost sensor in dollars for the water dashboard.",
+              "weekly_budget_gal": "Optional. Fires one alert per week when use goes over this.",
+              "weekly_summary": "Off by default. On Monday, at or after the plan hour, sends one summary."
             }
           }
         }
@@ -124,7 +144,17 @@
               "freeze_skip_f": "Skip when temperature is at or below",
               "recent_rain_hours": "Recent rain window",
               "recent_rain_mm": "Skip when recent rain is at least",
-              "max_run_min": "Maximum minutes on per run"
+              "max_run_min": "Maximum valve-on minutes per night",
+              "flow_high_pct": "High flow alert",
+              "flow_low_pct": "Low flow alert",
+              "flow_learn_runs": "Runs before flow alerts",
+              "flow_idle_gpm": "Flow while nothing is running",
+              "flow_high_action": "When flow is high",
+              "flow_low_action": "When flow is low",
+              "flow_idle_action": "When flow is seen with every zone off",
+              "cost_per_1000_gal": "Cost per 1,000 gallons",
+              "weekly_budget_gal": "Weekly gallon budget",
+              "weekly_summary": "Weekly summary"
             },
             "data_description": {
               "latitude": "Leave empty to use Home Assistant's location. Set both latitude and longitude, or neither.",
@@ -137,7 +167,17 @@
               "freeze_skip_f": "Default 40\u00b0F (Oklahoma State HLA-6610). Uses the current temperature or the forecast low.",
               "recent_rain_hours": "Default 12 hours. A practical window, not a published cutoff.",
               "recent_rain_mm": "Default 2.5 mm (0.1 in) inside that window.",
-              "max_run_min": "Default 60. One run cannot leave zones on longer than this, combined."
+              "max_run_min": "Default 60. Valve-on minutes for one night, all zones together. Soak time does not count. The schedule never shows more than this. The rest stays in the bucket.",
+              "flow_high_pct": "Default 30% above the learned gallons per minute. A broken head or a leak.",
+              "flow_low_pct": "Default 25% below the learned gallons per minute. A clog, a stuck valve, or low pressure.",
+              "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median.",
+              "flow_idle_gpm": "Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on. A main-line leak.",
+              "flow_high_action": "Notify only, or skip that zone until you reset flow learning.",
+              "flow_low_action": "Notify only, or skip that zone until you reset flow learning.",
+              "flow_idle_action": "Notify only, or stop watering and skip every zone until you reset flow learning.",
+              "cost_per_1000_gal": "Optional. Adds a cost sensor in dollars for the water dashboard.",
+              "weekly_budget_gal": "Optional. Fires one alert per week when use goes over this.",
+              "weekly_summary": "Off by default. On Monday, at or after the plan hour, sends one summary."
             }
           }
         }
@@ -217,7 +257,17 @@
               "freeze_skip_f": "Skip when temperature is at or below",
               "recent_rain_hours": "Recent rain window",
               "recent_rain_mm": "Skip when recent rain is at least",
-              "max_run_min": "Maximum minutes on per run"
+              "max_run_min": "Maximum valve-on minutes per night",
+              "flow_high_pct": "High flow alert",
+              "flow_low_pct": "Low flow alert",
+              "flow_learn_runs": "Runs before flow alerts",
+              "flow_idle_gpm": "Flow while nothing is running",
+              "flow_high_action": "When flow is high",
+              "flow_low_action": "When flow is low",
+              "flow_idle_action": "When flow is seen with every zone off",
+              "cost_per_1000_gal": "Cost per 1,000 gallons",
+              "weekly_budget_gal": "Weekly gallon budget",
+              "weekly_summary": "Weekly summary"
             },
             "data_description": {
               "notify_target": "Example: mobile_app_phone, or notify.mobile_app_phone. Empty sends nothing.",
@@ -229,7 +279,17 @@
               "freeze_skip_f": "Default 40\u00b0F (Oklahoma State HLA-6610). Uses the current temperature or the forecast low.",
               "recent_rain_hours": "Default 12 hours. A practical window, not a published cutoff.",
               "recent_rain_mm": "Default 2.5 mm (0.1 in) inside that window.",
-              "max_run_min": "Default 60. One run cannot leave zones on longer than this, combined."
+              "max_run_min": "Default 60. Valve-on minutes for one night, all zones together. Soak time does not count. The schedule never shows more than this. The rest stays in the bucket.",
+              "flow_high_pct": "Default 30% above the learned gallons per minute. A broken head or a leak.",
+              "flow_low_pct": "Default 25% below the learned gallons per minute. A clog, a stuck valve, or low pressure.",
+              "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median.",
+              "flow_idle_gpm": "Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on. A main-line leak.",
+              "flow_high_action": "Notify only, or skip that zone until you reset flow learning.",
+              "flow_low_action": "Notify only, or skip that zone until you reset flow learning.",
+              "flow_idle_action": "Notify only, or stop watering and skip every zone until you reset flow learning.",
+              "cost_per_1000_gal": "Optional. Adds a cost sensor in dollars for the water dashboard.",
+              "weekly_budget_gal": "Optional. Fires one alert per week when use goes over this.",
+              "weekly_summary": "Off by default. On Monday, at or after the plan hour, sends one summary."
             },
             "description": "Defaults match the central Texas design site (about 219 m) and water any day. Automatic watering is a switch and stays off until you turn it on."
           }
@@ -316,7 +376,9 @@
                 "max_cycle_min": "Max cycle",
                 "soak_min": "Soak",
                 "flow_gpm": "Total flow",
-                "area_sqft": "Area"
+                "area_sqft": "Area",
+                "baseline_minutes": "Fixed-timer minutes",
+                "baseline_days": "Fixed-timer days per week"
               },
               "data_description": {
                 "precipitation_rate_in_hr": "Preset {precip} in/hr. Leave blank to use it. An entered rate wins over flow and area.",
@@ -325,7 +387,9 @@
                 "max_cycle_min": "Leave blank to use the intake rate and precipitation rate.",
                 "soak_min": "Leave blank to use the soil default. Drip and bubbler soak 0 unless you set one.",
                 "flow_gpm": "Leave blank unless you want the rate calculated from flow and area.",
-                "area_sqft": "Used with flow to compute inches per hour (96.25 \u00d7 GPM / area). Also used for the flow check."
+                "area_sqft": "Used with flow to compute inches per hour (96.25 \u00d7 GPM / area). Also used for the flow check.",
+                "baseline_minutes": "Blank uses 15 minutes. This is a comparison, not a recommendation.",
+                "baseline_days": "Blank uses 3 days a week. Gallons saved is this timer minus actual use."
               }
             },
             "measurement_overrides": {
@@ -468,6 +532,12 @@
         "total": "Volume total",
         "rate": "Flow rate"
       }
+    },
+    "flow_action": {
+      "options": {
+        "notify": "Notify only",
+        "stop": "Stop and skip until reset"
+      }
     }
   },
   "entity": {
@@ -522,6 +592,21 @@
       },
       "dormancy": {
         "name": "Dormancy"
+      },
+      "learned_gpm": {
+        "name": "Learned flow"
+      },
+      "last_run_gpm": {
+        "name": "Last run flow"
+      },
+      "water_use": {
+        "name": "Water use"
+      },
+      "water_saved": {
+        "name": "Water saved"
+      },
+      "water_cost": {
+        "name": "Water cost"
       }
     },
     "switch": {
@@ -590,6 +675,16 @@
     "reset_learning": {
       "name": "Reset moisture learning",
       "description": "Set a zone's learned available-water factor back to 1."
+    },
+    "reset_flow_learning": {
+      "name": "Reset flow learning",
+      "description": "Clear learned flow, the flow alert, and a skip that is waiting for reset."
+    }
+  },
+  "issues": {
+    "flow_alert": {
+      "title": "Flow alert for {name}",
+      "description": "{detail} Reset flow learning when the zone should run again."
     }
   }
 }

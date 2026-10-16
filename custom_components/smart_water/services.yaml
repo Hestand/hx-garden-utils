@@ -258,3 +258,18 @@ reset_learning:
       required: true
       selector:
         text:
+
+reset_flow_learning:
+  name: Reset flow learning
+  description: Clear learned flow, the flow alert, and a skip that is waiting for reset. Leave the zone empty to reset every zone on the hub.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name, if you have more than one.
+      selector:
+        text:
+    zone:
+      name: Zone
+      description: Zone name. Empty resets every zone and a main-line lock.
+      selector:
+        text:

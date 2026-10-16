@@ -40,6 +40,8 @@ def project_week(
     max_daily_runtime_min: int | None,
     areas: dict[str, float | None],
     days: int = 7,
+    max_run_min: float | None = None,
+    hourly_wind: tuple[tuple[datetime, float], ...] = (),
 ) -> dict[str, object]:
     """Return ``days``, a short ``summary``, and a markdown table."""
     tz = ZoneInfo(timezone)
@@ -107,6 +109,8 @@ def project_week(
                 blackout_start_hour=blackout_start_hour,
                 blackout_end_hour=blackout_end_hour,
                 whole_minutes=whole_minutes,
+                max_run_min=max_run_min,
+                hourly_wind=hourly_wind if offset == 0 else (),
             )
         )
         rows.append(_day_row(moment.date().isoformat(), plan, areas))
@@ -116,7 +120,11 @@ def project_week(
             deficits[zone_plan.zone_id] = max(
                 0.0, deficits[zone_plan.zone_id] - zone_plan.net_mm
             )
-            since[zone_plan.zone_id] = 0
+            remaining = deficits[zone_plan.zone_id]
+            # A capped night that is still at RAW can finish on the next
+            # allowed day. A finished night starts the minimum interval.
+            if zone_plan.completed or remaining < zone_plan.raw_mm:
+                since[zone_plan.zone_id] = 0
 
     summary = _summary(rows)
     return {
@@ -144,11 +152,11 @@ def render_markdown(days: list[dict[str, object]]) -> str:
             if zone["scheduled"]:
                 depth = f"{zone['inches']:.2f} in ({zone['mm']:.1f} mm)"
                 gallons = "—" if zone["gallons"] is None else f"{zone['gallons']:.0f}"
-                note = ""
+                note = str(zone.get("note") or "")
             else:
                 depth = "—"
                 gallons = "—"
-                note = str(zone["reason"])
+                note = str(zone.get("note") or zone["reason"])
             lines.append(
                 "| {date} | {name} | {starts} | {minutes} | {depth} | {gallons} | {note} |".format(
                     date=day["date"],
@@ -193,6 +201,11 @@ def _day_row(
                 "inches": round(mm_to_inches(zone.net_mm), 3) if zone.scheduled else 0.0,
                 "gallons": None if gallons is None else round(gallons, 1),
                 "cycles": list(zone.cycles),
+                "note": (
+                    f"{zone.carried_min:.0f} min carries to the next allowed day."
+                    if zone.scheduled and zone.carried_min >= 0.5
+                    else ""
+                ),
             }
         )
     return {"date": day, "zones": zones}

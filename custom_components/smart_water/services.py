@@ -35,6 +35,7 @@ from .const import (
     SERVICE_RUN_NOW,
     SERVICE_SET_ADJUSTMENT,
     SERVICE_SET_BUCKET,
+    SERVICE_RESET_FLOW,
     SERVICE_RESET_LEARNING,
     SERVICE_SIMULATE,
     SERVICE_SKIP_ZONE,
@@ -364,6 +365,36 @@ def async_setup_services(hass: HomeAssistant) -> None:
             {
                 vol.Optional("hub"): str,
                 vol.Required("zone"): str,
+            }
+        ),
+    )
+
+    async def reset_flow(call: ServiceCall) -> None:
+        """Clear learned flow and a stop-until-reset skip. Omit the zone to clear the hub."""
+        zone_name = call.data.get("zone")
+        hub = call.data.get("hub")
+        if zone_name:
+            _entry, coordinator, zone_id = _find_zone(hass, zone_name, hub)
+            await coordinator.async_reset_flow(zone_id)
+            return
+        targets = [
+            coordinator
+            for entry, coordinator in _coordinators(hass)
+            if _hub_matches(entry, hub)
+        ]
+        if not targets:
+            raise ServiceValidationError("No Smart Water hub is loaded.")
+        for coordinator in targets:
+            await coordinator.async_reset_flow(None)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESET_FLOW,
+        reset_flow,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Optional("zone"): str,
             }
         ),
     )

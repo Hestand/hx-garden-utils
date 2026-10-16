@@ -1,8 +1,9 @@
 """Smart Water custom integration.
 
-v0.5 plans the week and, when the Automatic watering switch is on, runs
-each zone's stored on/off entity one at a time. The executor uses
-switch, valve, and input_boolean services. It does not call Hydrawise.
+v0.6 learns each zone's flow, interleaves the dawn schedule, and records
+gallons. When the Automatic watering switch is on, it runs each zone's
+stored on/off entity one at a time. The executor uses switch, valve, and
+input_boolean services. It does not call Hydrawise.
 """
 
 from __future__ import annotations
@@ -22,8 +23,11 @@ async def async_migrate_entry(hass, entry) -> bool:
     Version 4 rewrites hub options only. A retired odd- or even-address
     preset becomes its weekday set and a 10:00–19:00 blackout. The dry-run
     option is removed. Automatic watering stays off in the store.
+
+    Version 5 adds flow, budget, and report options. It does not call
+    migrate_options again, so a hub that already chose its days keeps them.
     """
-    if entry.version > 4:
+    if entry.version > 5:
         return False
     if entry.version < 4:
         hass.config_entries.async_update_entry(
@@ -32,6 +36,8 @@ async def async_migrate_entry(hass, entry) -> bool:
             version=4,
             minor_version=1,
         )
+    if entry.version < 5:
+        hass.config_entries.async_update_entry(entry, version=5, minor_version=1)
     return True
 
 

@@ -44,6 +44,7 @@ class SkipInputs:
     dormancy_detail: str = ""
     maintenance_due: bool = False
     include_schedule: bool = True
+    flow_locked: bool = False
 
 
 def safety_reason(inputs: SkipInputs) -> str | None:
@@ -96,6 +97,8 @@ def skip_reason(inputs: SkipInputs) -> str | None:
     """
     if not inputs.enabled:
         return "Zone is disabled."
+    if inputs.flow_locked:
+        return "Skipped because a flow alert is waiting for reset."
     if inputs.skipped_until is not None and inputs.skipped_until >= inputs.finish_day:
         return f"Skipped until {inputs.skipped_until}."
     safety = safety_reason(inputs)

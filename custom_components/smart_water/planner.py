@@ -49,6 +49,7 @@ from .presets import (
 from .safety import block_reason, would_execute
 from .schedule import clip_blackout, day_allowed, weekday_name
 from .skips import SkipInputs, skip_reason
+from .timing import calm_finish, strictest_limit
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,7 @@ class ZoneRequest:
     maintenance_mm: float = 0.0
     target_depth_mm: float | None = None
     currently_raining: bool = False
+    flow_locked: bool = False
 
 
 def build_zone_request(
@@ -130,6 +132,7 @@ def build_zone_request(
     maintenance_mm: float = 0.0,
     target_depth_mm: float | None = None,
     currently_raining: bool = False,
+    flow_locked: bool = False,
 ) -> ZoneRequest:
     """Resolve one zone the way the nightly plan does.
 
@@ -197,6 +200,7 @@ def build_zone_request(
         maintenance_mm=maintenance_mm,
         target_depth_mm=target_depth_mm,
         currently_raining=currently_raining,
+        flow_locked=flow_locked,
     )
 
 
@@ -218,6 +222,8 @@ class PlanRequest:
     blackout_start_hour: int | None = None
     blackout_end_hour: int | None = None
     whole_minutes: bool = True
+    max_run_min: float | None = None
+    hourly_wind: tuple[tuple[datetime, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -241,6 +247,8 @@ class ZonePlan:
     soak_min: int
     cycles: tuple[int | float, ...]
     precipitation_rate_in_hr: float
+    completed: bool = True
+    carried_min: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -362,7 +370,8 @@ def _schedule(jobs: list[_Job]) -> list[tuple[_Job, int, int, int]]:
                 job.ready_min for job in jobs if job.next_index < len(job.cycles)
             )
             continue
-        ready.sort(key=lambda job: (job.priority, job.zone.name))
+        # Priority first, then the longer soak, so another zone can run in the gap.
+        ready.sort(key=lambda job: (job.priority, -job.soak_min, job.zone.name))
         job = ready[0]
         duration = job.cycles[job.next_index]
         start = valve_free
@@ -525,6 +534,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
                 dormancy=zone.dormancy,
                 dormancy_detail=zone.dormancy_detail,
                 maintenance_due=zone.maintenance_due,
+                flow_locked=zone.flow_locked,
             )
         )
         reason = due_reason if blocked_reason is None else blocked_reason
@@ -615,10 +625,26 @@ def build_plan(request: PlanRequest) -> NightPlan:
                 "and was trimmed."
             )
 
-    events = _schedule(jobs) if jobs and not window_closed else []
-    # The clipped deadline is what the timeline must finish by.
+    # The clipped deadline is what the timeline must finish by. Hourly wind
+    # can move that deadline earlier, still inside the allowed window.
     request_finish = finish_by
     request_earliest = earliest
+    if jobs and not window_closed:
+        limit = strictest_limit(
+            [zone.wind_limit_mph for zone in request.zones if _zone_in_jobs(zone.zone_id, jobs)]
+        )
+        request_finish, wind_note = calm_finish(
+            request_finish, request_earliest, request.hourly_wind, limit
+        )
+        if wind_note:
+            warnings.append(wind_note)
+        if request_earliest is not None and request_earliest >= request_finish:
+            window_closed = True
+            warnings.append(
+                "The earliest start is at or after the wind-adjusted deadline, "
+                "so nothing was scheduled."
+            )
+    events = _schedule(jobs) if jobs and not window_closed else []
     if events and request_earliest is not None:
         window = (request_finish - request_earliest).total_seconds() / 60.0
         span = _span_minutes(events)
@@ -642,6 +668,12 @@ def build_plan(request: PlanRequest) -> NightPlan:
             else:
                 warnings.append("Runtimes were trimmed to fit the watering window.")
 
+    events, deferred = _trim_run_cap(events, request.max_run_min, whole=request.whole_minutes)
+    if deferred > 0 and request.max_run_min is not None:
+        warnings.append(
+            f"Valve-on time is capped at {request.max_run_min:.0f} min tonight. "
+            f"{deferred:.0f} min stays in the bucket for the next allowed day."
+        )
     timeline = _place(events, request_finish)
     if (
         timeline
@@ -654,28 +686,76 @@ def build_plan(request: PlanRequest) -> NightPlan:
     final_zones: list[ZonePlan] = []
     for zone_plan, job in _zip_jobs(zone_plans, jobs):
         if zone_plan.zone_id not in scheduled_ids:
-            final_zones.append(zone_plan)
+            if job is not None and request.max_run_min is not None:
+                missed = float(sum(job.cycles))
+                final_zones.append(
+                    ZonePlan(
+                        zone_id=zone_plan.zone_id,
+                        name=zone_plan.name,
+                        due=zone_plan.due,
+                        scheduled=False,
+                        reason=(
+                            f"Deferred to the next allowed day. Today's valve time "
+                            f"is already at the {request.max_run_min:.0f} min cap."
+                        ),
+                        deficit_mm=zone_plan.deficit_mm,
+                        raw_mm=zone_plan.raw_mm,
+                        taw_mm=zone_plan.taw_mm,
+                        etc_mm=zone_plan.etc_mm,
+                        kc=zone_plan.kc,
+                        p=zone_plan.p,
+                        net_mm=0.0,
+                        runtime_min=0,
+                        max_cycle_min=zone_plan.max_cycle_min,
+                        soak_min=zone_plan.soak_min,
+                        cycles=(),
+                        precipitation_rate_in_hr=zone_plan.precipitation_rate_in_hr,
+                        completed=False,
+                        carried_min=missed,
+                    )
+                )
+            else:
+                final_zones.append(zone_plan)
             continue
-        cycles = tuple(job.cycles) if job is not None else zone_plan.cycles
+        before = sum(job.cycles) if job is not None else zone_plan.runtime_min
+        kept = [
+            event.duration_min
+            for event in timeline
+            if event.zone_id == zone_plan.zone_id
+        ]
+        kept_sum = sum(kept)
+        carried = max(0.0, float(before) - float(kept_sum))
+        if before:
+            net_mm = zone_plan.net_mm * (kept_sum / float(before))
+        else:
+            net_mm = zone_plan.net_mm
+        reason = zone_plan.reason
+        if carried >= 0.5:
+            reason = (
+                f"{reason} {carried:.0f} min carries to the next allowed day "
+                f"(cap {request.max_run_min:.0f} min)."
+            ).strip()
         final_zones.append(
             ZonePlan(
                 zone_id=zone_plan.zone_id,
                 name=zone_plan.name,
                 due=zone_plan.due,
                 scheduled=True,
-                reason=zone_plan.reason,
+                reason=reason,
                 deficit_mm=zone_plan.deficit_mm,
                 raw_mm=zone_plan.raw_mm,
                 taw_mm=zone_plan.taw_mm,
                 etc_mm=zone_plan.etc_mm,
                 kc=zone_plan.kc,
                 p=zone_plan.p,
-                net_mm=zone_plan.net_mm,
-                runtime_min=sum(cycles),
+                net_mm=net_mm,
+                runtime_min=kept_sum,
                 max_cycle_min=zone_plan.max_cycle_min,
                 soak_min=zone_plan.soak_min,
-                cycles=cycles,
+                cycles=tuple(kept),
                 precipitation_rate_in_hr=zone_plan.precipitation_rate_in_hr,
+                completed=carried < 0.5,
+                carried_min=carried,
             )
         )
 
@@ -696,6 +776,46 @@ def build_plan(request: PlanRequest) -> NightPlan:
         zones=tuple(final_zones),
         timeline=timeline,
     )
+
+
+def _zone_in_jobs(zone_id: str, jobs: list[_Job]) -> bool:
+    return any(job.zone.zone_id == zone_id for job in jobs)
+
+
+def _trim_run_cap(
+    events: list[tuple[_Job, int, int, int]],
+    cap: float | None,
+    *,
+    whole: bool,
+) -> tuple[list[tuple[_Job, int, int, int]], float]:
+    """Keep the earliest cycles whose valve-on minutes fit in ``cap``.
+
+    Soak gaps are not valve time. The remainder is reported so the bucket
+    can carry it. ``cap`` of None leaves the timeline alone.
+    """
+    if cap is None or cap <= 0 or not events:
+        return events, 0.0
+    kept: list[tuple[_Job, int, int, int]] = []
+    used = 0.0
+    deferred = 0.0
+    for job, cycle_index, start, end in events:
+        duration = float(end - start)
+        room = cap - used
+        if room < (1.0 if whole else 0.5):
+            deferred += duration
+            continue
+        if duration > room + 1e-6:
+            allowed = int(room) if whole else round(room, 1)
+            if allowed < (1 if whole else 0.5):
+                deferred += duration
+                continue
+            kept.append((job, cycle_index, start, start + allowed))
+            deferred += duration - allowed
+            used += allowed
+            continue
+        kept.append((job, cycle_index, start, end))
+        used += duration
+    return kept, deferred
 
 
 def _zip_jobs(

@@ -2,7 +2,7 @@
 
 Work in progress, not ready for general use.
 
-Water-balance planner and zone controller for Home Assistant (`smart_water` 0.5.0).
+Water-balance planner and zone controller for Home Assistant (`smart_water` 0.6.0).
 
 It estimates reference evapotranspiration, tracks a soil-water deficit for each zone, and builds a nightly cycle-and-soak plan that finishes before sunrise. **Automatic watering is off after a new install and after an upgrade.** Turn the hub's **Automatic watering** switch on when you want it to open valves. Until then the plan is only sensors and an optional notification. Run now is a manual action and runs even while that switch is off. A simulation hub still plays an example week and never calls a real on/off entity. The controller calls `switch`, `valve`, or `input_boolean` services only. It does not call a controller API.
 
@@ -16,7 +16,7 @@ Requires Home Assistant **2025.3** or newer (config subentries). Tested on **202
 
 1. HACS → Integrations → ⋮ → Custom repositories.
 2. Add `https://github.com/Hestand/hx-garden-utils` as category **Integration**.
-3. Download **Smart Water** (release `v0.5.0`), then restart Home Assistant.
+3. Download **Smart Water** (release `v0.6.0`), then restart Home Assistant.
 
 `hacs.json` is included. This is not in the default HACS store.
 
@@ -30,9 +30,11 @@ config/custom_components/smart_water/
 
 That directory must contain `__init__.py` and `manifest.json`. Restart Home Assistant. Settings → Devices & services → Add integration → **Smart Water**.
 
-### Upgrading from 0.4.x, 0.3.x, 0.2.x, or 0.1.x
+### Upgrading from 0.5.x, 0.4.x, 0.3.x, 0.2.x, or 0.1.x
 
-Download 0.5.0 and restart. The config entry moves to version 4. Zone data is not rewritten, and the stored bucket (storage version 1) is kept. You do not reconfigure an existing hub. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
+Download 0.6.0 and restart. The config entry moves to version 5. Zone data is not rewritten, and the stored bucket (storage version 1) is kept. You do not reconfigure an existing hub. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
+
+0.6 learns each zone's normal flow, interleaves zones so one soak is another's run, and records gallons for the Home Assistant water dashboard. Flow alerts notify only until you change that. The weekly summary is off. Cost and the weekly gallon budget stay empty until you set them.
 
 An older odd-address day preset becomes Sunday, Tuesday, and Thursday with a 10:00–19:00 blackout. An older even-address preset becomes Monday, Wednesday, and Saturday with the same blackout. Any other schedule, including none, allows every day and keeps a blackout you already saved. The dry-run option is removed.
 
@@ -75,16 +77,21 @@ The first step is a menu: **Live hub** or **Simulation hub**. The live form is t
 | Notify target | Optional, `notify.mobile_app_phone` or `mobile_app_phone`. |
 | Rain sensor | Optional binary sensor. On means skip every zone. |
 | Plan hour | Local hour when today's ET and rain are committed (default 23). An automatic run arms at or after this hour. |
-| Earliest hour / sunrise buffer | Watering window. The last cycle ends at sunrise minus the buffer (default 30 min). |
+| Earliest hour / sunrise buffer | Watering window. The last cycle ends at sunrise minus the buffer (default 30 min). If the hourly forecast is windy at that hour, the deadline moves earlier, and not before the earliest hour. |
 | Forecast skip | Optional rain depth (mm) for tomorrow. Unset means forecast rain does not skip a zone. Forecast rain is never treated as rain that already fell. |
 | Freeze skip | Skip at or below this air temperature, or the forecast low. Default **40°F**. |
 | Recent rain | Skip when at least this much rain fell in the last N hours. Defaults **2.5 mm** and **12 hours**. |
-| Max run | Cap on valve-on minutes for one sequence. Default **60**. Soak time does not count. |
+| Max run | Valve-on minutes for one night, all zones together. Default **60**. Soak does not count. The schedule never shows more than this. The rest stays in the bucket. |
 | Round minutes | On by default. Off keeps cycle lengths to 0.1 minute. |
 | Allowed weekdays | Every day is selected by default. Clear a day to forbid it. An empty selection allows no day. |
 | Blackout hours | Optional. The shared timeline stays outside this local hour range. |
 | Drip ignores weekdays | Off by default. Buried drip can skip the weekday check. The blackout still clips the shared timeline. |
 | Climate sensors | Optional temperature, humidity, wind, pressure, solar radiation, UV, and rain amount. |
+| High / low flow | Defaults **+30%** and **−25%** from the learned gallons per minute, after **3** runs. Each alert can notify only, or skip that zone until you reset flow learning. |
+| Idle flow | Default **0.5 gal/min** (or about 1 gallon on a volume total) while every zone is off. Notify only, or stop and skip every zone until reset. |
+| Cost per 1,000 gal | Optional. Adds a water-cost sensor in dollars. |
+| Weekly gallon budget | Optional. One alert per week when use goes over it. |
+| Weekly summary | Off. On Monday, at or after the plan hour, one event and a notification if a notify target is set. |
 
 ### Tempest as the reference weather setup
 
@@ -120,7 +127,8 @@ The Advanced step is three collapsed sections. Each numeric override shows its p
 | Efficiency | Sprinkler row |
 | Slope | 0%, the NRCS 0–5% band |
 | Max cycle / soak | Computed from intake and soil. Drip and bubbler soak 0 |
-| Flow and area | Optional. Together they override the precipitation preset (`96.25 × GPM / area`). An entered rate still wins |
+| Flow and area | Optional. Together they override the precipitation preset (`96.25 × GPM / area`). An entered rate still wins. With no area, gallons use the configured GPM, or the learned GPM once it exists |
+| Fixed-timer baseline | Blank uses **15 minutes**, **3 days** a week. Gallons saved is that timer minus this week's use. It is a comparison, not a recommendation |
 
 Plant choices cover St. Augustine, Bermuda, Zoysia, Buffalo, a generic warm-season grass, cool-season grass, shrubs, flower beds, vegetables, trees, drip beds, and native plantings. The short tables and the citations are in `docs/design.md`.
 
@@ -221,11 +229,11 @@ title: Watering schedule
 content: "{{ state_attr('sensor.garden_watering_schedule', 'markdown') }}"
 ```
 
-**Currently watering** is the zone that is on, or `Idle`. Each zone has a **Last run** sensor (state is the result; attributes are when, minutes, net millimeters, gallons, and result) and a **Dormancy** sensor (`active`, `slow`, or `dormant`).
+**Currently watering** is the zone that is on, or `Idle`. Each zone has a **Last run** sensor (state is the result; attributes are when, minutes, net millimeters, gallons, gallons per minute, and result) and a **Dormancy** sensor (`active`, `slow`, or `dormant`).
 
 ### Sample
 
-Computed by `project_week`, not typed by hand. Same design site and the same Monday 13 July 2026 hot-dry day used above (ET0 9.1 mm, Penman-Monteith). St. Augustine, clay loam, spray, full sun, 1000 sq ft, slope blank, July coefficient 0.71, crop ET 6.5 mm, readily available water 10.7 mm. The bucket starts at field capacity (deficit 0; today's ET is already in the deficit the sensor uses, and here that deficit is still 0). Every day is allowed, there is no blackout, and the turf minimum interval is 3 days. Later days repeat that 6.5 mm and add no rain. Clock times are local. A long soak sequence can start the evening of the row's date and finish before the next sunrise. The sensor state for this week is `2 waterings · next 2026-07-15 Front lawn`.
+Computed by `project_week`, not typed by hand. Same design site and the same Monday 13 July 2026 hot-dry day used above (ET0 9.1 mm, Penman-Monteith). St. Augustine, clay loam, spray, full sun, 1000 sq ft, slope blank, July coefficient 0.71, crop ET 6.5 mm, readily available water 10.7 mm. The bucket starts at field capacity (deficit 0; today's ET is already in the deficit the sensor uses, and here that deficit is still 0). Every day is allowed, there is no blackout, and the turf minimum interval is 3 days. Later days repeat that 6.5 mm and add no rain. The nightly cap is 60 valve-on minutes. Clock times are local. A long soak sequence can start the evening of the row's date and finish before the next sunrise. The sensor state for this week is `2 waterings · next 2026-07-15 Front lawn`.
 
 ```text
 Next 7 days. Later days repeat today's crop ET and assume no rain.
@@ -237,11 +245,64 @@ Next 7 days. Later days repeat today's crop ET and assume no rain.
 | 2026-07-15 | Front lawn | 00:23, 01:30, 02:37, 03:44, 04:51, 05:58 | 41 | 0.51 in (13.0 mm) | 532 |  |
 | 2026-07-16 | Front lawn | — | — | — | — | Below RAW (deficit 6.5 mm, RAW 10.7 mm). |
 | 2026-07-17 | Front lawn | — | — | — | — | Minimum 3 days between waterings (2 since the last run). |
-| 2026-07-18 | Front lawn | 21:05, 22:12, 23:19, 00:26, 01:33, 02:40, 03:47, 04:54, 06:00 | 61 | 0.77 in (19.4 mm) | 792 |  |
-| 2026-07-19 | Front lawn | — | — | — | — | Below RAW (deficit 6.5 mm, RAW 10.7 mm). |
+| 2026-07-18 | Front lawn | 21:06, 22:13, 23:20, 00:27, 01:34, 02:41, 03:48, 04:55, 06:01 | 60 | 0.75 in (19.1 mm) | 779 | 1 min carries to the next allowed day. |
+| 2026-07-19 | Front lawn | — | — | — | — | Below RAW (deficit 6.8 mm, RAW 10.7 mm). |
 ```
 
-July 17 is already past readily available water and is still skipped, because the last run was only two days earlier.
+July 17 is already past readily available water and is still skipped, because the last run was only two days earlier. July 18 is the night that used to show 61 minutes. It now stops at 60. The leftover minute would leave the bucket below readily available water, so July 19 does not schedule a one-minute run.
+
+### Three zones, one morning
+
+Same site, same Monday evening, ET0 9.1 mm. Deficits are set so each zone is already due (no week of accumulation). Slope is blank. No blackout, every day allowed, cap 60. Sunrise minus 30 minutes is 06:03.
+
+| Zone | Plant, soil, sprinkler | Area | Deficit | RAW |
+| --- | --- | --- | --- | --- |
+| Front lawn | St. Augustine, clay loam, spray | 1000 sq ft | 11.2 mm | 10.7 mm |
+| Back lawn | St. Augustine, sand, spray | 600 sq ft | 6.0 mm | 5.4 mm |
+| Vegetable bed | Vegetable, sand, spray | 200 sq ft | 9.0 mm | 8.2 mm |
+
+Clay loam soaks 60 minutes, so the other two zones run inside that gap. One valve is on at a time. Valve-on time is 7 + 19 + 28 + 6 = 60. The sensor state is `21 waterings · next 2026-07-13 Back lawn` because later days keep watering as crop ET returns. The first morning is:
+
+```text
+| Date | Zone | Starts | Minutes | Depth | Gallons | Note |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-07-13 | Back lawn | 04:57 | 19 | 0.24 in (6.0 mm) | 148 |  |
+| 2026-07-13 | Front lawn | 04:50, 05:57 | 13 | 0.16 in (4.2 mm) | 169 | 22 min carries to the next allowed day. |
+| 2026-07-13 | Vegetable bed | 05:16 | 28 | 0.35 in (9.0 mm) | 73 |  |
+```
+
+Clock order, local time on 14 July:
+
+| | |
+| --- | --- |
+| 04:50–04:57 | Front lawn, 7 min |
+| 04:57–05:16 | Back lawn, 19 min, during the front soak |
+| 05:16–05:44 | Vegetable bed, 28 min, still inside that soak |
+| 05:57–06:03 | Front lawn, 6 min, ending at sunrise minus the buffer |
+
+## Flow
+
+Each zone can learn its normal gallons per minute from the flow sensor while it runs. The estimate is the median of the last 12 runs. A run more than twice the median, or under 0.4 times it, is reported and left out of the median. Alerts start after 3 runs (change that on the hub).
+
+| Alert | Default | What it means |
+| --- | --- | --- |
+| High flow | +30% | Broken head or a leak in that zone. |
+| Low flow | −25% | Clog, stuck valve, or low pressure. |
+| Idle flow | 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on | Main-line leak. |
+
+Each alert is **Notify only** or **Stop and skip until reset**. Notify is the default. Stop on a zone skips that zone. Stop on idle flow skips every zone. `smart_water.reset_flow_learning` clears the samples, the alert, and the skip. Leave the zone empty to reset the hub. The event is `smart_water_flow_alert`. A repair is raised with the same sentence. A notify target, if set, gets it too.
+
+Sensors: **Learned flow**, **Last run flow** (gal/min), and the existing **Flow** status (`learning`, `ok`, `high_flow`, `low_flow`, `main_leak`). With no area, gallons use the learned rate once it exists. An entered rate still wins over flow and area. Area still wins over GPM for the gallon estimate.
+
+## Water use
+
+Each zone and the hub have a **Water use** sensor: lifetime gallons, `state_class: total_increasing`, unit `gal`, device class water, so the Home Assistant water dashboard can track it. Today, this week, and this month are attributes. They are sums of a date log and are not the long-term statistic, because a counter that resets cannot be `total_increasing`.
+
+Gallons come from the flow sensor when it moved during the cycle. Otherwise they are the computed amount (precipitation × area, or GPM × minutes when there is no area).
+
+**Water saved** is this week's gallons versus the fixed timer (default 15 minutes, 3 days a week). Positive means the plan used less than that timer. It can be negative. **Water cost** exists only after you set a price per 1,000 gallons. It is lifetime dollars, `total_increasing`.
+
+An optional weekly gallon budget fires `smart_water_budget_alert` once per ISO week. **Weekly summary** is off until you turn it on. It fires `smart_water_weekly_summary` on Monday at or after the plan hour, once per week, and notifies when a notify target is set.
 
 ## What a run does
 
@@ -251,7 +312,11 @@ Once per local day, at or after the plan hour, each zone's bucket is updated:
 
 A zone is due when its deficit has reached readily available water (RAW), or a target depth you set. It is not watered a day early. Turf then waits at least 3 days, shrubs and trees 7, vegetables and flowers 2. The scheduled depth is the current deficit times the adjustment percent. Runtime is `60 × (net inches / efficiency) / precipitation rate`, whole minutes unless you turn rounding off. Efficiency is the sprinkler preset (spray 0.60) unless the zone stored an override. Zones created before 0.3.0 stored 1.0.
 
-Max cycle length is `floor(60 × NRCS intake in/hr / precipitation rate)`. Example: clay loam on a 5–8% slope (0.10 in/hr) at 1.5 in/hr is a **4 minute** cycle and a 20 mm deficit is **31 minutes**. One valve at a time; another zone may run during a soak. The timeline is shifted so the last cycle ends by sunrise minus the buffer, after the blackout clips that deadline. If it does not fit, cycle lengths are scaled down and the plan says so. Just before each cycle the executor checks rain since the plan was armed, the skip rules, the time left in the window, and the remaining max-run budget. Each on or off command is confirmed against the entity state and retried up to three times.
+Max cycle length is `floor(60 × NRCS intake in/hr / precipitation rate)`. Example: clay loam on a 5–8% slope (0.10 in/hr) at 1.5 in/hr is a **4 minute** cycle and a 20 mm deficit is **31 minutes**. One valve at a time. Zones are ordered by priority, then by a longer soak, then by name, so one zone's soak can hold another's cycle. The timeline is shifted so the last cycle ends at sunrise minus the buffer. The hourly forecast (`weather.get_forecasts`, type `hourly`) can move that deadline earlier when the dawn hour is at or above the strictest wind limit of the zones that will run. Drip and bubbler do not tighten it. It never moves earlier than the earliest hour. Only tonight uses that forecast; later days in the week sensor are not given invented wind.
+
+The nightly cap (default 60) is valve-on minutes for every zone together. Soak does not count. The planner trims the tail and the schedule sensor never shows more than the cap. Minutes that do not run stay in the bucket. If the zone is still at readily available water, the next allowed day can finish them. If the partial night drops the deficit below that line, the minimum interval starts and the leftover minute does not come back as its own run.
+
+Just before each cycle the executor checks rain since the plan was armed, the skip rules, the time left in the window, and the remaining max-run budget. Each on or off command is confirmed against the entity state and retried up to three times.
 
 ET0 uses FAO-56 Penman-Monteith when humidity and wind are available. Daily solar radiation is the integrated W/m² (or a daily MJ/m² sensor) when that total is above zero, otherwise the Hargreaves radiation estimate. Temperature-only days use Hargreaves ET0. A temperature sensor replaces the forecast high and low once the observed range is at least 0.5 °C, so one reading cannot zero the radiation estimate. Missing temperatures produce no ET0 and the bucket is left alone.
 
@@ -282,15 +347,16 @@ ET0 uses FAO-56 Penman-Monteith when humidity and wind are available. Daily sola
 | `run_now` | Runs that zone's cycle-and-soak now, even when automatic watering is off. Credits the bucket from the time it actually ran. |
 | `stop_all` | Turns off the entity this hub turned on. |
 | `reset_learning` | Sets that zone's moisture factor back to 1 and clears its confidence. |
+| `reset_flow_learning` | Clears learned flow, the alert, and a skip that is waiting for reset. An empty zone resets the whole hub. |
 | `simulate` | Plays a weather week through the planner and returns it. Does not change the stored deficit and does not call an on/off entity. |
 
 A zone is usable when Home Assistant already exposes it as a valve, switch, or input boolean. Your existing controller schedule is unchanged. If it still waters at dawn, Smart Water will not stop it.
 
 ## Entities
 
-Per zone: deficit, readily available water, next planned run, plan reason, plan (scheduled or idle, with runtime, cycles, adjustment, sprinkler, and the on/off entity), flow status, moisture deficit, last run, dormancy, an adjustment number (0–300%), a run-now button, and an enabled switch.
+Per zone: deficit, readily available water, next planned run, plan reason, plan (scheduled or idle, with runtime, cycles, adjustment, sprinkler, and the on/off entity), flow status, learned flow, last-run flow, water use, water saved, moisture deficit, last run, dormancy, an adjustment number (0–300%), a run-now button, and an enabled switch.
 
-Hub: mode, tonight's plan, today's ET0, rain today (effective rain and whether it was ignored), next run (allowed days, blackout, whole-minute rounding), watering schedule, currently watering, and the Automatic watering switch. A simulation hub also has a Simulation sensor and a Run simulation button.
+Hub: mode, tonight's plan, today's ET0, rain today (effective rain and whether it was ignored), next run (allowed days, blackout, whole-minute rounding), watering schedule, currently watering, water use, water saved, water cost when a price is set, and the Automatic watering switch. A simulation hub also has a Simulation sensor and a Run simulation button.
 
 Bucket state, the day's weather accumulation (including rain events), flow totals, adjustment, last run, the learned factor, and the last plan are stored and survive a restart. Storage version stays 1; new keys are filled in when an older file is loaded. On startup, an entity this hub recorded as on is turned off.
 
@@ -305,7 +371,7 @@ Math tests do not import Home Assistant. Config-flow tests need `pytest-homeassi
 ## Limits
 
 - No custom Lovelace card. A markdown card can show the watering schedule or the simulation sensor's `markdown` attribute.
-- A flow `leak` or `low_flow` label does not close a valve.
+- A flow alert notifies, or skips until you reset it, according to the hub action. It does not change another integration's own schedule.
 - Sunrise is a civil approximation (about ten minutes), not a weather-service sunrise.
 - Soil, plant, sprinkler, and sun are chosen per zone. Slope and the other derived numbers are presets until overridden.
 - Drip can ignore weekdays only. The blackout is shared by every zone on the timeline.

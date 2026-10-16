@@ -20,7 +20,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DEFAULT_MAX_RUN_MIN
 from .flow import GALLONS_PER_INCH_SQFT
-from .units import MM_PER_INCH, volume_gallons
+from .units import MM_PER_INCH, rate_gpm, volume_gallons
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -163,6 +163,7 @@ class WateringExecutor:
                 await self.store.async_save()
                 self._poke()
                 flow_before = self._flow_gallons(job)
+                gpm_before = self._flow_gpm(job)
                 try:
                     await self._sleep(minutes * 60.0)
                 finally:
@@ -176,10 +177,19 @@ class WateringExecutor:
                 budget -= minutes
                 flow_after = self._flow_gallons(job)
                 gallons = None
+                gpm = None
                 if flow_before is not None and flow_after is not None and flow_after > flow_before:
                     gallons = flow_after - flow_before
+                    if minutes > 0:
+                        gpm = gallons / minutes
+                else:
+                    gpm_after = self._flow_gpm(job)
+                    pair = [value for value in (gpm_before, gpm_after) if value is not None]
+                    if pair:
+                        gpm = sum(pair) / len(pair)
+                        gallons = gpm * minutes
                 credited = self._credited_mm(job, minutes, net_mm, gallons)
-                await self._report(job, minutes, credited, gallons, "ok")
+                await self._report(job, minutes, credited, gallons, "ok", gpm)
                 if job.soak_after_min > 0 and index < len(jobs) - 1:
                     await self._sleep(job.soak_after_min * 60.0)
         except asyncio.CancelledError:
@@ -225,6 +235,23 @@ class WateringExecutor:
         unit = state.attributes.get("unit_of_measurement")
         return volume_gallons(value, unit)
 
+    def _flow_gpm(self, job: CycleJob) -> float | None:
+        """Instantaneous gal/min when the flow entity is a rate."""
+        if not job.flow_entity or job.flow_kind != "rate":
+            return None
+        state = self.hass.states.get(job.flow_entity)
+        if state is None or state.state in {"unknown", "unavailable", "none", ""}:
+            return None
+        try:
+            value = float(state.state)
+        except (TypeError, ValueError):
+            return None
+        unit = state.attributes.get("unit_of_measurement")
+        try:
+            return rate_gpm(value, unit)
+        except (TypeError, ValueError):
+            return None
+
     def _credited_mm(
         self,
         job: CycleJob,
@@ -252,6 +279,7 @@ class WateringExecutor:
         net_mm: float,
         gallons: float | None,
         result: str,
+        gpm: float | None = None,
     ) -> None:
         if self.on_cycle_done is None:
             return
@@ -261,6 +289,7 @@ class WateringExecutor:
             net_mm=net_mm,
             gallons=gallons,
             result=result,
+            gpm=gpm,
         )
 
     def _poke(self) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "smart_water"
 NAME = "Smart Water"
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 # Retired option key. v0.5 stores the automatic-watering switch in the hub
 # store (default off) and drops this option on migration.
@@ -80,6 +80,18 @@ CONF_SLOW_BELOW_F = "slow_below_f"
 CONF_HEAT_ABOVE_F = "heat_above_f"
 CONF_MAINTENANCE_WATERING = "maintenance_watering"
 CONF_MOISTURE_LEARN = "moisture_learn"
+CONF_FLOW_HIGH_PCT = "flow_high_pct"
+CONF_FLOW_LOW_PCT = "flow_low_pct"
+CONF_FLOW_LEARN_RUNS = "flow_learn_runs"
+CONF_FLOW_IDLE_GPM = "flow_idle_gpm"
+CONF_FLOW_HIGH_ACTION = "flow_high_action"
+CONF_FLOW_LOW_ACTION = "flow_low_action"
+CONF_FLOW_IDLE_ACTION = "flow_idle_action"
+CONF_COST_PER_1000_GAL = "cost_per_1000_gal"
+CONF_WEEKLY_BUDGET_GAL = "weekly_budget_gal"
+CONF_WEEKLY_SUMMARY = "weekly_summary"
+CONF_BASELINE_MINUTES = "baseline_minutes"
+CONF_BASELINE_DAYS = "baseline_days"
 
 MODE_AUTO = "auto"
 MODE_NOTIFY_ONLY = "notify_only"
@@ -95,7 +107,8 @@ DEFAULT_FREEZE_SKIP_F = 40.0
 # Practical recent-rain gate. Not a published hour or depth; both are overridable.
 DEFAULT_RECENT_RAIN_HOURS = 12
 DEFAULT_RECENT_RAIN_MM = 2.5
-# One automatic or manual run cannot leave a zone on longer than this, combined.
+# Valve-on minutes for one night, all zones together. The schedule never
+# shows more than this. Soak time does not count. The rest stays in the bucket.
 DEFAULT_MAX_RUN_MIN = 60
 
 DEFAULT_ELEVATION_M = 219.0
@@ -163,6 +176,7 @@ SERVICE_RUN_NOW = "run_now"
 SERVICE_SIMULATE = "simulate"
 SERVICE_STOP_ALL = "stop_all"
 SERVICE_RESET_LEARNING = "reset_learning"
+SERVICE_RESET_FLOW = "reset_flow_learning"
 
 SERVICES = (
     SERVICE_CALCULATE_PLAN,
@@ -176,7 +190,16 @@ SERVICES = (
     SERVICE_SIMULATE,
     SERVICE_STOP_ALL,
     SERVICE_RESET_LEARNING,
+    SERVICE_RESET_FLOW,
 )
+
+FLOW_ACTION_NOTIFY = "notify"
+FLOW_ACTION_STOP = "stop"
+FLOW_ACTIONS = (FLOW_ACTION_NOTIFY, FLOW_ACTION_STOP)
+
+EVENT_FLOW_ALERT = "smart_water_flow_alert"
+EVENT_BUDGET_ALERT = "smart_water_budget_alert"
+EVENT_WEEKLY_SUMMARY = "smart_water_weekly_summary"
 
 PLATFORMS: list[str] = ["sensor", "switch", "number", "button"]
 

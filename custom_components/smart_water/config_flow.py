@@ -36,6 +36,9 @@ from .const import (
     CONF_ALLOWED_WEEKDAYS,
     CONF_AREA_SQFT,
     CONF_AWC_OVERRIDE,
+    CONF_BASELINE_DAYS,
+    CONF_BASELINE_MINUTES,
+    CONF_COST_PER_1000_GAL,
     CONF_BLACKOUT_END_HOUR,
     CONF_BLACKOUT_START_HOUR,
     CONF_BUCKET,
@@ -47,7 +50,14 @@ from .const import (
     CONF_ELEVATION_M,
     CONF_FIELD_CAPACITY,
     CONF_FLOW_GPM,
+    CONF_FLOW_HIGH_ACTION,
+    CONF_FLOW_HIGH_PCT,
+    CONF_FLOW_IDLE_ACTION,
+    CONF_FLOW_IDLE_GPM,
     CONF_FLOW_KIND,
+    CONF_FLOW_LEARN_RUNS,
+    CONF_FLOW_LOW_ACTION,
+    CONF_FLOW_LOW_PCT,
     CONF_FLOW_LEAK_RATIO,
     CONF_FLOW_LOW_RATIO,
     CONF_FLOW_SENSOR,
@@ -99,6 +109,8 @@ from .const import (
     CONF_UV_SENSOR,
     CONF_VALVE_ENTITY,
     CONF_WEATHER_ENTITY,
+    CONF_WEEKLY_BUDGET_GAL,
+    CONF_WEEKLY_SUMMARY,
     CONF_WIND_HEIGHT_M,
     CONF_WIND_SENSOR,
     CONF_WIND_SKIP_MPH,
@@ -121,6 +133,8 @@ from .const import (
     DEFAULT_SUNRISE_BUFFER_MIN,
     DEFAULT_WIND_HEIGHT_M,
     DOMAIN,
+    FLOW_ACTION_NOTIFY,
+    FLOW_ACTIONS,
     FLOW_KINDS,
     MODE_NOTIFY_ONLY,
     MODES,
@@ -133,6 +147,12 @@ from .const import (
     WEEKDAYS,
 )
 from .discover import EntityHint, discover
+from .flow_learn import (
+    DEFAULT_HIGH_PCT,
+    DEFAULT_IDLE_GPM,
+    DEFAULT_LEARN_RUNS,
+    DEFAULT_LOW_PCT,
+)
 from .presets import preset_placeholders
 from .simulate import BUCKETS, DEFAULT_BUCKET, DEFAULT_SCENARIO, SCENARIOS
 from .soil import PLANT_TYPES, SOIL_TYPES, SUN_EXPOSURES
@@ -171,6 +191,8 @@ _HARDWARE_KEYS = (
     CONF_SOAK_MIN,
     CONF_FLOW_GPM,
     CONF_AREA_SQFT,
+    CONF_BASELINE_MINUTES,
+    CONF_BASELINE_DAYS,
 )
 _MEASURE_KEYS = (
     CONF_PRIORITY,
@@ -217,6 +239,16 @@ _LOCATION_KEYS = (
     CONF_BLACKOUT_START_HOUR,
     CONF_BLACKOUT_END_HOUR,
     CONF_DRIP_IGNORES_SCHEDULE,
+    CONF_FLOW_HIGH_PCT,
+    CONF_FLOW_LOW_PCT,
+    CONF_FLOW_LEARN_RUNS,
+    CONF_FLOW_IDLE_GPM,
+    CONF_FLOW_HIGH_ACTION,
+    CONF_FLOW_LOW_ACTION,
+    CONF_FLOW_IDLE_ACTION,
+    CONF_COST_PER_1000_GAL,
+    CONF_WEEKLY_BUDGET_GAL,
+    CONF_WEEKLY_SUMMARY,
 )
 
 _WEATHER = selector.EntitySelector(selector.EntitySelectorConfig(domain="weather"))
@@ -391,6 +423,24 @@ def _location_fields() -> dict[Any, Any]:
         vol.Optional(CONF_BLACKOUT_START_HOUR): _number(0, 23, 1),
         vol.Optional(CONF_BLACKOUT_END_HOUR): _number(0, 23, 1),
         vol.Required(CONF_DRIP_IGNORES_SCHEDULE, default=False): _BOOL,
+        vol.Required(CONF_FLOW_HIGH_PCT, default=DEFAULT_HIGH_PCT): _number(5, 200, 1, "%"),
+        vol.Required(CONF_FLOW_LOW_PCT, default=DEFAULT_LOW_PCT): _number(5, 90, 1, "%"),
+        vol.Required(CONF_FLOW_LEARN_RUNS, default=DEFAULT_LEARN_RUNS): _number(1, 30, 1),
+        vol.Required(CONF_FLOW_IDLE_GPM, default=DEFAULT_IDLE_GPM): _number(
+            0, 20, 0.1, "gal/min"
+        ),
+        vol.Required(CONF_FLOW_HIGH_ACTION, default=FLOW_ACTION_NOTIFY): _select(
+            FLOW_ACTIONS, "flow_action"
+        ),
+        vol.Required(CONF_FLOW_LOW_ACTION, default=FLOW_ACTION_NOTIFY): _select(
+            FLOW_ACTIONS, "flow_action"
+        ),
+        vol.Required(CONF_FLOW_IDLE_ACTION, default=FLOW_ACTION_NOTIFY): _select(
+            FLOW_ACTIONS, "flow_action"
+        ),
+        vol.Optional(CONF_COST_PER_1000_GAL): _number(0, 100, 0.01, "USD"),
+        vol.Optional(CONF_WEEKLY_BUDGET_GAL): _number(1, 100_000, 1, "gal"),
+        vol.Required(CONF_WEEKLY_SUMMARY, default=False): _BOOL,
     }
 
 
@@ -509,6 +559,8 @@ def _advanced_schema() -> vol.Schema:
                         vol.Optional(CONF_SOAK_MIN): _number(0, 180, 1, "min"),
                         vol.Optional(CONF_FLOW_GPM): _number(0.1, 200, 0.1, "gal/min"),
                         vol.Optional(CONF_AREA_SQFT): _number(1, 1_000_000, 1, "ft²"),
+                        vol.Optional(CONF_BASELINE_MINUTES): _number(1, 180, 1, "min"),
+                        vol.Optional(CONF_BASELINE_DAYS): _number(0, 7, 1, "d"),
                     }
                 ),
                 {"collapsed": True},
@@ -568,7 +620,7 @@ def _has_climate(weather: Any, temperature: Any) -> bool:
 class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
     """Set up a Smart Water hub."""
 
-    VERSION = 4
+    VERSION = 5
     MINOR_VERSION = 1
 
     @staticmethod

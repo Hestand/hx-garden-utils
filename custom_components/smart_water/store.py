@@ -36,6 +36,13 @@ def fresh_zone() -> dict[str, Any]:
         "dormancy": "active",
         "dormancy_mean_f": None,
         "dormancy_detail": "",
+        "gpm_samples": [],
+        "learned_gpm": None,
+        "last_run_gpm": None,
+        "flow_alert": None,
+        "flow_locked": False,
+        "water_total_gal": 0.0,
+        "water_days": {},
     }
 
 
@@ -61,6 +68,9 @@ class SmartWaterStore:
         self.temp_history: list[dict[str, Any]] = []
         self.armed_date: str | None = None
         self.plan_marked_at: str | None = None
+        self.flow_locked = False
+        self.budget_alert_week: str | None = None
+        self.summary_sent_week: str | None = None
 
     async def async_load(self) -> None:
         """Load the last saved state."""
@@ -85,6 +95,9 @@ class SmartWaterStore:
         self.temp_history = list(data.get("temp_history") or [])
         self.armed_date = data.get("armed_date")
         self.plan_marked_at = data.get("plan_marked_at")
+        self.flow_locked = bool(data.get("flow_locked", False))
+        self.budget_alert_week = data.get("budget_alert_week")
+        self.summary_sent_week = data.get("summary_sent_week")
 
     def zone(self, zone_id: str) -> dict[str, Any]:
         """Return mutable state for a zone, creating it at field capacity."""
@@ -130,5 +143,8 @@ class SmartWaterStore:
                 "temp_history": self.temp_history,
                 "armed_date": self.armed_date,
                 "plan_marked_at": self.plan_marked_at,
+                "flow_locked": self.flow_locked,
+                "budget_alert_week": self.budget_alert_week,
+                "summary_sent_week": self.summary_sent_week,
             }
         )
