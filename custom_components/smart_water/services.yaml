@@ -273,3 +273,88 @@ reset_flow_learning:
       description: Zone name. Empty resets every zone and a main-line lock.
       selector:
         text:
+
+start_audit:
+  name: Start catch-cup audit
+  description: >-
+    Run one zone for a set number of minutes so you can catch water in cups.
+    Freeze, wind, rain, and the zone's runtime cap still apply. This is one
+    continuous run, not the usual cycle-and-soak.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name, if you have more than one.
+      selector:
+        text:
+    zone:
+      name: Zone
+      description: Zone name.
+      required: true
+      selector:
+        text:
+    minutes:
+      name: Minutes
+      description: How long to run. A longer request is cut to this zone's nightly cap.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 180
+          step: 1
+          unit_of_measurement: min
+          mode: box
+
+submit_audit:
+  name: Submit catch-cup audit
+  description: >-
+    Enter every cup, including cups that stayed empty. At least 4 readings.
+    Sixteen in a grid is better. Inches need no diameter. Millilitres need
+    the cup diameter. The result is stored as this zone's measured rate and
+    scheduling efficiency.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name, if you have more than one.
+      selector:
+        text:
+    zone:
+      name: Zone
+      description: Zone name.
+      required: true
+      selector:
+        text:
+    readings:
+      name: Cup readings
+      description: Inches or millilitres, separated by commas. Example 0.2, 0.25, 0.3, 0.15.
+      required: true
+      selector:
+        text:
+    unit:
+      name: Unit
+      description: in for inches, ml for millilitres.
+      default: in
+      selector:
+        select:
+          options:
+            - in
+            - ml
+    cup_diameter_in:
+      name: Cup diameter
+      description: Required for millilitres. The inside diameter of the cup, in inches.
+      selector:
+        number:
+          min: 0.5
+          max: 12
+          step: 0.1
+          unit_of_measurement: in
+          mode: box
+    minutes:
+      name: Minutes
+      description: Leave empty to use the minutes from the audit that just ran.
+      selector:
+        number:
+          min: 1
+          max: 180
+          step: 1
+          unit_of_measurement: min
+          mode: box

@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from .balance import apply_daily_balance
 from .flow import expected_gallons
+from .forecast_rain import defer_reason
 from .planner import NightPlan, PlanRequest, ZoneRequest, build_plan
 from .solar import next_sunrise
 from .units import mm_to_inches
@@ -42,6 +43,13 @@ def project_week(
     days: int = 7,
     max_run_min: float | None = None,
     hourly_wind: tuple[tuple[datetime, float], ...] = (),
+    forecast_expected_mm: float = 0.0,
+    forecast_probability_pct: float | None = None,
+    forecast_probability_min: float = 60.0,
+    forecast_defer_max: int = 2,
+    forecast_horizon_days: int = 0,
+    forecast_threshold_mm: float | None = None,
+    defer_days: dict[str, int] | None = None,
 ) -> dict[str, object]:
     """Return ``days``, a short ``summary``, and a markdown table."""
     tz = ZoneInfo(timezone)
@@ -51,6 +59,7 @@ def project_week(
     taw = {zone.zone_id: zone.taw_mm for zone in zones}
     etc = {zone.zone_id: zone.etc_mm for zone in zones}
     rows: list[dict[str, object]] = []
+    waiting = {zone.zone_id: int((defer_days or {}).get(zone.zone_id, 0)) for zone in zones}
 
     for offset in range(days):
         moment = local_now + timedelta(days=offset)
@@ -93,6 +102,20 @@ def project_week(
                     forecast_low_f=None,
                     wind_mph=None,
                 )
+            if forecast_probability_pct is not None:
+                if offset >= forecast_horizon_days:
+                    reason = None
+                else:
+                    reason = defer_reason(
+                        expected_mm=forecast_expected_mm,
+                        probability_pct=forecast_probability_pct,
+                        probability_min=forecast_probability_min,
+                        deficit_mm=deficits[zone.zone_id],
+                        threshold_mm=forecast_threshold_mm,
+                        days_used=waiting.get(zone.zone_id, 0),
+                        max_days=forecast_defer_max,
+                    )
+                current = replace(current, forecast_defer_reason=reason)
             requests.append(current)
         plan = build_plan(
             PlanRequest(
@@ -115,6 +138,11 @@ def project_week(
         )
         rows.append(_day_row(moment.date().isoformat(), plan, areas))
         for zone_plan in plan.zones:
+            if (zone_plan.reason or "").startswith("Deferred for forecast rain"):
+                waiting[zone_plan.zone_id] = waiting.get(zone_plan.zone_id, 0) + 1
+                continue
+            if zone_plan.scheduled:
+                waiting[zone_plan.zone_id] = 0
             if not zone_plan.scheduled:
                 continue
             deficits[zone_plan.zone_id] = max(

@@ -97,6 +97,8 @@ class ZoneRequest:
     target_depth_mm: float | None = None
     currently_raining: bool = False
     flow_locked: bool = False
+    max_run_min: float | None = None
+    forecast_defer_reason: str | None = None
 
 
 def build_zone_request(
@@ -222,6 +224,8 @@ class PlanRequest:
     blackout_start_hour: int | None = None
     blackout_end_hour: int | None = None
     whole_minutes: bool = True
+    # Optional cap on valve-on minutes for every zone together. None means off.
+    # Each zone's own cap lives on ZoneRequest.max_run_min.
     max_run_min: float | None = None
     hourly_wind: tuple[tuple[datetime, float], ...] = ()
 
@@ -335,6 +339,7 @@ class _Job:
     priority: int
     next_index: int = 0
     ready_min: int = 0
+    max_run_min: float | None = None
 
 
 def _scale_cycles(
@@ -535,6 +540,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
                 dormancy_detail=zone.dormancy_detail,
                 maintenance_due=zone.maintenance_due,
                 flow_locked=zone.flow_locked,
+                forecast_defer_reason=zone.forecast_defer_reason,
             )
         )
         reason = due_reason if blocked_reason is None else blocked_reason
@@ -608,6 +614,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
                     cycles=list(cycles),
                     soak_min=soak,
                     priority=zone.priority,
+                    max_run_min=zone.max_run_min,
                 )
             )
 
@@ -668,10 +675,15 @@ def build_plan(request: PlanRequest) -> NightPlan:
             else:
                 warnings.append("Runtimes were trimmed to fit the watering window.")
 
+    events, zone_deferred = _trim_zone_caps(events, whole=request.whole_minutes)
+    if zone_deferred > 0:
+        warnings.append(
+            f"A zone cap left {zone_deferred:.0f} min in the bucket for the next allowed day."
+        )
     events, deferred = _trim_run_cap(events, request.max_run_min, whole=request.whole_minutes)
     if deferred > 0 and request.max_run_min is not None:
         warnings.append(
-            f"Valve-on time is capped at {request.max_run_min:.0f} min tonight. "
+            f"Valve-on time for all zones is capped at {request.max_run_min:.0f} min tonight. "
             f"{deferred:.0f} min stays in the bucket for the next allowed day."
         )
     timeline = _place(events, request_finish)
@@ -686,7 +698,8 @@ def build_plan(request: PlanRequest) -> NightPlan:
     final_zones: list[ZonePlan] = []
     for zone_plan, job in _zip_jobs(zone_plans, jobs):
         if zone_plan.zone_id not in scheduled_ids:
-            if job is not None and request.max_run_min is not None:
+            cap_limit = _cap_that_bound(job, request.max_run_min)
+            if job is not None and cap_limit is not None:
                 missed = float(sum(job.cycles))
                 final_zones.append(
                     ZonePlan(
@@ -696,7 +709,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
                         scheduled=False,
                         reason=(
                             f"Deferred to the next allowed day. Today's valve time "
-                            f"is already at the {request.max_run_min:.0f} min cap."
+                            f"is already at the {cap_limit:.0f} min cap."
                         ),
                         deficit_mm=zone_plan.deficit_mm,
                         raw_mm=zone_plan.raw_mm,
@@ -731,9 +744,10 @@ def build_plan(request: PlanRequest) -> NightPlan:
             net_mm = zone_plan.net_mm
         reason = zone_plan.reason
         if carried >= 0.5:
+            cap_limit = _cap_that_bound(job, request.max_run_min)
+            cap_text = "" if cap_limit is None else f" (cap {cap_limit:.0f} min)"
             reason = (
-                f"{reason} {carried:.0f} min carries to the next allowed day "
-                f"(cap {request.max_run_min:.0f} min)."
+                f"{reason} {carried:.0f} min carries to the next allowed day{cap_text}."
             ).strip()
         final_zones.append(
             ZonePlan(
@@ -780,6 +794,49 @@ def build_plan(request: PlanRequest) -> NightPlan:
 
 def _zone_in_jobs(zone_id: str, jobs: list[_Job]) -> bool:
     return any(job.zone.zone_id == zone_id for job in jobs)
+
+
+def _cap_that_bound(job: _Job | None, hub_cap: float | None) -> float | None:
+    """The cap that actually shortened this zone, if one did."""
+    if job is None:
+        return hub_cap
+    own = float(sum(job.cycles))
+    if job.max_run_min is not None and own > job.max_run_min + 0.1:
+        return job.max_run_min
+    return hub_cap if hub_cap is not None else job.max_run_min
+
+
+def _trim_zone_caps(
+    events: list[tuple[_Job, int, int, int]],
+    *,
+    whole: bool,
+) -> tuple[list[tuple[_Job, int, int, int]], float]:
+    """Trim each zone to its own valve-on cap. A missing cap leaves it alone."""
+    used: dict[int, float] = {}
+    kept: list[tuple[_Job, int, int, int]] = []
+    deferred = 0.0
+    for job, cycle_index, start, end in events:
+        duration = float(end - start)
+        cap = job.max_run_min
+        if cap is None or cap <= 0:
+            kept.append((job, cycle_index, start, end))
+            continue
+        room = cap - used.get(id(job), 0.0)
+        if room < (1.0 if whole else 0.5):
+            deferred += duration
+            continue
+        if duration > room + 1e-6:
+            allowed = int(room) if whole else round(room, 1)
+            if allowed < (1 if whole else 0.5):
+                deferred += duration
+                continue
+            kept.append((job, cycle_index, start, start + allowed))
+            deferred += duration - allowed
+            used[id(job)] = used.get(id(job), 0.0) + allowed
+            continue
+        kept.append((job, cycle_index, start, end))
+        used[id(job)] = used.get(id(job), 0.0) + duration
+    return kept, deferred
 
 
 def _trim_run_cap(

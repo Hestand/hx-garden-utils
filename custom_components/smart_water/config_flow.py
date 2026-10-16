@@ -61,8 +61,15 @@ from .const import (
     CONF_FLOW_LEAK_RATIO,
     CONF_FLOW_LOW_RATIO,
     CONF_FLOW_SENSOR,
+    CONF_FORECAST_DEFER_DAYS,
+    CONF_FORECAST_HOURS,
+    CONF_FORECAST_PROBABILITY_PCT,
     CONF_FORECAST_SKIP_MM,
+    CONF_FREEZE_ALERT,
+    CONF_FREEZE_ALERT_F,
     CONF_FREEZE_SKIP_F,
+    CONF_HARD_FREEZE_F,
+    CONF_HUB_NIGHTLY_CAP_MIN,
     CONF_HEAT_ABOVE_F,
     CONF_HUMIDITY_SENSOR,
     CONF_INTAKE_IN_HR,
@@ -114,6 +121,7 @@ from .const import (
     CONF_WIND_HEIGHT_M,
     CONF_WIND_SENSOR,
     CONF_WIND_SKIP_MPH,
+    CONF_ZONE_MAX_RUN_MIN,
     DEFAULT_ELEVATION_M,
     DEFAULT_FREEZE_SKIP_F,
     DEFAULT_MAX_RUN_MIN,
@@ -147,6 +155,13 @@ from .const import (
     WEEKDAYS,
 )
 from .discover import EntityHint, discover
+from .forecast_rain import (
+    DEFAULT_FORECAST_DEFER_DAYS,
+    DEFAULT_FORECAST_HOURS,
+    DEFAULT_FORECAST_PROBABILITY_PCT,
+    DEFAULT_FREEZE_ALERT_F,
+    DEFAULT_HARD_FREEZE_F,
+)
 from .flow_learn import (
     DEFAULT_HIGH_PCT,
     DEFAULT_IDLE_GPM,
@@ -193,6 +208,7 @@ _HARDWARE_KEYS = (
     CONF_AREA_SQFT,
     CONF_BASELINE_MINUTES,
     CONF_BASELINE_DAYS,
+    CONF_MAX_RUN_MIN,
 )
 _MEASURE_KEYS = (
     CONF_PRIORITY,
@@ -235,7 +251,14 @@ _LOCATION_KEYS = (
     CONF_FREEZE_SKIP_F,
     CONF_RECENT_RAIN_HOURS,
     CONF_RECENT_RAIN_MM,
-    CONF_MAX_RUN_MIN,
+    CONF_ZONE_MAX_RUN_MIN,
+    CONF_HUB_NIGHTLY_CAP_MIN,
+    CONF_FORECAST_PROBABILITY_PCT,
+    CONF_FORECAST_DEFER_DAYS,
+    CONF_FORECAST_HOURS,
+    CONF_FREEZE_ALERT,
+    CONF_FREEZE_ALERT_F,
+    CONF_HARD_FREEZE_F,
     CONF_BLACKOUT_START_HOUR,
     CONF_BLACKOUT_END_HOUR,
     CONF_DRIP_IGNORES_SCHEDULE,
@@ -417,8 +440,25 @@ def _location_fields() -> dict[Any, Any]:
         vol.Required(CONF_RECENT_RAIN_MM, default=DEFAULT_RECENT_RAIN_MM): _number(
             0, 50, 0.1, "mm"
         ),
-        vol.Required(CONF_MAX_RUN_MIN, default=DEFAULT_MAX_RUN_MIN): _number(
+        vol.Required(CONF_ZONE_MAX_RUN_MIN, default=DEFAULT_MAX_RUN_MIN): _number(
             1, 240, 1, "min"
+        ),
+        vol.Optional(CONF_HUB_NIGHTLY_CAP_MIN): _number(1, 600, 1, "min"),
+        vol.Required(
+            CONF_FORECAST_PROBABILITY_PCT, default=DEFAULT_FORECAST_PROBABILITY_PCT
+        ): _number(0, 100, 1, "%"),
+        vol.Required(
+            CONF_FORECAST_DEFER_DAYS, default=DEFAULT_FORECAST_DEFER_DAYS
+        ): _number(0, 7, 1, "d"),
+        vol.Required(CONF_FORECAST_HOURS, default=DEFAULT_FORECAST_HOURS): _number(
+            1, 72, 1, "h"
+        ),
+        vol.Required(CONF_FREEZE_ALERT, default=True): _BOOL,
+        vol.Required(CONF_FREEZE_ALERT_F, default=DEFAULT_FREEZE_ALERT_F): _number(
+            0, 50, 1, "°F"
+        ),
+        vol.Required(CONF_HARD_FREEZE_F, default=DEFAULT_HARD_FREEZE_F): _number(
+            0, 40, 1, "°F"
         ),
         vol.Optional(CONF_BLACKOUT_START_HOUR): _number(0, 23, 1),
         vol.Optional(CONF_BLACKOUT_END_HOUR): _number(0, 23, 1),
@@ -561,6 +601,7 @@ def _advanced_schema() -> vol.Schema:
                         vol.Optional(CONF_AREA_SQFT): _number(1, 1_000_000, 1, "ft²"),
                         vol.Optional(CONF_BASELINE_MINUTES): _number(1, 180, 1, "min"),
                         vol.Optional(CONF_BASELINE_DAYS): _number(0, 7, 1, "d"),
+                        vol.Optional(CONF_MAX_RUN_MIN): _number(1, 240, 1, "min"),
                     }
                 ),
                 {"collapsed": True},
@@ -620,7 +661,7 @@ def _has_climate(weather: Any, temperature: Any) -> bool:
 class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
     """Set up a Smart Water hub."""
 
-    VERSION = 5
+    VERSION = 6
     MINOR_VERSION = 1
 
     @staticmethod

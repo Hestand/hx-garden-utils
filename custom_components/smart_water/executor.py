@@ -18,7 +18,6 @@ from typing import Any, Awaitable, Callable
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .const import DEFAULT_MAX_RUN_MIN
 from .flow import GALLONS_PER_INCH_SQFT
 from .units import MM_PER_INCH, rate_gpm, volume_gallons
 
@@ -63,6 +62,7 @@ class CycleJob:
     marked_at: datetime
     soak_after_min: float = 0.0
     manual: bool = False
+    zone_cap_min: float | None = None
 
 
 class WateringExecutor:
@@ -80,7 +80,7 @@ class WateringExecutor:
         self.rain_since: Callable[[datetime], float] | None = None
         self.on_cycle_done: Callable[..., Awaitable[None]] | None = None
         self.on_status: Callable[[], None] | None = None
-        self.max_run_min_fn: Callable[[], float] | None = None
+        self.hub_cap_fn: Callable[[], float | None] | None = None
 
     async def async_quiesce(self) -> None:
         """Turn off the entity this hub left on, if it recorded one."""
@@ -111,7 +111,9 @@ class WateringExecutor:
         self._task = asyncio.create_task(self._run(jobs))
 
     async def _run(self, jobs: list[CycleJob]) -> None:
-        budget = self._cap()
+        hub_cap = self._hub_cap()
+        hub_used = 0.0
+        zone_used: dict[str, float] = {}
         scales: dict[str, float] = {}
         try:
             for index, job in enumerate(jobs):
@@ -142,15 +144,36 @@ class WateringExecutor:
                     if minutes > remaining:
                         net_mm *= remaining / minutes
                         minutes = remaining
-                if budget <= 0:
-                    await self._report(job, 0.0, 0.0, None, "Run reached the maximum runtime.")
-                    break
-                if minutes > budget:
-                    net_mm *= budget / minutes
-                    minutes = budget
-                if minutes < 0.5:
-                    await self._report(job, 0.0, 0.0, None, "Remaining runtime is under half a minute.")
+                zone_before = zone_used.get(job.zone_id, 0.0)
+                room = minutes
+                if job.zone_cap_min is not None:
+                    room = min(room, job.zone_cap_min - zone_before)
+                if hub_cap is not None:
+                    room = min(room, hub_cap - hub_used)
+                if room < 0.5:
+                    hub_left = None if hub_cap is None else hub_cap - hub_used
+                    zone_left = (
+                        None
+                        if job.zone_cap_min is None
+                        else job.zone_cap_min - zone_before
+                    )
+                    if hub_left is not None and hub_left < 0.5:
+                        await self._report(
+                            job, 0.0, 0.0, None, "Run reached the nightly maximum runtime."
+                        )
+                        break
+                    if zone_left is not None and zone_left < 0.5:
+                        await self._report(
+                            job, 0.0, 0.0, None, "Run reached this zone's maximum runtime."
+                        )
+                        continue
+                    await self._report(
+                        job, 0.0, 0.0, None, "Remaining runtime is under half a minute."
+                    )
                     continue
+                if minutes > room:
+                    net_mm *= room / minutes
+                    minutes = room
                 turned_on = await self._turn(job.entity_id, on=True)
                 if not turned_on:
                     await self._report(
@@ -174,7 +197,8 @@ class WateringExecutor:
                     self.current_name = None
                     await self.store.async_save()
                     self._poke()
-                budget -= minutes
+                hub_used += minutes
+                zone_used[job.zone_id] = zone_before + minutes
                 flow_after = self._flow_gallons(job)
                 gallons = None
                 gpm = None
@@ -203,10 +227,14 @@ class WateringExecutor:
             self._poke()
             raise
 
-    def _cap(self) -> float:
-        if self.max_run_min_fn is None:
-            return float(DEFAULT_MAX_RUN_MIN)
-        return max(0.0, float(self.max_run_min_fn()))
+    def _hub_cap(self) -> float | None:
+        """All-zones valve budget for this sequence. None means no hub total."""
+        if self.hub_cap_fn is None:
+            return None
+        value = self.hub_cap_fn()
+        if value is None:
+            return None
+        return max(0.0, float(value))
 
     def _now(self, reference: datetime) -> datetime:
         if reference.tzinfo is None:

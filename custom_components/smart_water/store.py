@@ -43,6 +43,14 @@ def fresh_zone() -> dict[str, Any]:
         "flow_locked": False,
         "water_total_gal": 0.0,
         "water_days": {},
+        "forecast_defer_days": 0,
+        "forecast_defer_last": None,
+        "bucket_history": [],
+        "audit_history": [],
+        "audit_pending": None,
+        "measured_precipitation_rate_in_hr": None,
+        "measured_efficiency": None,
+        "measured_du_lq": None,
     }
 
 
@@ -71,6 +79,8 @@ class SmartWaterStore:
         self.flow_locked = False
         self.budget_alert_week: str | None = None
         self.summary_sent_week: str | None = None
+        self.freeze_alert_key: str | None = None
+        self.freeze_alert_detail: str | None = None
 
     async def async_load(self) -> None:
         """Load the last saved state."""
@@ -98,6 +108,8 @@ class SmartWaterStore:
         self.flow_locked = bool(data.get("flow_locked", False))
         self.budget_alert_week = data.get("budget_alert_week")
         self.summary_sent_week = data.get("summary_sent_week")
+        self.freeze_alert_key = data.get("freeze_alert_key")
+        self.freeze_alert_detail = data.get("freeze_alert_detail")
 
     def zone(self, zone_id: str) -> dict[str, Any]:
         """Return mutable state for a zone, creating it at field capacity."""
@@ -146,5 +158,7 @@ class SmartWaterStore:
                 "flow_locked": self.flow_locked,
                 "budget_alert_week": self.budget_alert_week,
                 "summary_sent_week": self.summary_sent_week,
+                "freeze_alert_key": self.freeze_alert_key,
+                "freeze_alert_detail": self.freeze_alert_detail,
             }
         )

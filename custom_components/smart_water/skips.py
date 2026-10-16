@@ -45,6 +45,7 @@ class SkipInputs:
     maintenance_due: bool = False
     include_schedule: bool = True
     flow_locked: bool = False
+    forecast_defer_reason: str | None = None
 
 
 def safety_reason(inputs: SkipInputs) -> str | None:
@@ -104,6 +105,8 @@ def skip_reason(inputs: SkipInputs) -> str | None:
     safety = safety_reason(inputs)
     if safety:
         return safety
+    if inputs.forecast_defer_reason and inputs.due:
+        return inputs.forecast_defer_reason
     if inputs.forecast_skip:
         return f"Skipped because forecast rain is {inputs.forecast_mm:.1f} mm."
     if inputs.include_schedule:

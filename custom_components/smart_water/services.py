@@ -15,7 +15,7 @@ import yaml
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util import dt as dt_util
 
 from .balance import clamp_deficit, root_zone
@@ -39,7 +39,9 @@ from .const import (
     SERVICE_RESET_LEARNING,
     SERVICE_SIMULATE,
     SERVICE_SKIP_ZONE,
+    SERVICE_START_AUDIT,
     SERVICE_STOP_ALL,
+    SERVICE_SUBMIT_AUDIT,
     SERVICES,
 )
 from .simulate import BUCKETS, SCENARIOS
@@ -398,7 +400,82 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
+
+    async def start_audit(call: ServiceCall) -> None:
+        """Run a zone for a catch-cup test. Freeze, wind, and rain still apply."""
+        _entry, coordinator, zone_id = _find_zone(
+            hass, call.data["zone"], call.data.get("hub")
+        )
+        try:
+            await coordinator.async_start_audit(zone_id, float(call.data["minutes"]))
+        except HomeAssistantError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def submit_audit(call: ServiceCall) -> dict[str, Any]:
+        """Turn cup readings into a rate, DU_lq, and scheduling efficiency."""
+        _entry, coordinator, zone_id = _find_zone(
+            hass, call.data["zone"], call.data.get("hub")
+        )
+        try:
+            readings = _cup_readings(call.data["readings"])
+        except (TypeError, ValueError) as err:
+            raise ServiceValidationError(str(err)) from err
+        try:
+            return await coordinator.async_submit_audit(
+                zone_id,
+                readings,
+                unit=str(call.data.get("unit") or "in"),
+                cup_diameter_in=call.data.get("cup_diameter_in"),
+                minutes=call.data.get("minutes"),
+            )
+        except HomeAssistantError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    minutes = vol.All(vol.Coerce(float), vol.Range(min=1, max=180))
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_START_AUDIT,
+        start_audit,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Required("zone"): str,
+                vol.Required("minutes"): minutes,
+            }
+        ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SUBMIT_AUDIT,
+        submit_audit,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Required("zone"): str,
+                vol.Required("readings"): vol.Any(str, [vol.Coerce(float)]),
+                vol.Optional("unit", default="in"): vol.In(
+                    ["in", "inch", "inches", "ml", "mL"]
+                ),
+                vol.Optional("cup_diameter_in"): vol.All(
+                    vol.Coerce(float), vol.Range(min=0.5, max=12)
+                ),
+                vol.Optional("minutes"): minutes,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     _LOGGER.debug("Registered Smart Water services")
+
+
+def _cup_readings(value: Any) -> list[float]:
+    """Accept a list of numbers or a comma-separated string."""
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.replace(";", ",").split(",")]
+        parts = [part for part in parts if part]
+        return [float(part) for part in parts]
+    if isinstance(value, list):
+        return [float(part) for part in value]
+    raise ValueError("Cup readings must be a list or a comma-separated string.")
 
 
 def _parse_days(value: Any) -> list[dict[str, Any]] | None:

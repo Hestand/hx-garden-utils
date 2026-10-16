@@ -248,6 +248,18 @@ def test_fractional_runtime_stays_off_the_whole_minute_grid() -> None:
     assert all(isinstance(minutes, float) for minutes in plan.zones[0].cycles)
 
 
+def test_per_zone_cap_does_not_limit_the_other_zone() -> None:
+    """One zone's 10-minute cap leaves the other zone at its full runtime."""
+    front = _zone(zone_id="front", name="Front", max_run_min=10, priority=1)
+    back = _zone(zone_id="back", name="Back", priority=2)
+    plan = build_plan(_request(front, back, max_run_min=None))
+    by_name = {zone.name: zone for zone in plan.zones}
+    assert by_name["Front"].runtime_min <= 10
+    assert by_name["Front"].carried_min > 0
+    assert by_name["Back"].runtime_min > 10
+    assert sum(event.duration_min for event in plan.timeline if event.zone_id == "back") > 10
+
+
 def test_nightly_valve_cap_keeps_the_schedule_at_or_under_60() -> None:
     """A 63-minute sequence is trimmed to the cap and the last cycle still ends at dawn."""
     zone = _zone(

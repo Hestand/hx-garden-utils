@@ -66,7 +66,14 @@
               "freeze_skip_f": "Skip when temperature is at or below",
               "recent_rain_hours": "Recent rain window",
               "recent_rain_mm": "Skip when recent rain is at least",
-              "max_run_min": "Maximum valve-on minutes per night",
+              "zone_max_run_min": "Maximum valve-on minutes per zone",
+              "hub_nightly_cap_min": "Optional cap for all zones together",
+              "forecast_probability_pct": "Forecast rain confidence",
+              "forecast_defer_days": "Days to wait for forecast rain",
+              "forecast_hours": "Forecast window",
+              "freeze_alert": "Freeze alerts",
+              "freeze_alert_f": "Freeze alert at or below",
+              "hard_freeze_f": "Hard freeze at or below",
               "flow_high_pct": "High flow alert",
               "flow_low_pct": "Low flow alert",
               "flow_learn_runs": "Runs before flow alerts",
@@ -83,7 +90,7 @@
               "latitude": "Leave empty to use Home Assistant's location. Set both latitude and longitude, or neither.",
               "longitude": "Leave empty to use Home Assistant's location.",
               "notify_target": "Example: mobile_app_phone, or notify.mobile_app_phone. Empty sends nothing.",
-              "forecast_skip_mm": "Optional. Leave empty to ignore the forecast. Forecast rain is not counted as rain that already fell.",
+              "forecast_skip_mm": "Optional depth. Leave empty to wait only when expected rain covers the zone's deficit. Forecast rain is never added to the soil bucket.",
               "earliest_hour": "Local hour on the morning of the run. Empty means the plan only has to finish by sunrise.",
               "round_minutes": "On keeps every cycle a whole minute. Off keeps tenths of a minute.",
               "allowed_weekdays": "Every day is selected by default. Clear a day to skip it. An empty selection waters no day.",
@@ -93,7 +100,14 @@
               "freeze_skip_f": "Default 40\u00b0F (Oklahoma State HLA-6610). Uses the current temperature or the forecast low.",
               "recent_rain_hours": "Default 12 hours. A practical window, not a published cutoff.",
               "recent_rain_mm": "Default 2.5 mm (0.1 in) inside that window.",
-              "max_run_min": "Default 60. Valve-on minutes for one night, all zones together. Soak time does not count. The schedule never shows more than this. The rest stays in the bucket.",
+              "zone_max_run_min": "Default 60. Valve-on minutes for one zone tonight, not all zones together. Soak time does not count. The rest stays in the bucket.",
+              "hub_nightly_cap_min": "Leave empty. Set this only to cap every zone's valve-on time together.",
+              "forecast_probability_pct": "Default 60%. Only forecast slots at or above this chance count. Expected rain is that chance times the amount.",
+              "forecast_defer_days": "Default 2 mornings. After that, water at the next window even if the forecast still looks wet.",
+              "forecast_hours": "Default 48 hours. Used for forecast rain and freeze alerts.",
+              "freeze_alert": "On by default. One notice per cold snap, separate from the 40°F watering skip.",
+              "freeze_alert_f": "Default 32°F. Advises protecting the backflow preventer and exposed pipes.",
+              "hard_freeze_f": "Default 28°F. The message says to shut off and drain the irrigation.",
               "flow_high_pct": "Default 30% above the learned gallons per minute. A broken head or a leak.",
               "flow_low_pct": "Default 25% below the learned gallons per minute. A clog, a stuck valve, or low pressure.",
               "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median.",
@@ -144,7 +158,14 @@
               "freeze_skip_f": "Skip when temperature is at or below",
               "recent_rain_hours": "Recent rain window",
               "recent_rain_mm": "Skip when recent rain is at least",
-              "max_run_min": "Maximum valve-on minutes per night",
+              "zone_max_run_min": "Maximum valve-on minutes per zone",
+              "hub_nightly_cap_min": "Optional cap for all zones together",
+              "forecast_probability_pct": "Forecast rain confidence",
+              "forecast_defer_days": "Days to wait for forecast rain",
+              "forecast_hours": "Forecast window",
+              "freeze_alert": "Freeze alerts",
+              "freeze_alert_f": "Freeze alert at or below",
+              "hard_freeze_f": "Hard freeze at or below",
               "flow_high_pct": "High flow alert",
               "flow_low_pct": "Low flow alert",
               "flow_learn_runs": "Runs before flow alerts",
@@ -159,7 +180,7 @@
             "data_description": {
               "latitude": "Leave empty to use Home Assistant's location. Set both latitude and longitude, or neither.",
               "longitude": "Leave empty to use Home Assistant's location.",
-              "forecast_skip_mm": "Optional. Leave empty to ignore the forecast. Forecast rain is not counted as rain that already fell.",
+              "forecast_skip_mm": "Optional depth. Leave empty to wait only when expected rain covers the zone's deficit. Forecast rain is never added to the soil bucket.",
               "allowed_weekdays": "Every day is selected by default. Clear a day to skip it. An empty selection waters no day.",
               "blackout_start_hour": "First local hour when watering is not allowed. Leave empty for no blackout.",
               "blackout_end_hour": "First local hour when watering is allowed again.",
@@ -167,7 +188,14 @@
               "freeze_skip_f": "Default 40\u00b0F (Oklahoma State HLA-6610). Uses the current temperature or the forecast low.",
               "recent_rain_hours": "Default 12 hours. A practical window, not a published cutoff.",
               "recent_rain_mm": "Default 2.5 mm (0.1 in) inside that window.",
-              "max_run_min": "Default 60. Valve-on minutes for one night, all zones together. Soak time does not count. The schedule never shows more than this. The rest stays in the bucket.",
+              "zone_max_run_min": "Default 60. Valve-on minutes for one zone tonight, not all zones together. Soak time does not count. The rest stays in the bucket.",
+              "hub_nightly_cap_min": "Leave empty. Set this only to cap every zone's valve-on time together.",
+              "forecast_probability_pct": "Default 60%. Only forecast slots at or above this chance count. Expected rain is that chance times the amount.",
+              "forecast_defer_days": "Default 2 mornings. After that, water at the next window even if the forecast still looks wet.",
+              "forecast_hours": "Default 48 hours. Used for forecast rain and freeze alerts.",
+              "freeze_alert": "On by default. One notice per cold snap, separate from the 40°F watering skip.",
+              "freeze_alert_f": "Default 32°F. Advises protecting the backflow preventer and exposed pipes.",
+              "hard_freeze_f": "Default 28°F. The message says to shut off and drain the irrigation.",
               "flow_high_pct": "Default 30% above the learned gallons per minute. A broken head or a leak.",
               "flow_low_pct": "Default 25% below the learned gallons per minute. A clog, a stuck valve, or low pressure.",
               "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median.",
@@ -257,7 +285,14 @@
               "freeze_skip_f": "Skip when temperature is at or below",
               "recent_rain_hours": "Recent rain window",
               "recent_rain_mm": "Skip when recent rain is at least",
-              "max_run_min": "Maximum valve-on minutes per night",
+              "zone_max_run_min": "Maximum valve-on minutes per zone",
+              "hub_nightly_cap_min": "Optional cap for all zones together",
+              "forecast_probability_pct": "Forecast rain confidence",
+              "forecast_defer_days": "Days to wait for forecast rain",
+              "forecast_hours": "Forecast window",
+              "freeze_alert": "Freeze alerts",
+              "freeze_alert_f": "Freeze alert at or below",
+              "hard_freeze_f": "Hard freeze at or below",
               "flow_high_pct": "High flow alert",
               "flow_low_pct": "Low flow alert",
               "flow_learn_runs": "Runs before flow alerts",
@@ -271,7 +306,7 @@
             },
             "data_description": {
               "notify_target": "Example: mobile_app_phone, or notify.mobile_app_phone. Empty sends nothing.",
-              "forecast_skip_mm": "Optional. Leave empty to ignore the forecast. Forecast rain is not counted as rain that already fell.",
+              "forecast_skip_mm": "Optional depth. Leave empty to wait only when expected rain covers the zone's deficit. Forecast rain is never added to the soil bucket.",
               "allowed_weekdays": "Every day is selected by default. Clear a day to skip it. An empty selection waters no day.",
               "drip_ignores_schedule": "Drip may skip the weekday check. The blackout still applies. Off by default.",
               "blackout_start_hour": "First local hour when watering is not allowed. Leave empty for no blackout.",
@@ -279,7 +314,14 @@
               "freeze_skip_f": "Default 40\u00b0F (Oklahoma State HLA-6610). Uses the current temperature or the forecast low.",
               "recent_rain_hours": "Default 12 hours. A practical window, not a published cutoff.",
               "recent_rain_mm": "Default 2.5 mm (0.1 in) inside that window.",
-              "max_run_min": "Default 60. Valve-on minutes for one night, all zones together. Soak time does not count. The schedule never shows more than this. The rest stays in the bucket.",
+              "zone_max_run_min": "Default 60. Valve-on minutes for one zone tonight, not all zones together. Soak time does not count. The rest stays in the bucket.",
+              "hub_nightly_cap_min": "Leave empty. Set this only to cap every zone's valve-on time together.",
+              "forecast_probability_pct": "Default 60%. Only forecast slots at or above this chance count. Expected rain is that chance times the amount.",
+              "forecast_defer_days": "Default 2 mornings. After that, water at the next window even if the forecast still looks wet.",
+              "forecast_hours": "Default 48 hours. Used for forecast rain and freeze alerts.",
+              "freeze_alert": "On by default. One notice per cold snap, separate from the 40°F watering skip.",
+              "freeze_alert_f": "Default 32°F. Advises protecting the backflow preventer and exposed pipes.",
+              "hard_freeze_f": "Default 28°F. The message says to shut off and drain the irrigation.",
               "flow_high_pct": "Default 30% above the learned gallons per minute. A broken head or a leak.",
               "flow_low_pct": "Default 25% below the learned gallons per minute. A clog, a stuck valve, or low pressure.",
               "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median.",
@@ -378,7 +420,8 @@
                 "flow_gpm": "Total flow",
                 "area_sqft": "Area",
                 "baseline_minutes": "Fixed-timer minutes",
-                "baseline_days": "Fixed-timer days per week"
+                "baseline_days": "Fixed-timer days per week",
+                "max_run_min": "Maximum valve-on minutes"
               },
               "data_description": {
                 "precipitation_rate_in_hr": "Preset {precip} in/hr. Leave blank to use it. An entered rate wins over flow and area.",
@@ -389,7 +432,8 @@
                 "flow_gpm": "Leave blank unless you want the rate calculated from flow and area.",
                 "area_sqft": "Used with flow to compute inches per hour (96.25 \u00d7 GPM / area). Also used for the flow check.",
                 "baseline_minutes": "Blank uses 15 minutes. This is a comparison, not a recommendation.",
-                "baseline_days": "Blank uses 3 days a week. Gallons saved is this timer minus actual use."
+                "baseline_days": "Blank uses 3 days a week. Gallons saved is this timer minus actual use.",
+                "max_run_min": "Blank uses the hub's per-zone cap, 60 minutes unless you changed it."
               }
             },
             "measurement_overrides": {
@@ -679,12 +723,28 @@
     "reset_flow_learning": {
       "name": "Reset flow learning",
       "description": "Clear learned flow, the flow alert, and a skip that is waiting for reset."
+    },
+    "start_audit": {
+      "name": "Start catch-cup audit",
+      "description": "Run a zone for a set time so you can measure cups. Safety and the runtime cap still apply."
+    },
+    "submit_audit": {
+      "name": "Submit catch-cup audit",
+      "description": "Enter cup readings to store a measured precipitation rate and distribution uniformity."
     }
   },
   "issues": {
     "flow_alert": {
       "title": "Flow alert for {name}",
       "description": "{detail} Reset flow learning when the zone should run again."
+    },
+    "freeze_alert": {
+      "title": "Freeze in the forecast",
+      "description": "{detail}"
+    },
+    "hard_freeze_alert": {
+      "title": "Hard freeze in the forecast",
+      "description": "{detail}"
     }
   }
 }

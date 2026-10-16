@@ -291,7 +291,7 @@ async def test_v1_entry_migrates_without_changing_stored_overrides(
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 5
+    assert entry.version == 6
     assert entry.minor_version == 1
     zone = next(iter(entry.subentries.values()))
     assert zone.data[CONF_EFFICIENCY] == 1.0
@@ -353,7 +353,34 @@ async def test_v4_custom_days_survive_the_v5_bump(hass: HomeAssistant) -> None:
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 5
+    assert entry.version == 6
+    assert entry.options[CONF_ALLOWED_WEEKDAYS] == ["mon", "thu"]
+
+
+async def test_v5_hub_cap_becomes_a_per_zone_default(hass: HomeAssistant) -> None:
+    """An old all-zones cap becomes the per-zone default. The hub total stays off."""
+    from custom_components.smart_water.const import (
+        CONF_ALLOWED_WEEKDAYS,
+        CONF_HUB_NIGHTLY_CAP_MIN,
+        CONF_MAX_RUN_MIN,
+        CONF_ZONE_MAX_RUN_MIN,
+    )
+
+    entry = _loaded_garden(
+        hass,
+        version=5,
+        minor_version=1,
+        options={
+            CONF_ALLOWED_WEEKDAYS: ["mon", "thu"],
+            CONF_MAX_RUN_MIN: 45,
+        },
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.version == 6
+    assert entry.options[CONF_ZONE_MAX_RUN_MIN] == 45
+    assert CONF_MAX_RUN_MIN not in entry.options
+    assert CONF_HUB_NIGHTLY_CAP_MIN not in entry.options
     assert entry.options[CONF_ALLOWED_WEEKDAYS] == ["mon", "thu"]
 
 
@@ -382,7 +409,7 @@ async def test_v2_entry_migrates_without_rewriting_zones(hass: HomeAssistant) ->
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 5
+    assert entry.version == 6
     zone = next(iter(entry.subentries.values()))
     assert zone.data[CONF_EFFICIENCY] == 1.0
     assert zone.data[CONF_PRECIPITATION_RATE] == 1.5

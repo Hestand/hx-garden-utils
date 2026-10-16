@@ -225,6 +225,14 @@ class DeficitSensor(_ZoneSensor):
             "precipitation_rate_in_hr": zone.precipitation_rate_in_hr,
             "valve_entity": zone.valve_entity,
             "enabled": zone.enabled,
+            "full_pct": zone.full_pct,
+            "history": zone.bucket_history,
+            "precip_source": zone.precip_source,
+            "preset_precip_in_hr": zone.preset_precip_in_hr,
+            "preset_efficiency": zone.preset_efficiency,
+            "measured_precip_in_hr": zone.measured_precip_in_hr,
+            "measured_efficiency": zone.measured_efficiency,
+            "du_lq": zone.du_lq,
         }
 
 
@@ -420,6 +428,12 @@ class ZonePlanSensor(_ZoneSensor):
             "sprinkler_type": zone.sprinkler_type,
             "valve_entity": zone.valve_entity,
             "last_run_now": zone.last_run_now,
+            "next_run": None if zone.next_run is None else zone.next_run.isoformat(),
+            "precip_source": zone.precip_source,
+            "preset_precip_in_hr": zone.preset_precip_in_hr,
+            "preset_efficiency": zone.preset_efficiency,
+            "du_lq": zone.du_lq,
+            "precipitation_rate_in_hr": zone.precipitation_rate_in_hr,
         }
 
 
@@ -527,6 +541,11 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
             "markdown": data.schedule_markdown,
             "note": (
                 "Later days repeat today's crop ET and assume no rain."
+            ),
+            "alerts": data.alerts,
+            "week_gal": round(sum(zone.water_week_gal for zone in data.zones.values()), 1),
+            "saved_gal": round(
+                sum(zone.saved_week_gal or 0.0 for zone in data.zones.values()), 1
             ),
         }
 
