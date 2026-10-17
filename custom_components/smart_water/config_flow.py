@@ -3,8 +3,11 @@
 The first step chooses a live hub or a simulation hub. A live hub asks for
 a name and either a weather entity or a temperature sensor. A simulation
 hub asks for a name, an example week, and a starting soil, and its zones
-have no on/off entity. Every derived number stays blank unless the user
-types an override; blank means the preset in ``presets.py``.
+have no on/off entity. The hub form then asks how many zones to add. Each
+zone is the quick form (name, on/off entity, plant, soil, sprinkler, sun).
+Same as previous zone copies those four. Advanced stays on the zone after
+the hub exists. Every derived number stays blank unless the user types an
+override; blank means the preset in ``presets.py``.
 
 Automatic watering is a switch, default off. It is not a config option.
 The executor calls each zone's stored on/off entity and does not call Hydrawise.
@@ -17,14 +20,11 @@ from typing import Any, Literal
 import voluptuous as vol
 
 from homeassistant.config_entries import (
-    SOURCE_USER,
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
     ConfigSubentryFlow,
-    FlowType,
     OptionsFlow,
-    SubentryFlowContext,
     SubentryFlowResult,
 )
 from homeassistant.core import HomeAssistant, callback
@@ -537,20 +537,51 @@ def _simulation_schema() -> vol.Schema:
     )
 
 
-def _zone_quick_schema(*, simulation: bool) -> vol.Schema:
+_ZONE_COPY_KEYS = (
+    CONF_PLANT_TYPE,
+    CONF_SOIL_TYPE,
+    CONF_SPRINKLER_TYPE,
+    CONF_SUN_EXPOSURE,
+)
+_MAX_SETUP_ZONES = 24
+
+
+def _zone_quick_schema(
+    *, simulation: bool, previous: dict[str, Any] | None = None
+) -> vol.Schema:
     fields: dict[Any, Any] = {
         vol.Required("name"): _TEXT,
     }
     if not simulation:
         fields[vol.Required(CONF_VALVE_ENTITY)] = _ON_OFF
+    if previous is not None:
+        fields[vol.Required("same_as_previous", default=True)] = _BOOL
+    plant = previous.get(CONF_PLANT_TYPE) if previous else None
+    soil = previous.get(CONF_SOIL_TYPE) if previous else None
+    sprinkler = (
+        previous.get(CONF_SPRINKLER_TYPE, DEFAULT_SPRINKLER_TYPE)
+        if previous
+        else DEFAULT_SPRINKLER_TYPE
+    )
+    sun = previous.get(CONF_SUN_EXPOSURE, "full_sun") if previous else "full_sun"
+    plant_field = (
+        vol.Required(CONF_PLANT_TYPE)
+        if plant is None
+        else vol.Required(CONF_PLANT_TYPE, default=plant)
+    )
+    soil_field = (
+        vol.Required(CONF_SOIL_TYPE)
+        if soil is None
+        else vol.Required(CONF_SOIL_TYPE, default=soil)
+    )
     fields.update(
         {
-            vol.Required(CONF_PLANT_TYPE): _select(PLANT_TYPES, "plant_type"),
-            vol.Required(CONF_SOIL_TYPE): _select(SOIL_TYPES, "soil_type"),
-            vol.Required(CONF_SPRINKLER_TYPE, default=DEFAULT_SPRINKLER_TYPE): _select(
+            plant_field: _select(PLANT_TYPES, "plant_type"),
+            soil_field: _select(SOIL_TYPES, "soil_type"),
+            vol.Required(CONF_SPRINKLER_TYPE, default=sprinkler): _select(
                 SPRINKLER_TYPES, "sprinkler_type"
             ),
-            vol.Required(CONF_SUN_EXPOSURE, default="full_sun"): _select(
+            vol.Required(CONF_SUN_EXPOSURE, default=sun): _select(
                 SUN_EXPOSURES, "sun_exposure"
             ),
         }
@@ -664,6 +695,15 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 6
     MINOR_VERSION = 1
 
+    def __init__(self) -> None:
+        """Hold the hub draft while the zone forms run."""
+        self._hub_title = ""
+        self._hub_data: dict[str, Any] = {}
+        self._hub_options: dict[str, Any] = {}
+        self._hub_simulation = False
+        self._zone_total = 0
+        self._pending_zones: list[dict[str, Any]] = []
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> SmartWaterOptionsFlow:
@@ -740,7 +780,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
                 suggested,
             ),
             errors=errors,
-            last_step=True,
+            last_step=False,
         )
 
     async def async_step_simulation(
@@ -761,7 +801,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
                 user_input or {},
             ),
             errors=errors,
-            last_step=True,
+            last_step=False,
         )
 
     def _create_simulation(self, flat: dict[str, Any]) -> ConfigFlowResult:
@@ -774,10 +814,11 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         draft.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
         draft[CONF_SCENARIO] = scenario
         draft[CONF_BUCKET] = bucket
-        return self.async_create_entry(
+        return self._queue_zones(
             title=name,
             data={CONF_SIMULATION: True},
             options=draft,
+            simulation=True,
         )
 
     def _create(self, flat: dict[str, Any]) -> ConfigFlowResult:
@@ -790,24 +831,123 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         data: dict[str, Any] = {}
         if weather:
             data[CONF_WEATHER_ENTITY] = weather
-        return self.async_create_entry(title=name, data=data, options=draft)
+        return self._queue_zones(
+            title=name, data=data, options=draft, simulation=False
+        )
 
-    async def async_on_create_entry(
-        self, result: ConfigFlowResult
+    def _queue_zones(
+        self,
+        *,
+        title: str,
+        data: dict[str, Any],
+        options: dict[str, Any],
+        simulation: bool,
     ) -> ConfigFlowResult:
-        """Open the add-zone flow as soon as the hub exists."""
-        created = result.get("result")
-        if created is None:
-            return result
-        subentry_result = await self.hass.config_entries.subentries.async_init(
-            (created.entry_id, SUBENTRY_ZONE),
-            context=SubentryFlowContext(source=SOURCE_USER),
+        """Ask how many zones, then collect them before the hub is created."""
+        self._hub_title = title
+        self._hub_data = data
+        self._hub_options = options
+        self._hub_simulation = simulation
+        self._zone_total = 0
+        self._pending_zones = []
+        return self.async_show_form(
+            step_id="zone_count",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("zones", default=1): _number(0, _MAX_SETUP_ZONES, 1),
+                }
+            ),
         )
-        result["next_flow"] = (
-            FlowType.CONFIG_SUBENTRIES_FLOW,
-            subentry_result["flow_id"],
+
+    async def async_step_zone_count(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """How many zones to add with the hub. Zero creates the hub alone."""
+        if user_input is not None:
+            self._zone_total = int(user_input["zones"])
+            self._pending_zones = []
+            if self._zone_total <= 0:
+                return self._finish_hub()
+            return await self.async_step_zone()
+        return self.async_show_form(
+            step_id="zone_count",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("zones", default=1): _number(0, _MAX_SETUP_ZONES, 1),
+                }
+            ),
         )
-        return result
+
+    async def async_step_zone(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """One quick zone. Advanced is edited on the zone after setup."""
+        errors: dict[str, str] = {}
+        previous = self._previous_zone()
+        if user_input is not None:
+            errors = self._accept_zone(user_input)
+            if not errors:
+                if len(self._pending_zones) >= self._zone_total:
+                    return self._finish_hub()
+                previous = self._previous_zone()
+                user_input = None
+        return self.async_show_form(
+            step_id="zone",
+            data_schema=self.add_suggested_values_to_schema(
+                _zone_quick_schema(
+                    simulation=self._hub_simulation, previous=previous
+                ),
+                user_input or {},
+            ),
+            description_placeholders={
+                "index": str(len(self._pending_zones) + 1),
+                "total": str(self._zone_total),
+            },
+            errors=errors,
+            last_step=len(self._pending_zones) + 1 >= self._zone_total,
+        )
+
+    def _previous_zone(self) -> dict[str, Any] | None:
+        if not self._pending_zones:
+            return None
+        return dict(self._pending_zones[-1]["data"])
+
+    def _accept_zone(self, user_input: dict[str, Any]) -> dict[str, str]:
+        name = str(user_input["name"]).strip()
+        slug = _zone_slug(name)
+        for zone in self._pending_zones:
+            if (
+                zone["title"].casefold() == name.casefold()
+                or zone["unique_id"] == slug
+            ):
+                return {"name": "name_exists"}
+        data = dict(user_input)
+        same = bool(data.pop("same_as_previous", False))
+        data.pop("name", None)
+        previous = self._previous_zone()
+        if same and previous is not None:
+            for key in _ZONE_COPY_KEYS:
+                data[key] = previous[key]
+        stored = _drop_blanks(data)
+        if self._hub_simulation:
+            stored[CONF_VALVE_ENTITY] = f"simulation.{slug}"
+        self._pending_zones.append(
+            {
+                "data": stored,
+                "subentry_type": SUBENTRY_ZONE,
+                "title": name,
+                "unique_id": slug,
+            }
+        )
+        return {}
+
+    def _finish_hub(self) -> ConfigFlowResult:
+        return self.async_create_entry(
+            title=self._hub_title,
+            data=self._hub_data,
+            options=self._hub_options,
+            subentries=list(self._pending_zones),
+        )
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None

@@ -118,6 +118,23 @@ def _sections() -> dict[str, dict[str, Any]]:
     return {"sensors": {}, "location": {}}
 
 
+async def _finish_with_no_zones(
+    hass: HomeAssistant, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Submit zero zones so a hub form ends in CREATE_ENTRY."""
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "zone_count"
+    _serialize(result)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"zones": 0},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result.get("next_flow") is None
+    assert not result["result"].subentries
+    return result
+
+
 async def _open_live(hass: HomeAssistant) -> dict[str, Any]:
     """Start the user menu and open the live hub form."""
     result = await hass.config_entries.flow.async_init(
@@ -173,6 +190,7 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
             **_sections(),
         },
     )
+    result = await _finish_with_no_zones(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Garden"
     assert result["result"].data == {CONF_WEATHER_ENTITY: "weather.home"}
@@ -221,6 +239,7 @@ async def test_temperature_sensor_can_replace_weather(hass: HomeAssistant) -> No
             "location": {},
         },
     )
+    result = await _finish_with_no_zones(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert CONF_WEATHER_ENTITY not in result["result"].data
     assert (
@@ -522,6 +541,7 @@ async def test_simulation_hub_uses_dropdowns_and_a_virtual_valve(
             "location": {},
         },
     )
+    result = await _finish_with_no_zones(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
     assert entry.version == 6
@@ -563,3 +583,155 @@ async def test_simulation_hub_uses_dropdowns_and_a_virtual_valve(
     assert zone["data"][CONF_AREA_SQFT] == 1000
     assert CONF_SLOPE_PCT not in zone["data"]
     assert CONF_EFFICIENCY not in zone["data"]
+
+
+def _quick_zone(name: str, valve: str, **overrides: Any) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "name": name,
+        CONF_VALVE_ENTITY: valve,
+        CONF_PLANT_TYPE: "warm_season_turf",
+        CONF_SOIL_TYPE: "clay_loam",
+        CONF_SPRINKLER_TYPE: "spray",
+        CONF_SUN_EXPOSURE: "full_sun",
+    }
+    data.update(overrides)
+    return data
+
+
+async def test_hub_flow_adds_zones_and_can_copy_the_previous(
+    hass: HomeAssistant,
+) -> None:
+    """Setup asks how many zones, then the quick fields, and can copy the last zone."""
+    result = await _open_live(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"name": "Watering Stuff", CONF_WEATHER_ENTITY: "weather.home", **_sections()},
+    )
+    assert result["step_id"] == "zone_count"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"zones": 2},
+    )
+    assert result["step_id"] == "zone"
+    fields = _serialize(result)
+    assert all(field["name"] != "same_as_previous" for field in fields)
+    assert _field(fields, CONF_VALVE_ENTITY)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        _quick_zone("Front", "switch.front"),
+    )
+    assert result["step_id"] == "zone"
+    assert result["last_step"] is True
+    fields = _serialize(result)
+    copied = _field(fields, "same_as_previous")
+    assert "boolean" in copied["selector"]
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        _quick_zone(
+            "Back",
+            "switch.back",
+            same_as_previous=True,
+            **{
+                CONF_PLANT_TYPE: "st_augustine",
+                CONF_SOIL_TYPE: "sand",
+                CONF_SPRINKLER_TYPE: "drip",
+                CONF_SUN_EXPOSURE: "shade",
+            },
+        ),
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    entry = result["result"]
+    assert entry.version == 6
+    zones = {zone.title: zone for zone in entry.subentries.values()}
+    assert set(zones) == {"Front", "Back"}
+    assert zones["Front"].data[CONF_VALVE_ENTITY] == "switch.front"
+    assert zones["Back"].data[CONF_VALVE_ENTITY] == "switch.back"
+    assert zones["Back"].data[CONF_PLANT_TYPE] == "warm_season_turf"
+    assert zones["Back"].data[CONF_SOIL_TYPE] == "clay_loam"
+    assert zones["Back"].data[CONF_SPRINKLER_TYPE] == "spray"
+    assert zones["Back"].data[CONF_SUN_EXPOSURE] == "full_sun"
+    assert "same_as_previous" not in zones["Back"].data
+    assert CONF_EFFICIENCY not in zones["Front"].data
+
+
+async def test_same_as_previous_off_keeps_this_zone(hass: HomeAssistant) -> None:
+    """Unchecking the copy box stores the plant and soil entered for this zone."""
+    result = await _open_live(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"name": "Garden", CONF_WEATHER_ENTITY: "weather.home", **_sections()},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"zones": 2}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        _quick_zone("Front", "switch.front"),
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        _quick_zone(
+            "Front",
+            "switch.back",
+        ),
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["name"] == "name_exists"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        _quick_zone(
+            "Back",
+            "switch.back",
+            same_as_previous=False,
+            **{CONF_PLANT_TYPE: "st_augustine", CONF_SOIL_TYPE: "sand"},
+        ),
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    zones = {zone.title: zone for zone in result["result"].subentries.values()}
+    assert zones["Back"].data[CONF_PLANT_TYPE] == "st_augustine"
+    assert zones["Back"].data[CONF_SOIL_TYPE] == "sand"
+    assert zones["Back"].data[CONF_SPRINKLER_TYPE] == "spray"
+
+
+async def test_simulation_setup_zone_uses_a_virtual_valve(hass: HomeAssistant) -> None:
+    """A simulation zone added during setup has no on/off picker and skips Advanced."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"next_step_id": "simulation"},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "name": "Play yard",
+            CONF_SCENARIO: "hot_dry",
+            CONF_BUCKET: "full",
+            "location": {},
+        },
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"zones": 1},
+    )
+    fields = _serialize(result)
+    assert result["step_id"] == "zone"
+    assert result["last_step"] is True
+    assert all(field["name"] != CONF_VALVE_ENTITY for field in fields)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "name": "Front lawn",
+            CONF_PLANT_TYPE: "st_augustine",
+            CONF_SOIL_TYPE: "clay_loam",
+            CONF_SPRINKLER_TYPE: "spray",
+            CONF_SUN_EXPOSURE: "full_sun",
+            CONF_AREA_SQFT: 800,
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    zone = next(iter(result["result"].subentries.values()))
+    assert zone.data[CONF_VALVE_ENTITY] == "simulation.front_lawn"
+    assert zone.data[CONF_AREA_SQFT] == 800
+    assert CONF_EFFICIENCY not in zone.data

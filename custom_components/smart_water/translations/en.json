@@ -220,11 +220,50 @@
         "data_description": {
           "weather_entity": "Leave empty to remove it. A temperature sensor must remain."
         }
+      },
+      "zone_count": {
+        "title": "How many zones?",
+        "description": "How many zones should this hub start with? Each one asks for a name, an on/off entity on a live hub, and plant, soil, sprinkler, and sun. Zero creates the hub now. You can add, edit, or remove zones later.",
+        "data": {
+          "zones": "Number of zones"
+        },
+        "data_description": {
+          "zones": "Default 1. Maximum 24 on this form. More zones can be added from the hub."
+        }
+      },
+      "zone": {
+        "title": "Zone {index} of {total}",
+        "description": "Name the zone. A live hub also asks for the on/off entity. Then plant, soil, sprinkler, and sun. Same as previous zone copies those four. Advanced stays on the zone after the hub is created. Nothing is turned on.",
+        "data": {
+          "name": "Name",
+          "valve_entity": "On/off entity",
+          "plant_type": "Plant type",
+          "soil_type": "Soil type",
+          "sprinkler_type": "Sprinkler type",
+          "sun_exposure": "Sun exposure",
+          "same_as_previous": "Same as previous zone",
+          "area_sqft": "Area",
+          "slope_pct": "Slope"
+        },
+        "data_description": {
+          "valve_entity": "Switch, valve, or input boolean. Stored only. A simulation zone uses a virtual valve instead.",
+          "plant_type": "Sets the crop coefficient, root depth, and depletion unless you override them later.",
+          "soil_type": "Sets available water and the intake rate.",
+          "sprinkler_type": "Sets the precipitation rate and efficiency. A bubbler asks for a rate on the zone's Advanced step.",
+          "sun_exposure": "Scales the crop coefficient. Full sun is 1.0.",
+          "same_as_previous": "Copies plant, soil, sprinkler, and sun from the zone you just added. The name and on/off entity stay this zone's own.",
+          "area_sqft": "Optional, on a simulation hub. Used to estimate gallons.",
+          "slope_pct": "Optional, on a simulation hub. Blank uses 0%."
+        },
+        "error": {
+          "name_exists": "A zone with this name already exists."
+        }
       }
     },
     "error": {
       "latitude_pair": "Set both latitude and longitude, or leave both empty.",
-      "need_weather": "Pick a weather entity or a temperature sensor."
+      "need_weather": "Pick a weather entity or a temperature sensor.",
+      "name_exists": "A zone with this name already exists."
     },
     "abort": {
       "reconfigure_successful": "Hub updated."

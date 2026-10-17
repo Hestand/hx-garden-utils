@@ -2,7 +2,7 @@
 
 Work in progress, not ready for general use.
 
-Water-balance planner and zone controller for Home Assistant (`smart_water` 0.7.0).
+Water-balance planner and zone controller for Home Assistant (`smart_water` 0.7.1).
 
 It estimates reference evapotranspiration, tracks a soil-water deficit for each zone, and builds a nightly cycle-and-soak plan that finishes before sunrise. **Automatic watering is off after a new install and after an upgrade.** Turn the hub's **Automatic watering** switch on when you want it to open valves. Until then the plan is only sensors and an optional notification. Run now is a manual action and runs even while that switch is off. A simulation hub still plays an example week and never calls a real on/off entity. The controller calls `switch`, `valve`, or `input_boolean` services only. It does not call a controller API.
 
@@ -16,7 +16,7 @@ Requires Home Assistant **2025.3** or newer (config subentries). Tested on **202
 
 1. HACS → Integrations → ⋮ → Custom repositories.
 2. Add `https://github.com/Hestand/hx-garden-utils` as category **Integration**.
-3. Download **Smart Water** (release `v0.7.0`), then restart Home Assistant.
+3. Download **Smart Water** (release `v0.7.1`), then restart Home Assistant.
 
 `hacs.json` is included. This is not in the default HACS store.
 
@@ -32,7 +32,7 @@ That directory must contain `__init__.py` and `manifest.json`. Restart Home Assi
 
 ### Upgrading from 0.5.x, 0.4.x, 0.3.x, 0.2.x, or 0.1.x
 
-Download 0.7.0 and restart. The config entry moves to version 6. Zone data is not rewritten, and the stored bucket (storage version 1) is kept. You do not reconfigure an existing hub. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
+Download 0.7.1 and restart. The config entry stays at version 6. Zone data is not rewritten, and the stored bucket (storage version 1) is kept. You do not reconfigure an existing hub. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
 
 0.7 caps each zone on its own, can wait for confident forecast rain, warns before a freeze, and includes a dashboard card. Flow alerts still notify only until you change that. The weekly summary is off. Cost and the weekly gallon budget stay empty until you set them.
 
@@ -54,14 +54,14 @@ A zone with no on/off entity still loads. The next time you edit it, the form as
 1. Settings → Devices & services → Add integration → **Smart Water**.
 2. Choose **Live hub** or **Simulation hub**. A simulation needs no weather entity and no on/off entity. See [Simulation](#simulation).
 3. On a live hub, name it. Pick a weather entity, or open **Sensors** and pick a temperature sensor. A Tempest (or WeatherFlow) station is filled in when Home Assistant has exactly one. Submit. Location and schedule can stay collapsed.
-4. Name the zone. On a live hub, pick the on/off entity (`switch`, `valve`, or `input_boolean`), then plant, soil, sprinkler, and sun. Submit.
-5. On **Advanced**, leave the fields blank. Blank means the preset. A bubbler has no published precipitation rate, so enter a rate or both flow and area. Submit.
+4. **How many zones?** Default is 1. Zero creates the hub with no zones. Then, for each zone, enter the name, the on/off entity on a live hub (`switch`, `valve`, or `input_boolean`), and plant, soil, sprinkler, and sun. **Same as previous zone** copies those four. The name and on/off entity are always this zone's own.
+5. Advanced is not part of that loop. Open the zone afterward and leave the Advanced fields blank. Blank means the preset. A bubbler has no published precipitation rate, so enter a rate or both flow and area there.
 
-Add more zones from the hub's device page. Options edits the sensors and the schedule. Reconfigure edits the hub name and weather entity.
+Add, edit, or remove zones later from the hub's device page. Options edits the sensors and the schedule. Reconfigure edits the hub name and weather entity. Existing hubs are not asked to run this again.
 
 ## Configure
 
-Add the integration once. That creates the hub, then immediately asks for the first zone. More zones are added from the hub's device page (Add zone). Options and zone reconfigure edit the same fields.
+Add the integration once. After the hub form, it asks how many zones, then each zone's quick fields. More zones are added from the hub's device page (Add zone). Options and zone reconfigure edit the same fields. Removing a zone is the device-page delete.
 
 ### Hub
 
@@ -70,7 +70,7 @@ The first step is a menu: **Live hub** or **Simulation hub**. The live form is t
 | Setting | Notes |
 | --- | --- |
 | Name | Device name. |
-| Weather entity | Optional if a temperature sensor is set. Fallback daily forecast via `weather.get_forecasts`. Entity sensors win when they are set. |
+| Weather entity | Optional if a temperature sensor is set. Daily and hourly forecasts come from `weather.get_forecasts`. Temperatures are converted from the entity's unit (°F or °C) before the freeze check. Entity sensors win when they are set. |
 | Elevation (m) | Atmospheric pressure when no pressure sensor is set. Default **219 m** is the design site (USGS ~218.6 m). Home Assistant's elevation of 0 is wrong for ET. |
 | Latitude / longitude | Optional override. Blank uses the HA location. Step is `any` so 2026.10 accepts full precision. |
 | Mode | `auto`, `notify_only` (default), or `off`. Notify-only still waters once Automatic watering is on. Off does not. |

@@ -2575,7 +2575,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                     )
                 )
             if row.get("temperature") is not None:
-                low_f = temperature_f(float(row["temperature"]), temp_unit)
+                low_f = _forecast_temperature_f(float(row["temperature"]), temp_unit)
                 forecast_lows.append((local, low_f))
         daily_precip: list[tuple[datetime, float, float | None]] = []
         for row in forecast:
@@ -2587,7 +2587,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             if row.get("precipitation") is not None or row.get("precipitation_probability") is not None:
                 daily_precip.append((local, _row_precip(row, precip_unit), _row_probability(row)))
             if row.get("templow") is not None:
-                forecast_lows.append((local, temperature_f(float(row["templow"]), temp_unit)))
+                forecast_lows.append(
+                    (local, _forecast_temperature_f(float(row["templow"]), temp_unit))
+                )
         today = now.date()
         tomorrow = today + timedelta(days=1)
         today_row = _forecast_on(forecast, today)
@@ -2733,6 +2735,16 @@ def _row_temp(row: dict[str, Any] | None, key: str, unit: str | None) -> float |
     if not row or row.get(key) is None:
         return None
     return temperature_c(float(row[key]), unit)
+
+
+def _forecast_temperature_f(value: float, unit: str | None) -> float:
+    """Convert a forecast temperature to Fahrenheit.
+
+    ``temperature_f`` takes Celsius only. Forecast rows are in the weather
+    entity's unit, so convert to Celsius first. Passing the unit straight
+    into ``temperature_f`` raises TypeError and the hub never finishes setup.
+    """
+    return temperature_f(temperature_c(value, unit))
 
 
 def _row_probability(row: dict[str, Any] | None) -> float | None:
