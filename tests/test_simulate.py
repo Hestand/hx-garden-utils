@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -11,7 +11,7 @@ from smart_water.balance import apply_daily_balance
 from smart_water.et import ETInputs, daily_et0, extraterrestrial_radiation_mj
 from smart_water.et import radiation_from_sunshine_mj
 from smart_water.planner import PlanRequest, build_plan, build_zone_request
-from smart_water.schedule import rules_for
+from smart_water.schedule import morning_window, rules_for
 from smart_water.simulate import (
     SCENARIOS,
     SimSettings,
@@ -21,8 +21,6 @@ from smart_water.simulate import (
     preset_week,
     run_week,
 )
-from smart_water.solar import next_sunrise
-
 SITE = SimSettings(
     latitude=31.5493,
     longitude=-97.1467,
@@ -101,15 +99,14 @@ def test_one_day_matches_the_live_planner() -> None:
         month=current.month,
     )
     evening = datetime(2026, 7, 13, 23, tzinfo=ZoneInfo("America/Chicago"))
-    finish_by = next_sunrise(SITE.latitude, SITE.longitude, evening).astimezone(
-        evening.tzinfo
-    ) - timedelta(minutes=SITE.sunrise_buffer_min)
+    earliest, start_at, finish_by = morning_window(evening)
     schedule = rules_for(None, None, None)
     plan = build_plan(
         PlanRequest(
             zones=(request,),
+            start_at=start_at,
             finish_by=finish_by,
-            earliest_start=None,
+            earliest_start=earliest,
             forecast_precip_mm=0.0,
             forecast_skip_mm=None,
             hub_rain_wet=False,

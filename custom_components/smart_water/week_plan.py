@@ -6,7 +6,7 @@ ET and no rain. Future rain is not assumed. A scheduled day refills by the
 planned net depth and resets the days-since-watering counter.
 
 Each row is dated by the morning the valves open: the first cycle's start,
-or the sunrise deadline when nothing is scheduled. A sequence that starts
+or the target start time when nothing is scheduled. A sequence that starts
 before midnight is dated that evening, and any later cycle shows its own date.
 """
 
@@ -20,7 +20,7 @@ from .balance import apply_daily_balance
 from .flow import expected_gallons
 from .forecast_rain import defer_reason
 from .planner import NightPlan, PlanRequest, ZoneRequest, build_plan
-from .solar import next_sunrise
+from .schedule import morning_window
 from .units import mm_to_inches
 
 
@@ -28,11 +28,10 @@ def project_week(
     zones: tuple[ZoneRequest, ...],
     *,
     now: datetime,
-    latitude: float,
-    longitude: float,
     timezone: str,
-    sunrise_buffer_min: int,
-    earliest_hour: int | None,
+    earliest_start: str = "04:00:00",
+    start_time: str = "05:00:00",
+    finish_time: str = "09:00:00",
     forecast_precip_mm: float,
     forecast_skip_mm: float | None,
     hub_rain_wet: bool,
@@ -58,6 +57,9 @@ def project_week(
     """Return ``days``, a short ``summary``, and a markdown table."""
     tz = ZoneInfo(timezone)
     local_now = now.astimezone(tz)
+    first_earliest, first_start, first_finish = morning_window(
+        local_now, earliest_start, start_time, finish_time
+    )
     deficits = {zone.zone_id: zone.deficit_mm for zone in zones}
     since = {zone.zone_id: zone.days_since_water for zone in zones}
     taw = {zone.zone_id: zone.taw_mm for zone in zones}
@@ -66,7 +68,6 @@ def project_week(
     waiting = {zone.zone_id: int((defer_days or {}).get(zone.zone_id, 0)) for zone in zones}
 
     for offset in range(days):
-        moment = local_now + timedelta(days=offset)
         if offset > 0:
             for zone in zones:
                 updated = apply_daily_balance(
@@ -79,16 +80,9 @@ def project_week(
                 deficits[zone.zone_id] = updated.deficit_mm
                 if since[zone.zone_id] is not None:
                     since[zone.zone_id] = int(since[zone.zone_id]) + 1
-        evening = moment.replace(hour=min(23, moment.hour), minute=0, second=0, microsecond=0)
-        if offset > 0:
-            evening = moment.replace(hour=23, minute=0, second=0, microsecond=0)
-        rise = next_sunrise(latitude, longitude, evening)
-        finish_by = rise.astimezone(tz) - timedelta(minutes=sunrise_buffer_min)
-        earliest = None
-        if earliest_hour is not None:
-            earliest = finish_by.replace(
-                hour=earliest_hour, minute=0, second=0, microsecond=0
-            )
+        earliest = first_earliest + timedelta(days=offset)
+        start_at = first_start + timedelta(days=offset)
+        finish_by = first_finish + timedelta(days=offset)
         requests = []
         for zone in zones:
             current = replace(
@@ -124,6 +118,7 @@ def project_week(
         plan = build_plan(
             PlanRequest(
                 zones=tuple(requests),
+                start_at=start_at,
                 finish_by=finish_by,
                 earliest_start=earliest,
                 forecast_precip_mm=forecast_precip_mm if offset == 0 else 0.0,
@@ -159,10 +154,15 @@ def project_week(
                 since[zone_plan.zone_id] = 0
 
     summary = _summary(rows)
+    window = (
+        f"Start {first_start.strftime('%H:%M')}, finish by {first_finish.strftime('%H:%M')}, "
+        f"earliest {first_earliest.strftime('%H:%M')}."
+    )
     return {
         "summary": summary,
         "days": rows,
-        "markdown": render_markdown(rows),
+        "markdown": render_markdown(rows, window),
+        "window": window,
         "note": (
             "Later days repeat today's crop ET and assume no rain. "
             "A skip on a later day can change when the real morning arrives."
@@ -170,10 +170,13 @@ def project_week(
     }
 
 
-def render_markdown(days: list[dict[str, object]]) -> str:
+def render_markdown(days: list[dict[str, object]], window: str = "") -> str:
     """A table a markdown card can show as-is."""
+    intro = "Next 7 days. Later days repeat today's crop ET and assume no rain."
+    if window:
+        intro = f"{intro} {window}"
     lines = [
-        "Next 7 days. Later days repeat today's crop ET and assume no rain.",
+        intro,
         "",
         "| Date | Zone | Starts | Minutes | Depth | Gallons | Note |",
         "| --- | --- | --- | --- | --- | --- | --- |",
@@ -208,8 +211,8 @@ def render_markdown(days: list[dict[str, object]]) -> str:
 def _label_moment(plan: NightPlan) -> datetime:
     """The calendar moment this row describes.
 
-    A scheduled night uses the first cycle. A skip still names the morning
-    the valves would have opened, which is ``run_on``.
+    A scheduled morning uses the first cycle. A skip still names the target
+    start, which is ``run_on``.
     """
     if plan.timeline:
         return plan.timeline[0].start
@@ -277,5 +280,7 @@ def _summary(days: list[dict[str, object]]) -> str:
         return "No watering in the next 7 days"
     first_day, first = planned[0]
     assert isinstance(first, dict)
-    text = f"{len(planned)} waterings · next {first_day} {first['name']}"
+    start = str(first.get("starts") or "").split(",")[0].strip()
+    clock = f" {start}" if start else ""
+    text = f"{len(planned)} waterings · next {first_day}{clock} {first['name']}"
     return text[:255]

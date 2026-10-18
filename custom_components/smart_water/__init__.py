@@ -1,9 +1,9 @@
 """Smart Water custom integration.
 
-v0.7 caps each zone on its own, can wait for confident forecast rain, and
-ships a Lovelace card. When the Automatic watering switch is on, it runs
-each zone's stored on/off entity one at a time. The executor uses switch,
-valve, and input_boolean services. It does not call Hydrawise.
+v0.8 waters in the morning: start at 05:00, finish by 09:00, and start no
+earlier than 04:00. When the Automatic watering switch is on, it runs each
+zone's stored on/off entity one at a time. The executor uses switch, valve,
+and input_boolean services. It does not call Hydrawise.
 """
 
 from __future__ import annotations
@@ -14,7 +14,20 @@ from pathlib import Path
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event
 
-from .const import CONF_MAX_RUN_MIN, CONF_ZONE_MAX_RUN_MIN, DOMAIN, PLATFORMS
+from .const import (
+    CONF_EARLIEST_HOUR,
+    CONF_EARLIEST_START,
+    CONF_FINISH_TIME,
+    CONF_MAX_RUN_MIN,
+    CONF_START_TIME,
+    CONF_SUNRISE_BUFFER_MIN,
+    CONF_ZONE_MAX_RUN_MIN,
+    DEFAULT_EARLIEST_START,
+    DEFAULT_FINISH_TIME,
+    DEFAULT_START_TIME,
+    DOMAIN,
+    PLATFORMS,
+)
 from .schedule import migrate_options
 
 __all__ = ["DOMAIN"]
@@ -36,6 +49,21 @@ def _migrate_run_cap(options: dict) -> dict:
     return updated
 
 
+def _migrate_morning_window(options: dict) -> dict:
+    """Replace the sunrise deadline with the morning window.
+
+    Existing hubs have not turned automatic watering on, so the new
+    defaults replace a stored sunrise buffer and earliest hour.
+    """
+    updated = dict(options)
+    updated.pop(CONF_SUNRISE_BUFFER_MIN, None)
+    updated.pop(CONF_EARLIEST_HOUR, None)
+    updated[CONF_START_TIME] = DEFAULT_START_TIME
+    updated[CONF_FINISH_TIME] = DEFAULT_FINISH_TIME
+    updated[CONF_EARLIEST_START] = DEFAULT_EARLIEST_START
+    return updated
+
+
 async def async_migrate_entry(hass, entry) -> bool:
     """Move schedule options to allowed days. Zone numbers stay as stored.
 
@@ -48,8 +76,11 @@ async def async_migrate_entry(hass, entry) -> bool:
 
     Version 6 moves the old hub valve cap onto the per-zone default and
     leaves the hub nightly total off. It does not call migrate_options.
+
+    Version 7 replaces the sunrise deadline with a 05:00 start, a 09:00
+    finish, and a 04:00 earliest start. It does not call migrate_options.
     """
-    if entry.version > 6:
+    if entry.version > 7:
         return False
     if entry.version < 4:
         hass.config_entries.async_update_entry(
@@ -65,6 +96,13 @@ async def async_migrate_entry(hass, entry) -> bool:
             entry,
             options=_migrate_run_cap(dict(entry.options)),
             version=6,
+            minor_version=1,
+        )
+    if entry.version < 7:
+        hass.config_entries.async_update_entry(
+            entry,
+            options=_migrate_morning_window(dict(entry.options)),
+            version=7,
             minor_version=1,
         )
     return True

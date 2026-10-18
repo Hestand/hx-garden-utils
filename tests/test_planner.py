@@ -1,4 +1,4 @@
-"""Dry-run nightly plan: one valve, whole minutes, finish by sunrise."""
+"""Dry-run morning plan: one valve, whole minutes, finish by the set time."""
 
 from __future__ import annotations
 
@@ -44,10 +44,12 @@ def _zone(**overrides: object) -> ZoneRequest:
 
 def _request(*zones: ZoneRequest, **overrides: object) -> PlanRequest:
     finish = datetime(2026, 10, 16, 11, 45, tzinfo=timezone.utc)
+    start = datetime(2026, 10, 16, 0, 0, tzinfo=timezone.utc)
     base = dict(
         zones=zones or (_zone(),),
+        start_at=start,
         finish_by=finish,
-        earliest_start=None,
+        earliest_start=start,
         forecast_precip_mm=0.0,
         forecast_skip_mm=None,
         hub_rain_wet=False,
@@ -74,7 +76,7 @@ def test_automatic_off_does_not_report_that_it_would_water() -> None:
     assert armed.summary.startswith("AUTOMATIC")
 
 
-def test_clay_loam_plan_uses_four_minute_cycles_and_ends_at_sunrise() -> None:
+def test_clay_loam_plan_uses_four_minute_cycles_and_starts_on_time() -> None:
     plan = build_plan(_request())
     zone = plan.zones[0]
     assert zone.scheduled is True
@@ -84,8 +86,8 @@ def test_clay_loam_plan_uses_four_minute_cycles_and_ends_at_sunrise() -> None:
     assert all(minutes <= 4 for minutes in zone.cycles)
     assert all(isinstance(minutes, int) for minutes in zone.cycles)
     assert sum(zone.cycles) == zone.runtime_min
-    assert plan.timeline[-1].end == plan.finish_by
-    assert plan.timeline[0].start < plan.finish_by
+    assert plan.timeline[0].start == plan.start_at
+    assert plan.timeline[-1].end <= plan.finish_by
     _assert_one_valve(plan.timeline)
     _assert_soaks(plan)
 
@@ -147,7 +149,7 @@ def test_skip_and_disabled_zone() -> None:
     assert disabled.zones[0].reason == "Zone is disabled."
 
 
-def test_window_trim_scales_a_long_cycle() -> None:
+def test_window_overflow_carries_the_rest_of_a_long_cycle() -> None:
     finish = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
     earliest = finish - timedelta(minutes=30)
     # Sand at a low rate makes one long cycle, longer than the 30 minute window.
@@ -158,12 +160,19 @@ def test_window_trim_scales_a_long_cycle() -> None:
         deficit_mm=20.0,
     )
     plan = build_plan(
-        _request(zone, finish_by=finish, earliest_start=earliest)
+        _request(
+            zone,
+            start_at=earliest,
+            finish_by=finish,
+            earliest_start=earliest,
+        )
     )
     assert plan.warning is not None
-    assert "trimmed" in plan.warning.lower()
+    assert "bucket" in plan.warning.lower()
     assert plan.timeline[-1].end == finish
+    assert plan.timeline[0].start == earliest
     assert plan.zones[0].runtime_min <= 30
+    assert plan.zones[0].carried_min > 0
     _assert_one_valve(plan.timeline)
 
 
@@ -177,7 +186,7 @@ def test_closed_window_schedules_nothing() -> None:
     )
     assert plan.timeline == ()
     assert plan.warning is not None
-    assert "deadline" in plan.warning
+    assert "finish" in plan.warning
 
 
 def test_daily_runtime_cap_trims_before_scheduling() -> None:
@@ -206,8 +215,14 @@ def test_allowed_weekday_skips_friday_and_keeps_thursday() -> None:
     assert skipped.zones[0].scheduled is False
     assert "fri" in skipped.zones[0].reason
     thursday = datetime(2026, 10, 15, 11, 45, tzinfo=timezone.utc)
+    morning = thursday.replace(hour=0, minute=0, second=0, microsecond=0)
     kept = build_plan(
-        _request(finish_by=thursday, allowed_weekdays=("sun", "tue", "thu"))
+        _request(
+            finish_by=thursday,
+            start_at=morning,
+            earliest_start=morning,
+            allowed_weekdays=("sun", "tue", "thu"),
+        )
     )
     assert kept.zones[0].scheduled is True
 
@@ -232,7 +247,8 @@ def test_blackout_clips_a_midday_deadline_back_to_morning() -> None:
     )
     assert plan.finish_by == datetime(2026, 10, 16, 10, 0, tzinfo=timezone.utc)
     assert plan.earliest_start == datetime(2026, 10, 16, 0, 0, tzinfo=timezone.utc)
-    assert plan.timeline[-1].end == plan.finish_by
+    assert plan.timeline[-1].end <= plan.finish_by
+    assert plan.timeline[0].start >= plan.earliest_start
     assert plan.warning is not None
     evening = datetime(2026, 10, 16, 21, 0, tzinfo=timezone.utc)
     late = build_plan(
@@ -261,7 +277,7 @@ def test_per_zone_cap_does_not_limit_the_other_zone() -> None:
 
 
 def test_nightly_valve_cap_keeps_the_schedule_at_or_under_60() -> None:
-    """A 63-minute sequence is trimmed to the cap and the last cycle still ends at dawn."""
+    """A 63-minute sequence is trimmed to the cap and still ends by the finish time."""
     zone = _zone(
         soil_type="loam",
         slope_pct=0,
@@ -281,7 +297,8 @@ def test_nightly_valve_cap_keeps_the_schedule_at_or_under_60() -> None:
     assert plan.zones[0].carried_min == pytest.approx(3)
     assert plan.zones[0].completed is False
     assert sum(event.duration_min for event in plan.timeline) <= 60
-    assert plan.timeline[-1].end == plan.finish_by
+    assert plan.timeline[0].start == plan.start_at
+    assert plan.timeline[-1].end <= plan.finish_by
     assert plan.warning is not None
     assert "capped at 60" in plan.warning
 
@@ -338,11 +355,13 @@ def test_three_zones_interleave_inside_the_nightly_cap() -> None:
     guest = next(event for event in plan.timeline if event.zone_id != "front")
     assert front_events[0].end <= guest.start
     assert guest.end <= front_events[1].start
-    assert plan.timeline[-1].end == plan.finish_by
+    assert plan.timeline[0].start == plan.start_at
+    assert plan.timeline[-1].end <= plan.finish_by
 
 
-def test_hourly_wind_moves_the_deadline_earlier() -> None:
+def test_hourly_wind_moves_the_finish_earlier_inside_the_window() -> None:
     finish = datetime(2026, 7, 14, 6, 30, tzinfo=timezone.utc)
+    earliest = datetime(2026, 7, 14, 4, 0, tzinfo=timezone.utc)
     hourly = (
         (datetime(2026, 7, 14, 5, 0, tzinfo=timezone.utc), 8.0),
         (datetime(2026, 7, 14, 6, 0, tzinfo=timezone.utc), 14.0),
@@ -350,16 +369,141 @@ def test_hourly_wind_moves_the_deadline_earlier() -> None:
     plan = build_plan(
         _request(
             _zone(wind_limit_mph=10),
+            start_at=datetime(2026, 7, 14, 5, 0, tzinfo=timezone.utc),
             finish_by=finish,
-            earliest_start=datetime(2026, 7, 14, 4, 0, tzinfo=timezone.utc),
+            earliest_start=earliest,
             hourly_wind=hourly,
             max_run_min=60,
         )
     )
     assert plan.finish_by == datetime(2026, 7, 14, 6, 0, tzinfo=timezone.utc)
-    assert plan.timeline[-1].end == plan.finish_by
+    assert plan.timeline[-1].end <= plan.finish_by
+    assert plan.timeline[0].start >= earliest
     assert plan.warning is not None
     assert "wind" in plan.warning.lower()
+
+
+def test_a_short_run_starts_at_05_and_finishes_before_09() -> None:
+    """A sequence that fits the preferred window does not slide earlier."""
+    start = datetime(2026, 10, 25, 5, 0, tzinfo=timezone.utc)
+    earliest = datetime(2026, 10, 25, 4, 0, tzinfo=timezone.utc)
+    finish = datetime(2026, 10, 25, 9, 0, tzinfo=timezone.utc)
+    zone = _zone(
+        name="Test1",
+        deficit_mm=12.0,
+        raw_mm=8.0,
+        soak_override_min=0,
+        max_cycle_override_min=60,
+    )
+    plan = build_plan(
+        _request(zone, start_at=start, earliest_start=earliest, finish_by=finish)
+    )
+    assert plan.zones[0].scheduled is True
+    assert plan.timeline[0].start == start
+    assert plan.timeline[-1].end < finish
+    assert plan.timeline[-1].end > start
+    assert plan.zones[0].carried_min == 0
+
+
+def test_overflow_starts_at_04_and_carries_the_rest() -> None:
+    """A soak sequence longer than 05:00–09:00 starts at 04:00 and stops at 09:00."""
+    start = datetime(2026, 10, 25, 5, 0, tzinfo=timezone.utc)
+    earliest = datetime(2026, 10, 25, 4, 0, tzinfo=timezone.utc)
+    finish = datetime(2026, 10, 25, 9, 0, tzinfo=timezone.utc)
+    plan = build_plan(
+        _request(start_at=start, earliest_start=earliest, finish_by=finish)
+    )
+    assert earliest <= plan.timeline[0].start < start
+    assert plan.timeline[-1].end == finish
+    assert plan.zones[0].carried_min > 0
+    assert plan.zones[0].scheduled is True
+    assert plan.warning is not None
+    assert "bucket" in plan.warning.lower()
+
+
+def test_priority_then_deficit_keeps_the_first_zone_when_the_window_is_short() -> None:
+    """The higher priority runs. The same priority yields to the larger deficit."""
+    start = datetime(2026, 10, 25, 5, 0, tzinfo=timezone.utc)
+    finish = start + timedelta(minutes=10)
+    first = _zone(
+        zone_id="first",
+        name="First",
+        priority=1,
+        deficit_mm=10.0,
+        raw_mm=8.0,
+        soak_override_min=0,
+        max_cycle_override_min=60,
+    )
+    second = _zone(
+        zone_id="second",
+        name="Second",
+        priority=2,
+        deficit_mm=20.0,
+        raw_mm=8.0,
+        soak_override_min=0,
+        max_cycle_override_min=60,
+    )
+    plan = build_plan(
+        _request(
+            first,
+            second,
+            start_at=start,
+            earliest_start=start,
+            finish_by=finish,
+        )
+    )
+    by_name = {zone.name: zone for zone in plan.zones}
+    assert by_name["First"].scheduled is True
+    assert by_name["Second"].scheduled is False
+    assert "morning window" in by_name["Second"].reason
+    thirsty = _zone(
+        zone_id="thirsty",
+        name="Thirsty",
+        priority=1,
+        deficit_mm=20.0,
+        raw_mm=8.0,
+        soak_override_min=0,
+        max_cycle_override_min=60,
+    )
+    light = _zone(
+        zone_id="light",
+        name="Light",
+        priority=1,
+        deficit_mm=10.0,
+        raw_mm=8.0,
+        soak_override_min=0,
+        max_cycle_override_min=60,
+    )
+    ordered = build_plan(
+        _request(
+            light,
+            thirsty,
+            start_at=start,
+            earliest_start=start,
+            finish_by=finish,
+        )
+    )
+    names = [event.zone_name for event in ordered.timeline]
+    assert names
+    assert names[0] == "Thirsty"
+
+
+def test_allowed_day_uses_the_morning_the_valve_opens() -> None:
+    start = datetime(2026, 10, 25, 5, 0, tzinfo=timezone.utc)
+    finish = datetime(2026, 10, 25, 9, 0, tzinfo=timezone.utc)
+    zone = _zone(soak_override_min=0, max_cycle_override_min=60, deficit_mm=12.0, raw_mm=8.0)
+    skipped = build_plan(
+        _request(
+            zone,
+            start_at=start,
+            earliest_start=start,
+            finish_by=finish,
+            allowed_weekdays=("sat",),
+        )
+    )
+    assert skipped.zones[0].scheduled is False
+    assert skipped.zones[0].reason == "Not an allowed watering day (sun)."
+    assert skipped.run_on == start
 
 
 def _assert_one_valve(timeline: tuple) -> None:

@@ -228,6 +228,12 @@ class SmartWaterCard extends HTMLElement {
       line.textContent = String(alert);
       box.append(line);
     });
+    if (schedule.attributes && schedule.attributes.window) {
+      const windowLine = document.createElement("div");
+      windowLine.className = "sw-muted";
+      windowLine.textContent = String(schedule.attributes.window);
+      box.append(windowLine);
+    }
     if (schedule.state) {
       const summary = document.createElement("div");
       summary.className = "sw-muted";

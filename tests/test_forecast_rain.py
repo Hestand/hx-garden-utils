@@ -126,11 +126,7 @@ def test_week_projection_defers_without_crediting_forecast() -> None:
     result = project_week(
         (zone,),
         now=datetime(2026, 7, 13, 23, 0, tzinfo=ZoneInfo("America/Chicago")),
-        latitude=31.5493,
-        longitude=-97.1467,
         timezone="America/Chicago",
-        sunrise_buffer_min=30,
-        earliest_hour=None,
         forecast_precip_mm=0.0,
         forecast_skip_mm=None,
         hub_rain_wet=False,

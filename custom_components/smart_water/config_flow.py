@@ -45,7 +45,7 @@ from .const import (
     CONF_DEPLETION,
     CONF_DORMANT_BELOW_F,
     CONF_DRIP_IGNORES_SCHEDULE,
-    CONF_EARLIEST_HOUR,
+    CONF_EARLIEST_START,
     CONF_EFFICIENCY,
     CONF_ELEVATION_M,
     CONF_FIELD_CAPACITY,
@@ -109,8 +109,9 @@ from .const import (
     CONF_SOIL_TYPE,
     CONF_SOLAR_SENSOR,
     CONF_SPRINKLER_TYPE,
+    CONF_START_TIME,
+    CONF_FINISH_TIME,
     CONF_SUN_EXPOSURE,
-    CONF_SUNRISE_BUFFER_MIN,
     CONF_TARGET_DEPTH_IN,
     CONF_TEMPERATURE_SENSOR,
     CONF_UV_SENSOR,
@@ -138,7 +139,9 @@ from .const import (
     DEFAULT_RAIN_KIND,
     DEFAULT_ROUND_MINUTES,
     DEFAULT_SPRINKLER_TYPE,
-    DEFAULT_SUNRISE_BUFFER_MIN,
+    DEFAULT_EARLIEST_START,
+    DEFAULT_FINISH_TIME,
+    DEFAULT_START_TIME,
     DEFAULT_WIND_HEIGHT_M,
     DOMAIN,
     FLOW_ACTION_NOTIFY,
@@ -241,9 +244,10 @@ _LOCATION_KEYS = (
     CONF_MODE,
     CONF_NOTIFY_TARGET,
     CONF_RAIN_SENSOR,
-    CONF_SUNRISE_BUFFER_MIN,
+    CONF_START_TIME,
+    CONF_FINISH_TIME,
+    CONF_EARLIEST_START,
     CONF_PLAN_HOUR,
-    CONF_EARLIEST_HOUR,
     CONF_FORECAST_SKIP_MM,
     CONF_MAX_DAILY_RUNTIME_MIN,
     CONF_ROUND_MINUTES,
@@ -420,11 +424,12 @@ def _location_fields() -> dict[Any, Any]:
         vol.Required(CONF_MODE, default=MODE_NOTIFY_ONLY): _select(MODES, "mode"),
         vol.Optional(CONF_NOTIFY_TARGET): _TEXT,
         vol.Optional(CONF_RAIN_SENSOR): _BINARY,
+        vol.Required(CONF_START_TIME, default=DEFAULT_START_TIME): selector.TimeSelector(),
+        vol.Required(CONF_FINISH_TIME, default=DEFAULT_FINISH_TIME): selector.TimeSelector(),
         vol.Required(
-            CONF_SUNRISE_BUFFER_MIN, default=DEFAULT_SUNRISE_BUFFER_MIN
-        ): _number(0, 180, 1, "min"),
+            CONF_EARLIEST_START, default=DEFAULT_EARLIEST_START
+        ): selector.TimeSelector(),
         vol.Required(CONF_PLAN_HOUR, default=DEFAULT_PLAN_HOUR): _number(0, 23, 1),
-        vol.Optional(CONF_EARLIEST_HOUR): _number(0, 23, 1),
         vol.Optional(CONF_FORECAST_SKIP_MM): _number(0, 100, 0.1, "mm"),
         vol.Optional(CONF_MAX_DAILY_RUNTIME_MIN): _number(1, 600, 1, "min"),
         vol.Required(CONF_ROUND_MINUTES, default=DEFAULT_ROUND_MINUTES): _BOOL,
@@ -692,7 +697,7 @@ def _has_climate(weather: Any, temperature: Any) -> bool:
 class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
     """Set up a Smart Water hub."""
 
-    VERSION = 6
+    VERSION = 7
     MINOR_VERSION = 1
 
     def __init__(self) -> None:

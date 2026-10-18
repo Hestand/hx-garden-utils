@@ -197,7 +197,7 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert result["result"].options[CONF_ELEVATION_M] == 219
     assert result["result"].options[CONF_MODE] == MODE_NOTIFY_ONLY
     assert CONF_TEMPERATURE_SENSOR not in result["result"].options
-    assert result["result"].version == 6
+    assert result["result"].version == 7
 
 
 async def test_user_flow_http_post_is_ok(hass: HomeAssistant, hass_client) -> None:
@@ -544,7 +544,7 @@ async def test_simulation_hub_uses_dropdowns_and_a_virtual_valve(
     result = await _finish_with_no_zones(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
-    assert entry.version == 6
+    assert entry.version == 7
     assert entry.data == {CONF_SIMULATION: True}
     assert entry.options[CONF_SCENARIO] == "hot_dry"
     assert entry.options[CONF_BUCKET] == "full"
@@ -641,7 +641,7 @@ async def test_hub_flow_adds_zones_and_can_copy_the_previous(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
-    assert entry.version == 6
+    assert entry.version == 7
     zones = {zone.title: zone for zone in entry.subentries.values()}
     assert set(zones) == {"Front", "Back"}
     assert zones["Front"].data[CONF_VALVE_ENTITY] == "switch.front"

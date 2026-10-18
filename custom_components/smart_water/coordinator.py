@@ -1,9 +1,10 @@
 """Hourly weather read, evening bucket update, and watering plan.
 
 The coordinator commits one day of ET and measured rain at the plan hour
-(or when calculate_plan asks), then builds a plan that finishes before
-sunrise. When automatic watering is on, the executor runs that plan. Rain
-from the weather forecast is not treated as rain that already fell.
+(or when calculate_plan asks), then builds a plan for the next morning.
+Valves open at the start time and finish by the finish time. When automatic
+watering is on, the executor runs that plan. Rain from the weather forecast
+is not treated as rain that already fell.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from .const import (
     CONF_DEPLETION,
     CONF_DORMANT_BELOW_F,
     CONF_DRIP_IGNORES_SCHEDULE,
-    CONF_EARLIEST_HOUR,
+    CONF_EARLIEST_START,
     CONF_EFFICIENCY,
     CONF_ELEVATION_M,
     CONF_FIELD_CAPACITY,
@@ -86,7 +87,8 @@ from .const import (
     CONF_SOLAR_SENSOR,
     CONF_SPRINKLER_TYPE,
     CONF_SUN_EXPOSURE,
-    CONF_SUNRISE_BUFFER_MIN,
+    CONF_FINISH_TIME,
+    CONF_START_TIME,
     CONF_TARGET_DEPTH_IN,
     CONF_TEMPERATURE_SENSOR,
     CONF_UV_SENSOR,
@@ -129,7 +131,9 @@ from .const import (
     DEFAULT_RECENT_RAIN_MM,
     DEFAULT_ROUND_MINUTES,
     DEFAULT_SPRINKLER_TYPE,
-    DEFAULT_SUNRISE_BUFFER_MIN,
+    DEFAULT_EARLIEST_START,
+    DEFAULT_FINISH_TIME,
+    DEFAULT_START_TIME,
     DEFAULT_WIND_HEIGHT_M,
     DOMAIN,
     MODE_AUTO,
@@ -189,10 +193,9 @@ from .presets import (
     wind_skip_mph,
 )
 from .safety import would_execute
-from .schedule import rules_for
+from .schedule import morning_window, rules_for
 from .skips import SkipInputs, safety_reason
 from .week_plan import project_week
-from .solar import next_sunrise
 from .store import SmartWaterStore
 from .usage import (
     DEFAULT_BASELINE_DAYS,
@@ -307,6 +310,7 @@ class HubSnapshot:
     simulation: dict[str, Any] | None = None
     schedule_markdown: str = ""
     schedule_days: list[dict[str, Any]] | None = None
+    schedule_window: str = ""
     watering_now: str = "Idle"
     alerts: list[str] = field(default_factory=list)
 
@@ -810,8 +814,6 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             plan = self._build_plan(
                 now=now,
                 et0=et0_for_plan,
-                latitude=latitude_f,
-                longitude=longitude_f,
                 precip_tomorrow_mm=observation.precip_tomorrow_mm,
                 automatic=automatic,
                 mode=mode,
@@ -1339,24 +1341,18 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         *,
         now: datetime,
         et0: float | None,
-        latitude: float | None,
-        longitude: float | None,
         precip_tomorrow_mm: float,
         automatic: bool,
         mode: str,
         observation: Observation,
     ) -> NightPlan:
         options = self._options()
-        if latitude is None or longitude is None:
-            raise ValueError("Latitude and longitude are required to find sunrise.")
-        buffer_min = int(options.get(CONF_SUNRISE_BUFFER_MIN, DEFAULT_SUNRISE_BUFFER_MIN))
-        rise = next_sunrise(latitude, longitude, now)
-        finish_by = rise.astimezone(now.tzinfo) - timedelta(minutes=buffer_min)
-        earliest = None
-        if options.get(CONF_EARLIEST_HOUR) is not None:
-            hour = int(options[CONF_EARLIEST_HOUR])
-            local_finish = finish_by.astimezone(now.tzinfo)
-            earliest = local_finish.replace(hour=hour, minute=0, second=0, microsecond=0)
+        earliest, start_at, finish_by = morning_window(
+            now,
+            options.get(CONF_EARLIEST_START, DEFAULT_EARLIEST_START),
+            options.get(CONF_START_TIME, DEFAULT_START_TIME),
+            options.get(CONF_FINISH_TIME, DEFAULT_FINISH_TIME),
+        )
         hub_wet = _is_wet(self.hass, options.get(CONF_RAIN_SENSOR) or None)
         self._remember_forecast(observation, now)
         requests = []
@@ -1404,6 +1400,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         plan = build_plan(
             PlanRequest(
                 zones=tuple(requests),
+                start_at=start_at,
                 finish_by=finish_by,
                 earliest_start=earliest,
                 forecast_precip_mm=legacy_precip,
@@ -1420,43 +1417,43 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 hourly_wind=tuple(observation.hourly_wind),
             )
         )
-        if latitude is not None and longitude is not None:
-            try:
-                self._week = project_week(
-                    tuple(requests),
-                    now=now,
-                    latitude=latitude,
-                    longitude=longitude,
-                    timezone=self._timezone().key,
-                    sunrise_buffer_min=buffer_min,
-                    earliest_hour=_optional_int(options, CONF_EARLIEST_HOUR),
-                    forecast_precip_mm=legacy_precip,
-                    forecast_skip_mm=skip,
-                    hub_rain_wet=hub_wet,
-                    mode=mode,
-                    automatic=automatic,
-                    allowed_weekdays=schedule.allowed_weekdays,
-                    blackout_start_hour=schedule.blackout_start,
-                    blackout_end_hour=schedule.blackout_end,
-                    whole_minutes=bool(options.get(CONF_ROUND_MINUTES, DEFAULT_ROUND_MINUTES)),
-                    max_daily_runtime_min=None if cap in (None, "") else int(cap),
-                    areas=areas,
-                    max_run_min=self.hub_nightly_cap(),
-                    hourly_wind=tuple(observation.hourly_wind),
-                    forecast_expected_mm=self._forecast_expected_mm,
-                    forecast_probability_pct=(
-                        self._forecast_probability
-                        if self._forecast_has_probability
-                        else None
-                    ),
-                    forecast_probability_min=self._forecast_probability_min(),
-                    forecast_defer_max=self._forecast_defer_max(),
-                    forecast_horizon_days=self._forecast_horizon_days(),
-                    forecast_threshold_mm=skip,
-                    defer_days=self._defer_days_before(now),
-                )
-            except (KeyError, TypeError, ValueError) as err:
-                _LOGGER.debug("Smart Water could not project a week: %s", err)
+        try:
+            self._week = project_week(
+                tuple(requests),
+                now=now,
+                timezone=self._timezone().key,
+                earliest_start=str(
+                    options.get(CONF_EARLIEST_START, DEFAULT_EARLIEST_START)
+                ),
+                start_time=str(options.get(CONF_START_TIME, DEFAULT_START_TIME)),
+                finish_time=str(options.get(CONF_FINISH_TIME, DEFAULT_FINISH_TIME)),
+                forecast_precip_mm=legacy_precip,
+                forecast_skip_mm=skip,
+                hub_rain_wet=hub_wet,
+                mode=mode,
+                automatic=automatic,
+                allowed_weekdays=schedule.allowed_weekdays,
+                blackout_start_hour=schedule.blackout_start,
+                blackout_end_hour=schedule.blackout_end,
+                whole_minutes=bool(options.get(CONF_ROUND_MINUTES, DEFAULT_ROUND_MINUTES)),
+                max_daily_runtime_min=None if cap in (None, "") else int(cap),
+                areas=areas,
+                max_run_min=self.hub_nightly_cap(),
+                hourly_wind=tuple(observation.hourly_wind),
+                forecast_expected_mm=self._forecast_expected_mm,
+                forecast_probability_pct=(
+                    self._forecast_probability
+                    if self._forecast_has_probability
+                    else None
+                ),
+                forecast_probability_min=self._forecast_probability_min(),
+                forecast_defer_max=self._forecast_defer_max(),
+                forecast_horizon_days=self._forecast_horizon_days(),
+                forecast_threshold_mm=skip,
+                defer_days=self._defer_days_before(now),
+            )
+        except (KeyError, TypeError, ValueError) as err:
+            _LOGGER.debug("Smart Water could not project a week: %s", err)
         return plan
 
     def lifetime_cost(self) -> float | None:
@@ -2377,6 +2374,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             simulation=self.store.simulation,
             schedule_markdown=str(week.get("markdown") or ""),
             schedule_days=list(week.get("days") or []),
+            schedule_window=str(week.get("window") or ""),
             watering_now=watering,
             alerts=self._alert_lines(),
         )
@@ -2485,11 +2483,12 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 elevation_m=float(options.get(CONF_ELEVATION_M, DEFAULT_ELEVATION_M)),
                 timezone=self._timezone().key,
                 start=start_date,
-                sunrise_buffer_min=int(
-                    options.get(CONF_SUNRISE_BUFFER_MIN, DEFAULT_SUNRISE_BUFFER_MIN)
+                start_time=str(options.get(CONF_START_TIME, DEFAULT_START_TIME)),
+                finish_time=str(options.get(CONF_FINISH_TIME, DEFAULT_FINISH_TIME)),
+                earliest_start=str(
+                    options.get(CONF_EARLIEST_START, DEFAULT_EARLIEST_START)
                 ),
                 plan_hour=int(options.get(CONF_PLAN_HOUR, DEFAULT_PLAN_HOUR)),
-                earliest_hour=_optional_int(options, CONF_EARLIEST_HOUR),
                 forecast_skip_mm=_optional_float(options, CONF_FORECAST_SKIP_MM),
                 max_daily_runtime_min=None if cap in (None, "") else int(cap),
                 allowed_weekdays=(

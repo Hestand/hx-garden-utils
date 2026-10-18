@@ -22,9 +22,11 @@ from .const import (
     CONF_SUN_EXPOSURE,
     DEFAULT_ADJUSTMENT_PCT,
     DEFAULT_ELEVATION_M,
+    DEFAULT_EARLIEST_START,
+    DEFAULT_FINISH_TIME,
     DEFAULT_PLAN_HOUR,
     DEFAULT_ROUND_MINUTES,
-    DEFAULT_SUNRISE_BUFFER_MIN,
+    DEFAULT_START_TIME,
     DEFAULT_WIND_HEIGHT_M,
 )
 from .et import daily_et0, extraterrestrial_radiation_mj, radiation_from_sunshine_mj
@@ -32,8 +34,7 @@ from .et import ETInputs
 from .flow import expected_gallons
 from .planner import NightPlan, PlanRequest, build_plan, build_zone_request
 from .presets import resolved_root_depth_in, stored_float
-from .schedule import rules_for
-from .solar import next_sunrise
+from .schedule import morning_window, rules_for
 from .units import inches_to_mm, mm_to_inches, speed_m_s, temperature_c
 
 BUCKET_FULL = "full"
@@ -173,9 +174,10 @@ class SimSettings:
     elevation_m: float = DEFAULT_ELEVATION_M
     timezone: str = "America/Chicago"
     start: date | None = None
-    sunrise_buffer_min: int = DEFAULT_SUNRISE_BUFFER_MIN
+    start_time: str = DEFAULT_START_TIME
+    finish_time: str = DEFAULT_FINISH_TIME
+    earliest_start: str = DEFAULT_EARLIEST_START
     plan_hour: int = DEFAULT_PLAN_HOUR
-    earliest_hour: int | None = None
     forecast_skip_mm: float | None = None
     max_daily_runtime_min: int | None = None
     allowed_weekdays: tuple[str, ...] | None = None
@@ -412,7 +414,7 @@ def render_markdown(result: dict[str, Any]) -> str:
         f"## {result['scenario_name']}",
         "",
         result["note"],
-        "Each row is that day's weather and soil. Start times are the next morning, before sunrise.",
+        "Each row is that day's weather and soil. Start times are the next morning, at the start time.",
         f"Bucket at the start: {result['bucket']}.",
         "",
         "| Day | Zone | ET0 mm | Rain in | Effective in | Deficit mm | Water | Minutes | Cycles | Start | Gallons | Why |",
@@ -536,19 +538,16 @@ def _plan_evening(
                 drip_ignores_schedule=settings.drip_ignores_schedule,
             )
         )
-    rise = next_sunrise(settings.latitude, settings.longitude, evening)
-    finish_by = rise.astimezone(evening.tzinfo) - timedelta(
-        minutes=settings.sunrise_buffer_min
+    earliest, start_at, finish_by = morning_window(
+        evening,
+        settings.earliest_start,
+        settings.start_time,
+        settings.finish_time,
     )
-    earliest = None
-    if settings.earliest_hour is not None:
-        local_finish = finish_by.astimezone(evening.tzinfo)
-        earliest = local_finish.replace(
-            hour=settings.earliest_hour, minute=0, second=0, microsecond=0
-        )
     plan = build_plan(
         PlanRequest(
             zones=tuple(requests),
+            start_at=start_at,
             finish_by=finish_by,
             earliest_start=earliest,
             forecast_precip_mm=tomorrow_rain_mm,

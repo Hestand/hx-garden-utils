@@ -1,10 +1,10 @@
-"""Civil sunrise used to anchor the nightly plan.
+"""Civil sunrise approximation.
 
-This is the common low-accuracy sunrise calculation: declination from the day
-of year, the equation of time, and a zenith of 90.833° so refraction and the
-solar radius are included. It is accurate to roughly ten minutes, which sits
-inside the default 30 minute buffer before sunrise. Longitude is degrees east
-(negative in the Americas).
+The watering window is a clock, not this sunrise. The calculation stays for
+callers that want a rough time: declination from the day of year, the
+equation of time, and a zenith of 90.833° so refraction and the solar radius
+are included. It is accurate to roughly ten minutes. Longitude is degrees
+east (negative in the Americas).
 """
 
 from __future__ import annotations

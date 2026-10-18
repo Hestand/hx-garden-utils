@@ -528,7 +528,9 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
         if not planned:
             return "No watering in the next 7 days"
         day, zone = planned[0]
-        return f"{len(planned)} waterings · next {day} {zone['name']}"[:255]
+        start = str(zone.get("starts") or "").split(",")[0].strip()
+        clock = f" {start}" if start else ""
+        return f"{len(planned)} waterings · next {day}{clock} {zone['name']}"[:255]
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
@@ -539,6 +541,7 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
         return {
             "days": data.schedule_days or [],
             "markdown": data.schedule_markdown,
+            "window": data.schedule_window,
             "note": (
                 "Later days repeat today's crop ET and assume no rain."
             ),

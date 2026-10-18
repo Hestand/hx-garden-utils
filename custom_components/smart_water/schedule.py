@@ -9,10 +9,15 @@ weekday list when the hub option says so; the blackout still applies.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from .const import WEEKDAYS
+from .const import (
+    DEFAULT_EARLIEST_START,
+    DEFAULT_FINISH_TIME,
+    DEFAULT_START_TIME,
+    WEEKDAYS,
+)
 
 # Retired option values from hubs set up before allowed days replaced presets.
 # They exist only so migration can map a stored string onto a day set.
@@ -90,6 +95,50 @@ def migrate_options(options: dict[str, Any]) -> dict[str, Any]:
     return updated
 
 
+def parse_clock(value: object, default: str) -> tuple[int, int]:
+    """Read ``HH:MM`` or ``HH:MM:SS`` from a time selector."""
+    text = default if value in (None, "") else str(value).strip()
+    parts = text.split(":")
+    if len(parts) < 2:
+        raise ValueError(f"clock time {value!r} is not HH:MM")
+    hour = int(parts[0])
+    minute = int(parts[1])
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError(f"clock time {value!r} is outside 00:00–23:59")
+    return hour, minute
+
+
+def clock_on(moment: datetime, hour: int, minute: int) -> datetime:
+    """The same local day as ``moment``, at this hour and minute."""
+    return moment.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def morning_window(
+    now: datetime,
+    earliest: object = None,
+    start: object = None,
+    finish: object = None,
+) -> tuple[datetime, datetime, datetime]:
+    """Earliest, target start, and finish on the morning this plan waters.
+
+    A clock at or after today's finish uses the next morning. Planning at
+    23:00 therefore opens the valves the next day. A clock before today's
+    finish, such as 03:00, still uses this morning.
+    """
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    earliest_hm = parse_clock(earliest, DEFAULT_EARLIEST_START)
+    start_hm = parse_clock(start, DEFAULT_START_TIME)
+    finish_hm = parse_clock(finish, DEFAULT_FINISH_TIME)
+    finish_today = clock_on(now, *finish_hm)
+    day = now if now < finish_today else now + timedelta(days=1)
+    return (
+        clock_on(day, *earliest_hm),
+        clock_on(day, *start_hm),
+        clock_on(day, *finish_hm),
+    )
+
+
 def weekday_name(moment: datetime) -> str:
     """Return mon..sun for a timezone-aware or naive datetime."""
     return WEEKDAYS[moment.weekday()]
@@ -131,7 +180,7 @@ def clip_blackout(
     if _in_blackout(finish, start_hour, end_hour):
         finish = finish.replace(hour=start_hour, minute=0, second=0, microsecond=0)
         note = (
-            f"The sunrise deadline was inside the {start_hour:02d}:00–"
+            f"The finish time was inside the {start_hour:02d}:00–"
             f"{end_hour:02d}:00 blackout and was moved to {start_hour:02d}:00."
         )
     if finish.hour < start_hour or (

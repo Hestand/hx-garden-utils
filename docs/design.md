@@ -1,6 +1,6 @@
 # Smart Water design
 
-Version 0.7.2 computes a nightly irrigation plan and, when the hub's Automatic watering switch is on, runs it. The switch is off on a new install and stays off across the upgrade, so an existing hub does not start watering by itself. `would_execute` is true only when that switch is on and the mode is not `off`. Notify-only does not block a run. Run now ignores the switch. 0.7 caps each zone on its own, waits for confident forecast rain, sends a freeze notice, and ships a Lovelace card. Flow learning, the interleaved dawn schedule, and gallon totals stay.
+Version 0.8.0 computes a morning irrigation plan and, when the hub's Automatic watering switch is on, runs it. The switch is off on a new install and stays off across the upgrade, so an existing hub does not start watering by itself. `would_execute` is true only when that switch is on and the mode is not `off`. Notify-only does not block a run. Run now ignores the switch. The plan is made at the plan hour and the valves open at the start time (default 05:00), finishing by 09:00. 0.7 caps each zone on its own, waits for confident forecast rain, sends a freeze notice, and ships a Lovelace card. Flow learning and gallon totals stay.
 
 `executor.py` turns on the entity stored in `valve_entity`. That selector accepts `switch`, `valve`, and `input_boolean`. The services are `switch.turn_on` / `turn_off`, `valve.open_valve` / `close_valve`, and `input_boolean.turn_on` / `turn_off`. It does not call a controller API or `hydrawise.start_watering`. Simulation entity ids (`simulation.*`) are never passed to a service.
 
@@ -25,7 +25,7 @@ Version 0.7.2 computes a nightly irrigation plan and, when the hub's Automatic w
 | `flow_learn.py` | Median gallons per minute and high, low, and idle alerts |
 | `timing.py` | Moves the dawn deadline earlier when the hourly forecast is windy |
 | `usage.py` | Date log of gallons, fixed-timer baseline, and cost |
-| `planner.py` | Due check, one-valve timeline, sunrise finish, nightly valve cap |
+| `planner.py` | Due check, one-valve timeline, morning window, per-zone valve cap |
 | `executor.py` | One sequence of on/off commands, with confirmation |
 | `coordinator.py` | Hourly read, evening commit, arming, and bucket credit |
 | `store.py` | Restart persistence, storage version 1 |
@@ -105,17 +105,17 @@ Precipitation rate is the stored inches per hour, otherwise `96.25 × GPM / area
 
 Max cycle = floor(60 × NRCS intake in/hr / precipitation rate), at least 1. The design example is clay loam, 5–8% slope, intake 0.10 in/hr, sprays at 1.5 in/hr: a 4 minute cycle. A 20 mm deficit at efficiency 1 is 31 minutes (31.5 if rounding is off). Soak is 60 minutes for clay, clay loam, and compact silt loam, otherwise 30. Drip and bubbler soak 0 unless the zone sets an override. A pooling test can override cycle and soak.
 
-Cycles share one timeline. A zone cannot start its next cycle until its soak has elapsed. Another zone may run in that gap. The block is shifted so the last cycle ends at the deadline.
+Cycles share one timeline. A zone cannot start its next cycle until its soak has elapsed. Another zone may run in that gap. The block starts at the target start (default 05:00). If it would pass the finish time (default 09:00), it slides earlier, down to the earliest start (default 04:00), and the rest is carried.
 
-The deadline starts as the next sunrise minus the buffer (default 30 minutes). `clip_blackout` then keeps a single interval that still ends at that deadline:
+`clip_blackout` then keeps a single interval that still ends at the finish time:
 
-- If the deadline falls inside `[start, end)`, it moves back to `start:00`.
-- A deadline in the morning (before the blackout, or exactly at its start) may begin at midnight.
-- A deadline after the blackout may begin at the blackout end.
+- If the finish time falls inside `[start, end)`, it moves back to `start:00`.
+- A finish in the morning (before the blackout, or exactly at its start) may begin at midnight.
+- A finish after the blackout may begin at the blackout end.
 
-Allowed weekdays are checked against that clipped deadline. None means every day. An empty selection means no day. Drip skips the weekday check only when the hub option is on. It does not get its own timeline, so the blackout still applies.
+Allowed weekdays are checked against the first cycle, the morning the valves open. None means every day. An empty selection means no day. Drip skips the weekday check only when the hub option is on. It does not get its own timeline, so the blackout still applies.
 
-If the timeline is longer than the window, cycle lengths scale down and soak is kept. A daily runtime cap scales the same way. The plan carries a warning instead of pretending a soak-bound timeline fits.
+If the timeline is longer than the window, the prefix that fits is kept and the rest stays in the bucket. Soak times are not scaled. A daily runtime cap still scales cycle lengths. The plan carries a warning instead of pretending a soak-bound timeline fits.
 
 ## Allowed days
 
@@ -147,7 +147,7 @@ One task runs the timeline in order. Soak gaps are already in the automatic star
 
 Each command is confirmed against the entity state. Valve `opening` and `closing` count as success. Up to three attempts, one second apart. A failure is logged. If turn-on never confirms, that cycle is not slept and the result says the entity could not be turned on. The `finally` of a cycle turns the entity off, including when the task is cancelled. Startup calls `async_quiesce` before the first refresh and turns off `watering_entity` when one was saved. Home Assistant's stop event, entry unload, and `stop_all` do the same.
 
-The per-zone cap (default 60 minutes, hub option `zone_max_run_min`, overridable on the zone as `max_run_min`) is valve-on minutes for that zone tonight. Soak does not count. An optional hub total (`hub_nightly_cap_min`) is off unless set; it limits every zone together after each zone's own cap. Version 6 copies a stored `max_run_min` onto `zone_max_run_min` and does not turn the hub total on. The planner trims the earliest cycles that fit, then shifts them so the last kept cycle still ends at the deadline. Unapplied minutes stay in the deficit. The next allowed day continues only when the remainder is still at RAW; otherwise the minimum interval starts. A cycle is also shortened so it ends by `finish_by`. Under half a minute after shortening, the cycle is skipped. Manual runs and catch-cup audits have no `finish_by` and still stop at the zone cap.
+The per-zone cap (default 60 minutes, hub option `zone_max_run_min`, overridable on the zone as `max_run_min`) is valve-on minutes for that zone on that morning. Soak does not count. An optional hub total (`hub_nightly_cap_min`) is off unless set; it limits every zone together after each zone's own cap. Version 6 copies a stored `max_run_min` onto `zone_max_run_min` and does not turn the hub total on. The planner keeps the higher-priority cycles that fit before the finish time. Unapplied minutes stay in the deficit. The next allowed day continues only when the remainder is still at RAW; otherwise the minimum interval starts. A cycle is also shortened so it ends by `finish_by`. Under half a minute after shortening, the cycle is skipped. Manual runs and catch-cup audits have no `finish_by` and still stop at the zone cap.
 
 An empty automatic job list does not call `start`, so a quiet night does not cancel a manual run that is already going. Bucket credit runs outside the build lock and refreshes the snapshot without starting another sequence.
 
@@ -174,13 +174,13 @@ Actions are per alert type, default `notify`. `stop` sets `flow_locked` on that 
 
 Lifetime gallons are `total_increasing` in gal with device class water. Day, week, and month are attributes of a date log (`water_days`, 400 days). A period that resets is not `total_increasing`. Cost is lifetime gallons / 1000 × `cost_per_1000_gal`, and the sensor is created only when that option is set. The fixed-timer baseline is 15 minutes × 3 days a week unless the zone stores `baseline_minutes` or `baseline_days`. Saved gallons are baseline minus the last 7 days. The weekly budget alerts once per ISO week. The Monday summary is off unless `weekly_summary` is set, and it runs at or after the plan hour.
 
-Zone order in the scheduler is priority, then longer soak, then name. `timing.calm_finish` walks the deadline back to the start of a trailing windy hour when the hourly forecast at that hour is at or above the strictest `wind_limit_mph` of zones that will run. Drip and bubbler limits are null and do not count. The result is never earlier than the earliest hour. Hourly wind is applied to day 0 of the week projection only.
+Zone order in the scheduler is priority, then a larger deficit, then name. `timing.calm_finish` walks the finish time back to the start of a trailing windy hour when the hourly forecast at that hour is at or above the strictest `wind_limit_mph` of zones that will run. Drip and bubbler limits are null and do not count. The run stays inside the earliest start and the finish time. Hourly wind is applied to day 0 of the week projection only.
 
 ## Persistence and config
 
 `SmartWaterStore` uses Home Assistant `Store` version 1, key `smart_water.{entry_id}`. The file holds per-zone deficit, balance date, skip, enabled, adjustment, flow cursor, last run-now text, moisture deficit, the last plan, the last ET0, and the weather-day accumulator. Loading merges each zone over `fresh_zone()` and the weather dict over `fresh_day()`, so a 0.1 file gains the new keys without a migration. Storage version is not bumped, because a bump without a migration drops the file.
 
-The config entry version is 6. `async_migrate_entry` bumps an older entry. Versions below 4 still rewrite schedule options through `migrate_options`. The steps from 4 to 5 and from 5 to 6 do not, so days the user already chose stay put. Version 6 only moves the old hub runtime cap onto the per-zone default. It does not rewrite zone data. Root depth, depletion, efficiency, slope, and precipitation rate saved by the 0.2 forms stay overrides, so an old efficiency of 1.0 is not replaced by the sprinkler preset. New zones leave those keys out. Storage version is still 1. The store file may also hold `automatic` (default false), `watering_entity`, `temp_history`, `armed_date`, `plan_marked_at`, and a `simulation` object. Loading treats a missing key as the fresh-hub default, so an older file does not come back with automatic watering on.
+The config entry version is 7. `async_migrate_entry` bumps an older entry. Versions below 4 still rewrite schedule options through `migrate_options`. The steps from 4 onward do not, so days the user already chose stay put. Version 6 only moves the old hub runtime cap onto the per-zone default. Version 7 replaces the sunrise buffer and earliest hour with a 05:00 start, a 09:00 finish, and a 04:00 earliest start. It does not rewrite zone data. Root depth, depletion, efficiency, slope, and precipitation rate saved by the 0.2 forms stay overrides, so an old efficiency of 1.0 is not replaced by the sprinkler preset. New zones leave those keys out. Storage version is still 1. The store file may also hold `automatic` (default false), `watering_entity`, `temp_history`, `armed_date`, `plan_marked_at`, and a `simulation` object. Loading treats a missing key as the fresh-hub default, so an older file does not come back with automatic watering on.
 
 Setup starts with a menu. A live hub is one form (name, optional weather, collapsed sensors, collapsed location and schedule) and two zone steps (the on/off entity plus four dropdowns, then collapsed overrides). A simulation hub drops the weather entity and the on/off entity and adds optional area and slope on the zone step. Suggested values are used only for entities the discovery step found and for numbers the zone already stored. Preset numbers are description text. Writing them into the inputs would save them and blank would stop meaning preset.
 

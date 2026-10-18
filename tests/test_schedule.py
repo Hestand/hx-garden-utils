@@ -8,6 +8,7 @@ from smart_water.schedule import (
     clip_blackout,
     day_allowed,
     migrate_options,
+    morning_window,
     rules_for,
     weekday_name,
 )
@@ -52,6 +53,21 @@ def test_retired_presets_migrate_to_day_sets() -> None:
     every = migrate_options({"schedule_preset": "none", "blackout_start_hour": 9})
     assert every["allowed_weekdays"] == ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
     assert every["blackout_start_hour"] == 9
+
+
+def test_evening_plan_uses_the_next_morning_window() -> None:
+    from zoneinfo import ZoneInfo
+
+    chicago = ZoneInfo("America/Chicago")
+    evening = datetime(2026, 10, 24, 23, 0, tzinfo=chicago)
+    earliest, start, finish = morning_window(evening)
+    assert earliest == datetime(2026, 10, 25, 4, 0, tzinfo=chicago)
+    assert start == datetime(2026, 10, 25, 5, 0, tzinfo=chicago)
+    assert finish == datetime(2026, 10, 25, 9, 0, tzinfo=chicago)
+    before = datetime(2026, 10, 25, 3, 0, tzinfo=chicago)
+    same = morning_window(before, "04:30", "05:15", "08:45")
+    assert same[1] == datetime(2026, 10, 25, 5, 15, tzinfo=chicago)
+    assert same[2] == datetime(2026, 10, 25, 8, 45, tzinfo=chicago)
 
 
 def test_blackout_clip_morning_and_evening() -> None:

@@ -40,11 +40,7 @@ def _project(zone, **overrides):
     settings = dict(
         zones=(zone,),
         now=SATURDAY_EVENING,
-        latitude=31.5493,
-        longitude=-97.1467,
         timezone="America/Chicago",
-        sunrise_buffer_min=30,
-        earliest_hour=None,
         forecast_precip_mm=0.0,
         forecast_skip_mm=None,
         hub_rain_wet=False,
@@ -63,7 +59,7 @@ def _project(zone, **overrides):
 
 
 def _morning_zone():
-    """One cycle that opens after midnight and finishes just before sunrise."""
+    """One cycle that fits inside 05:00–09:00."""
     return _zone(
         name="Test1",
         deficit_mm=12.0,
@@ -84,9 +80,10 @@ def test_morning_run_is_dated_the_day_the_valve_opens() -> None:
     zone = first["zones"][0]
     assert zone["scheduled"] is True
     assert first["date"] == "2026-10-25"
-    assert zone["starts"]
+    assert str(zone["starts"]).startswith("05:00")
     assert "2026-10-24" not in str(zone["starts"])
-    assert "next 2026-10-25 Test1" in str(result["summary"])
+    assert "next 2026-10-25 05:00 Test1" in str(result["summary"])
+    assert "Start 05:00" in str(result["window"])
     assert "| 2026-10-25 | Test1 |" in str(result["markdown"])
     assert "| 2026-10-24 | Test1 |" not in str(result["markdown"])
 
@@ -107,38 +104,52 @@ def test_allowed_day_is_the_morning_the_water_would_run() -> None:
     assert allowed["days"][0]["date"] == "2026-10-25"
 
 
-def test_a_sequence_that_starts_before_midnight_uses_that_start_date() -> None:
-    """Soak time can open the valve the evening before sunrise.
+def test_overflow_is_dated_sunday_morning_and_stops_at_09() -> None:
+    """A long soak starts at 04:00 Sunday and does not run past 09:00.
 
-    The row date and the allowed day follow that first cycle. A later cycle
-    prints its own date so the two mornings are not mixed together.
+    The row stays on the morning the valves open. Minutes that do not fit
+    stay in the bucket.
     """
-    sunday_sunrise = datetime(2026, 10, 25, 6, 30, tzinfo=CHICAGO)
-    long_run = build_plan(_request(finish_by=sunday_sunrise))
+    start = datetime(2026, 10, 25, 5, 0, tzinfo=CHICAGO)
+    earliest = datetime(2026, 10, 25, 4, 0, tzinfo=CHICAGO)
+    finish = datetime(2026, 10, 25, 9, 0, tzinfo=CHICAGO)
+    long_run = build_plan(
+        _request(start_at=start, earliest_start=earliest, finish_by=finish)
+    )
     assert long_run.timeline
     first = long_run.timeline[0].start.astimezone(CHICAGO)
-    last = long_run.timeline[-1].start.astimezone(CHICAGO)
-    assert first.date().isoformat() == "2026-10-24"
-    assert last.date().isoformat() == "2026-10-25"
-    assert long_run.run_on.astimezone(CHICAGO).date().isoformat() == "2026-10-24"
-
-    kept = build_plan(
-        _request(finish_by=sunday_sunrise, allowed_weekdays=("sat",))
-    )
-    assert kept.zones[0].scheduled is True
-    rejected = build_plan(
-        _request(finish_by=sunday_sunrise, allowed_weekdays=("sun",))
-    )
-    assert rejected.zones[0].scheduled is False
-    assert rejected.zones[0].reason == "Not an allowed watering day (sat)."
-    assert rejected.run_on.astimezone(CHICAGO).date().isoformat() == "2026-10-24"
+    last = long_run.timeline[-1].end.astimezone(CHICAGO)
+    assert earliest <= first < start
+    assert last == finish
+    assert long_run.zones[0].carried_min > 0
+    assert long_run.run_on.astimezone(CHICAGO).date().isoformat() == "2026-10-25"
 
     week = _project(_zone(name="Front", min_interval_days=None))
     row = week["days"][0]
-    assert row["date"] == "2026-10-24"
-    starts = str(row["zones"][0]["starts"])
-    assert "2026-10-25" in starts
-    assert starts.split(", ")[0].count("-") == 0
+    assert row["date"] == "2026-10-25"
+    zone = row["zones"][0]
+    assert str(zone["starts"]).startswith("04:")
+    assert zone["note"]
+    assert "carries" in str(zone["note"])
+
+
+def test_wind_moves_a_long_run_earlier_but_not_before_04() -> None:
+    """Wind at 08:00 pulls the finish back. The run stays inside 04:00–09:00."""
+    hourly = (
+        (datetime(2026, 10, 25, 7, 0, tzinfo=CHICAGO), 4.0),
+        (datetime(2026, 10, 25, 8, 0, tzinfo=CHICAGO), 16.0),
+    )
+    week = _project(
+        _zone(name="Front", wind_limit_mph=10, min_interval_days=None),
+        hourly_wind=hourly,
+    )
+    zone = week["days"][0]["zones"][0]
+    assert week["days"][0]["date"] == "2026-10-25"
+    starts = str(zone["starts"])
+    assert starts.startswith("04:")
+    for token in starts.split(", "):
+        hour = int(token.split(":")[0])
+        assert hour < 8
 
 
 def _live_entry(**options) -> MockConfigEntry:
@@ -151,7 +162,7 @@ def _live_entry(**options) -> MockConfigEntry:
         domain=DOMAIN,
         title="Watering Stuff",
         data={CONF_WEATHER_ENTITY: "weather.home"},
-        version=6,
+        version=7,
         minor_version=1,
         options=base,
         subentries_data=[
@@ -233,7 +244,8 @@ async def test_live_schedule_and_next_run_share_the_morning(
     zone_id = next(iter(entry.subentries))
     schedule = _sensor(hass, entry, f"{entry.entry_id}_watering_schedule")
     next_run = _sensor(hass, entry, f"{entry.entry_id}_{zone_id}_next_run")
-    assert "next 2026-10-25 Test1" in schedule.state
+    assert "next 2026-10-25 05:00 Test1" in schedule.state
+    assert "Start 05:00" in schedule.attributes["window"]
     assert "| 2026-10-25 | Test1 |" in schedule.attributes["markdown"]
     assert "| 2026-10-24 | Test1 |" not in schedule.attributes["markdown"]
     parsed = dt_util.parse_datetime(next_run.state)

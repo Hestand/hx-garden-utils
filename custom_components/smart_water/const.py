@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "smart_water"
 NAME = "Smart Water"
-VERSION = "0.7.2"
+VERSION = "0.8.0"
 
 # Retired option key. v0.5 stores the automatic-watering switch in the hub
 # store (default off) and drops this option on migration.
@@ -28,9 +28,13 @@ CONF_ALLOWED_WEEKDAYS = "allowed_weekdays"
 CONF_BLACKOUT_START_HOUR = "blackout_start_hour"
 CONF_BLACKOUT_END_HOUR = "blackout_end_hour"
 CONF_DRIP_IGNORES_SCHEDULE = "drip_ignores_schedule"
+# Retired in 0.8. Migration drops them and writes the morning window.
 CONF_SUNRISE_BUFFER_MIN = "sunrise_buffer_min"
-CONF_PLAN_HOUR = "plan_hour"
 CONF_EARLIEST_HOUR = "earliest_hour"
+CONF_PLAN_HOUR = "plan_hour"
+CONF_START_TIME = "start_time"
+CONF_FINISH_TIME = "finish_time"
+CONF_EARLIEST_START = "earliest_start"
 CONF_FORECAST_SKIP_MM = "forecast_skip_mm"
 CONF_MAX_DAILY_RUNTIME_MIN = "max_daily_runtime_min"
 CONF_TEMPERATURE_SENSOR = "temperature_sensor"
@@ -120,8 +124,13 @@ DEFAULT_RECENT_RAIN_MM = 2.5
 DEFAULT_MAX_RUN_MIN = 60
 
 DEFAULT_ELEVATION_M = 219.0
+# Kept so a stored 0.7 option still has a name during migration.
 DEFAULT_SUNRISE_BUFFER_MIN = 30
 DEFAULT_PLAN_HOUR = 23
+# Morning window. The plan is made the evening before; valves open at the start.
+DEFAULT_START_TIME = "05:00:00"
+DEFAULT_FINISH_TIME = "09:00:00"
+DEFAULT_EARLIEST_START = "04:00:00"
 DEFAULT_WIND_HEIGHT_M = 2.0
 DEFAULT_EFFICIENCY = 1.0
 DEFAULT_PRIORITY = 10

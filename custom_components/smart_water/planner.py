@@ -1,15 +1,16 @@
-"""Nightly watering plan.
+"""Morning watering plan.
 
 The planner decides which zones are due, splits each run with cycle-and-soak,
 and lays the cycles on one shared timeline so only one valve is open.
-While one zone soaks, another zone may run. The timeline is then shifted so
-the last cycle ends at sunrise minus the buffer. This module does not call
-a service. The executor applies the timeline when automatic watering is on.
+While one zone soaks, another zone may run. The sequence starts at the
+target start time and must finish by the finish time. If it does not fit,
+it may start earlier, down to the earliest start, and the rest stays in
+the bucket. This module does not call a service. The executor applies the
+timeline when automatic watering is on.
 
-If the timeline is longer than the allowed window, cycle lengths are scaled
-down and a warning is attached. Soak times are kept, because shortening them
-is what the intake table is trying to avoid. A plan that still cannot finish
-by sunrise keeps the warning rather than pretending it fits.
+Zones are ordered by priority, then by a larger deficit. Soak times are
+kept. A cycle that would run past the finish time is shortened or left
+for the next allowed day.
 """
 
 from __future__ import annotations
@@ -211,6 +212,7 @@ class PlanRequest:
     """Everything the nightly plan needs. Times are timezone-aware."""
 
     zones: tuple[ZoneRequest, ...]
+    start_at: datetime
     finish_by: datetime
     earliest_start: datetime | None
     forecast_precip_mm: float
@@ -274,6 +276,7 @@ class NightPlan:
 
     finish_by: datetime
     earliest_start: datetime | None
+    start_at: datetime
     automatic: bool
     mode: str
     would_execute: bool
@@ -290,6 +293,7 @@ class NightPlan:
         """JSON-friendly view for entity attributes and the saved plan."""
         return {
             "finish_by": self.finish_by.isoformat(),
+            "start_at": self.start_at.isoformat(),
             "earliest_start": (
                 None
                 if self.earliest_start is None
@@ -378,8 +382,8 @@ def _schedule(jobs: list[_Job]) -> list[tuple[_Job, int, int, int]]:
                 job.ready_min for job in jobs if job.next_index < len(job.cycles)
             )
             continue
-        # Priority first, then the longer soak, so another zone can run in the gap.
-        ready.sort(key=lambda job: (job.priority, -job.soak_min, job.zone.name))
+        # Priority first, then the larger deficit. A soak gap can hold another zone.
+        ready.sort(key=lambda job: (job.priority, -job.zone.deficit_mm, job.zone.name))
         job = ready[0]
         duration = job.cycles[job.next_index]
         start = valve_free
@@ -401,11 +405,11 @@ def _span_minutes(events: list[tuple[_Job, int, int, int]]) -> int:
 
 def _place(
     events: list[tuple[_Job, int, int, int]],
-    finish_by: datetime,
+    anchor: datetime,
 ) -> tuple[TimelineEvent, ...]:
+    """Put minute 0 of the relative timeline on ``anchor``."""
     if not events:
         return ()
-    last_end = events[-1][3]
     placed: list[TimelineEvent] = []
     for job, cycle_index, start_min, end_min in events:
         placed.append(
@@ -415,11 +419,27 @@ def _place(
                 cycle_index=cycle_index,
                 cycle_count=len(job.cycles),
                 duration_min=end_min - start_min,
-                start=finish_by - timedelta(minutes=last_end - start_min),
-                end=finish_by - timedelta(minutes=last_end - end_min),
+                start=anchor + timedelta(minutes=start_min),
+                end=anchor + timedelta(minutes=end_min),
             )
         )
     return tuple(placed)
+
+
+def _window_anchor(
+    span_min: float,
+    start_at: datetime,
+    earliest: datetime,
+    finish_by: datetime,
+) -> datetime:
+    """Prefer ``start_at``. Slide earlier only so the sequence still finishes."""
+    preferred = (finish_by - start_at).total_seconds() / 60.0
+    if span_min <= preferred + 1e-6:
+        return start_at
+    anchor = finish_by - timedelta(minutes=span_min)
+    if anchor < earliest:
+        return earliest
+    return anchor
 
 
 def short_status(plan: NightPlan | None) -> str:
@@ -461,16 +481,16 @@ def _summary(
             lines.append(f"{zone.name}: not scheduled — {zone.reason}")
     if timeline:
         lines.append(
-            "Finish by "
-            f"{timeline[-1].end.strftime('%Y-%m-%d %H:%M')}."
+            f"Starts {timeline[0].start.strftime('%Y-%m-%d %H:%M')}, "
+            f"finish by {timeline[-1].end.strftime('%H:%M')}."
         )
     return "\n".join(lines)
 
 
 def build_plan(request: PlanRequest) -> NightPlan:
     """Build tonight's plan. ``would_execute`` follows :func:`would_execute`."""
-    if request.finish_by.tzinfo is None:
-        raise ValueError("finish_by must be timezone-aware")
+    if request.finish_by.tzinfo is None or request.start_at.tzinfo is None:
+        raise ValueError("start_at and finish_by must be timezone-aware")
     if request.earliest_start is not None and request.earliest_start.tzinfo is None:
         raise ValueError("earliest_start must be timezone-aware")
 
@@ -484,6 +504,11 @@ def build_plan(request: PlanRequest) -> NightPlan:
     )
     if blackout_note:
         warnings.append(blackout_note)
+    start_at = request.start_at
+    if earliest is not None and start_at < earliest:
+        start_at = earliest
+    if earliest is None:
+        earliest = start_at
     finish_day = finish_by.date().isoformat()
     zone_plans: list[ZonePlan] = []
     jobs: list[_Job] = []
@@ -491,7 +516,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
     window_closed = earliest is not None and earliest >= finish_by
     if window_closed:
         warnings.append(
-            "The earliest start is at or after the sunrise deadline, "
+            "The earliest start is at or after the finish time, "
             "so nothing was scheduled."
         )
 
@@ -637,10 +662,10 @@ def build_plan(request: PlanRequest) -> NightPlan:
                 "and was trimmed."
             )
 
-    # The clipped deadline is what the timeline must finish by. Hourly wind
-    # can move that deadline earlier, still inside the allowed window.
+    # Hourly wind can move the finish earlier, still inside the window.
+    # The target start stays put unless the sequence has to slide back.
     request_finish = finish_by
-    request_earliest = earliest
+    request_earliest = earliest if earliest is not None else start_at
     if jobs and not window_closed:
         limit = strictest_limit(
             [zone.wind_limit_mph for zone in request.zones if _zone_in_jobs(zone.zone_id, jobs)]
@@ -650,36 +675,13 @@ def build_plan(request: PlanRequest) -> NightPlan:
         )
         if wind_note:
             warnings.append(wind_note)
-        if request_earliest is not None and request_earliest >= request_finish:
+        if request_earliest >= request_finish:
             window_closed = True
             warnings.append(
-                "The earliest start is at or after the wind-adjusted deadline, "
+                "The earliest start is at or after the wind-adjusted finish time, "
                 "so nothing was scheduled."
             )
     events = _schedule(jobs) if jobs and not window_closed else []
-    if events and request_earliest is not None:
-        window = (request_finish - request_earliest).total_seconds() / 60.0
-        span = _span_minutes(events)
-        if window <= 0:
-            events = []
-        elif span > window:
-            scale = window / span
-            for job in jobs:
-                job.next_index = 0
-                job.ready_min = 0
-                job.cycles = list(
-                    _scale_cycles(tuple(job.cycles), scale, whole=request.whole_minutes)
-                )
-            events = _schedule(jobs)
-            span = _span_minutes(events)
-            if span > window:
-                warnings.append(
-                    "Runtimes were trimmed and the plan still overruns the "
-                    "window because soak time remains."
-                )
-            else:
-                warnings.append("Runtimes were trimmed to fit the watering window.")
-
     events, zone_deferred = _trim_zone_caps(events, whole=request.whole_minutes)
     if zone_deferred > 0:
         warnings.append(
@@ -691,16 +693,38 @@ def build_plan(request: PlanRequest) -> NightPlan:
             f"Valve-on time for all zones is capped at {request.max_run_min:.0f} min tonight. "
             f"{deferred:.0f} min stays in the bucket for the next allowed day."
         )
-    timeline = _place(events, request_finish)
+    ids_after_caps = {item[0].zone.zone_id for item in events}
+    full_min = (request_finish - request_earliest).total_seconds() / 60.0
+    window_deferred = 0.0
+    if events and full_min > 0 and _span_minutes(events) > full_min + 1e-6:
+        events, window_deferred = _trim_to_window(
+            events, full_min, whole=request.whole_minutes
+        )
+    if window_deferred > 0:
+        warnings.append(
+            f"The morning window left {window_deferred:.0f} min in the bucket "
+            "for the next allowed day."
+        )
+    ids_after_window = {item[0].zone.zone_id for item in events}
+    window_dropped = ids_after_caps - ids_after_window
+    anchor = _window_anchor(
+        float(_span_minutes(events)),
+        start_at,
+        request_earliest,
+        request_finish,
+    )
+    timeline = _place(events, anchor)
     if (
         timeline
-        and request_earliest is not None
-        and timeline[0].start < request_earliest
+        and timeline[0].start < start_at - timedelta(seconds=30)
     ):
-        warnings.append("The plan starts before the earliest allowed time.")
+        warnings.append(
+            f"The run starts at {timeline[0].start.strftime('%H:%M')} "
+            f"so it finishes by {request_finish.strftime('%H:%M')}."
+        )
 
     zone_plans, jobs, timeline, run_on = _apply_watering_day(
-        request, zone_plans, jobs, timeline, request_finish
+        request, zone_plans, jobs, timeline, start_at
     )
 
     scheduled_ids = {event.zone_id for event in timeline}
@@ -708,18 +732,25 @@ def build_plan(request: PlanRequest) -> NightPlan:
     for zone_plan, job in _zip_jobs(zone_plans, jobs):
         if zone_plan.zone_id not in scheduled_ids:
             cap_limit = _cap_that_bound(job, request.max_run_min)
-            if job is not None and cap_limit is not None:
+            dropped_for_window = zone_plan.zone_id in window_dropped
+            if job is not None and (cap_limit is not None or dropped_for_window):
                 missed = float(sum(job.cycles))
+                if dropped_for_window:
+                    drop_reason = (
+                        "Deferred to the next allowed day. The morning window was full."
+                    )
+                else:
+                    drop_reason = (
+                        f"Deferred to the next allowed day. Today's valve time "
+                        f"is already at the {cap_limit:.0f} min cap."
+                    )
                 final_zones.append(
                     ZonePlan(
                         zone_id=zone_plan.zone_id,
                         name=zone_plan.name,
                         due=zone_plan.due,
                         scheduled=False,
-                        reason=(
-                            f"Deferred to the next allowed day. Today's valve time "
-                            f"is already at the {cap_limit:.0f} min cap."
-                        ),
+                        reason=drop_reason,
                         deficit_mm=zone_plan.deficit_mm,
                         raw_mm=zone_plan.raw_mm,
                         taw_mm=zone_plan.taw_mm,
@@ -790,6 +821,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
     return NightPlan(
         finish_by=request_finish,
         earliest_start=request_earliest,
+        start_at=start_at,
         automatic=request.automatic,
         mode=request.mode,
         would_execute=executing,
@@ -812,20 +844,51 @@ def _outranks_watering_day(reason: str) -> bool:
     )
 
 
+def _trim_to_window(
+    events: list[tuple[_Job, int, int, int]],
+    window_min: float,
+    *,
+    whole: bool,
+) -> tuple[list[tuple[_Job, int, int, int]], float]:
+    """Keep the prefix of the timeline that ends by ``window_min``.
+
+    Minute 0 is the earliest start. A cycle that would cross the finish
+    time is shortened. Anything after that stays in the bucket.
+    """
+    kept: list[tuple[_Job, int, int, int]] = []
+    deferred = 0.0
+    minimum = 1.0 if whole else 0.5
+    for job, cycle_index, start, end in events:
+        duration = float(end - start)
+        if float(start) >= window_min - 1e-6:
+            deferred += duration
+            continue
+        if float(end) > window_min + 1e-6:
+            room = window_min - float(start)
+            allowed = int(room) if whole else round(room, 1)
+            if allowed < minimum:
+                deferred += duration
+                continue
+            kept.append((job, cycle_index, start, start + allowed))
+            deferred += duration - allowed
+            continue
+        kept.append((job, cycle_index, start, end))
+    return kept, deferred
+
+
 def _apply_watering_day(
     request: PlanRequest,
     zone_plans: list[ZonePlan],
     jobs: list[_Job],
     timeline: tuple[TimelineEvent, ...],
-    finish_by: datetime,
+    start_at: datetime,
 ) -> tuple[list[ZonePlan], list[_Job], tuple[TimelineEvent, ...], datetime]:
     """Keep a run only when its first cycle falls on an allowed day.
 
-    The sequence ends at sunrise. A long soak can start the evening before,
-    and that start is the day the water runs. A short run opens the same
-    morning as the sunrise deadline.
+    That moment is the morning the valves open. A skip with no timeline
+    still uses the target start, so the row and the weekday match.
     """
-    run_on = timeline[0].start if timeline else finish_by
+    run_on = timeline[0].start if timeline else start_at
     if day_allowed(run_on, request.allowed_weekdays):
         return zone_plans, jobs, timeline, run_on
     ignores = {zone.zone_id for zone in request.zones if zone.ignores_schedule}
@@ -870,11 +933,13 @@ def _zone_in_jobs(zone_id: str, jobs: list[_Job]) -> bool:
 def _cap_that_bound(job: _Job | None, hub_cap: float | None) -> float | None:
     """The cap that actually shortened this zone, if one did."""
     if job is None:
-        return hub_cap
+        return None
     own = float(sum(job.cycles))
     if job.max_run_min is not None and own > job.max_run_min + 0.1:
         return job.max_run_min
-    return hub_cap if hub_cap is not None else job.max_run_min
+    if hub_cap is not None:
+        return hub_cap
+    return None
 
 
 def _trim_zone_caps(

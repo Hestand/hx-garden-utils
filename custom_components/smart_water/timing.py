@@ -1,9 +1,8 @@
-"""Shift a dawn deadline earlier when the hourly forecast is too windy.
+"""Shift the finish earlier when the hourly forecast is too windy.
 
-The nightly timeline already ends at sunrise minus the buffer. If the hours
-at that deadline are forecast at or above a zone's wind cutoff, the deadline
-moves back to the start of the windy stretch, and never earlier than the
-allowed window.
+The run stays inside the morning window. If the hour at the finish time is
+forecast at or above a zone's wind cutoff, the finish moves back to the
+start of that windy stretch, and never earlier than the earliest start.
 """
 
 from __future__ import annotations
@@ -20,8 +19,8 @@ def calm_finish(
     """Return a finish time that is not inside a forecast-windy hour.
 
     ``hourly`` is ``(timestamp, wind_mph)`` pairs. A missing forecast leaves
-    the dawn deadline alone. When every hour back to the earliest start is
-    windy, the finish stays at that earliest start.
+    the finish alone. When every hour back to the earliest start is windy,
+    the finish stays at that earliest start.
     """
     if limit_mph is None or not hourly or finish_by.tzinfo is None:
         return finish_by, None
@@ -48,7 +47,7 @@ def calm_finish(
     if shifted == finish_by:
         return finish_by, None
     return shifted, (
-        f"Dawn hours forecast wind at or above {limit_mph:.0f} mph, so the run "
+        f"Forecast wind at or above {limit_mph:.0f} mph, so the run "
         f"finishes at {shifted.strftime('%H:%M')} instead of {finish_by.strftime('%H:%M')}."
     )
 
