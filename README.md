@@ -2,7 +2,7 @@
 
 Work in progress, not ready for general use.
 
-Water-balance planner and zone controller for Home Assistant (`smart_water` 0.7.1).
+Water-balance planner and zone controller for Home Assistant (`smart_water` 0.7.2).
 
 It estimates reference evapotranspiration, tracks a soil-water deficit for each zone, and builds a nightly cycle-and-soak plan that finishes before sunrise. **Automatic watering is off after a new install and after an upgrade.** Turn the hub's **Automatic watering** switch on when you want it to open valves. Until then the plan is only sensors and an optional notification. Run now is a manual action and runs even while that switch is off. A simulation hub still plays an example week and never calls a real on/off entity. The controller calls `switch`, `valve`, or `input_boolean` services only. It does not call a controller API.
 
@@ -16,7 +16,7 @@ Requires Home Assistant **2025.3** or newer (config subentries). Tested on **202
 
 1. HACS → Integrations → ⋮ → Custom repositories.
 2. Add `https://github.com/Hestand/hx-garden-utils` as category **Integration**.
-3. Download **Smart Water** (release `v0.7.1`), then restart Home Assistant.
+3. Download **Smart Water** (release `v0.7.2`), then restart Home Assistant.
 
 `hacs.json` is included. This is not in the default HACS store.
 
@@ -32,7 +32,7 @@ That directory must contain `__init__.py` and `manifest.json`. Restart Home Assi
 
 ### Upgrading from 0.5.x, 0.4.x, 0.3.x, 0.2.x, or 0.1.x
 
-Download 0.7.1 and restart. The config entry stays at version 6. Zone data is not rewritten, and the stored bucket (storage version 1) is kept. You do not reconfigure an existing hub. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
+Download 0.7.2 and restart. The config entry stays at version 6. 0.7.2 dates each schedule row by the morning the valves open. A 7-day row no longer shows the previous evening with the next sunrise's clock time. An allowed day is that same morning, or the first cycle's date when a long sequence starts before midnight. Zone data is not rewritten, and the stored bucket (storage version 1) is kept. You do not reconfigure an existing hub. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
 
 0.7 caps each zone on its own, can wait for confident forecast rain, warns before a freeze, and includes a dashboard card. Flow alerts still notify only until you change that. The weekly summary is off. Cost and the weekly gallon budget stay empty until you set them.
 
@@ -216,7 +216,7 @@ The switch is **off** on a new hub and stays **off** when you upgrade. That is d
 
 ## Watering schedule
 
-The hub sensor **Watering schedule** (`sensor.<hub>_watering_schedule`) lists the next 7 days for every zone. Its state is a short line such as `2 waterings · next 2026-07-15 Front lawn`, or `No watering in the next 7 days`. Attributes:
+The hub sensor **Watering schedule** (`sensor.<hub>_watering_schedule`) lists the next 7 days for every zone. Its state is a short line such as `2 waterings · next 2026-07-16 Front lawn`, or `No watering in the next 7 days`. The date is the day the valves open. Attributes:
 
 | Attribute | What it holds |
 | --- | --- |
@@ -236,23 +236,23 @@ content: "{{ state_attr('sensor.garden_watering_schedule', 'markdown') }}"
 
 ### Sample
 
-Computed by `project_week`, not typed by hand. Same design site and the same Monday 13 July 2026 hot-dry day used above (ET0 9.1 mm, Penman-Monteith). St. Augustine, clay loam, spray, full sun, 1000 sq ft, slope blank, July coefficient 0.71, crop ET 6.5 mm, readily available water 10.7 mm. The bucket starts at field capacity (deficit 0; today's ET is already in the deficit the sensor uses, and here that deficit is still 0). Every day is allowed, there is no blackout, and the turf minimum interval is 3 days. Later days repeat that 6.5 mm and add no rain. Each zone is capped at 60 valve-on minutes. The hub total is off. Clock times are local. A long soak sequence can start the evening of the row's date and finish before the next sunrise. The sensor state for this week is `2 waterings · next 2026-07-15 Front lawn`.
+Computed by `project_week`, not typed by hand. Same design site and the same Monday 13 July 2026 hot-dry day used above (ET0 9.1 mm, Penman-Monteith). St. Augustine, clay loam, spray, full sun, 1000 sq ft, slope blank, July coefficient 0.71, crop ET 6.5 mm, readily available water 10.7 mm. The bucket starts at field capacity (deficit 0; today's ET is already in the deficit the sensor uses, and here that deficit is still 0). Every day is allowed, there is no blackout, and the turf minimum interval is 3 days. Later days repeat that 6.5 mm and add no rain. Each zone is capped at 60 valve-on minutes. The hub total is off. Clock times are local. Each row is dated by the first cycle, which is the morning after the 23:00 plan when the run is short. A long soak sequence can start the previous evening; later cycles then print their own date. The sensor state for this week is `2 waterings · next 2026-07-16 Front lawn`.
 
 ```text
 Next 7 days. Later days repeat today's crop ET and assume no rain.
 
 | Date | Zone | Starts | Minutes | Depth | Gallons | Note |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2026-07-13 | Front lawn | — | — | — | — | Below RAW (deficit 0.0 mm, RAW 10.7 mm). |
-| 2026-07-14 | Front lawn | — | — | — | — | Below RAW (deficit 6.5 mm, RAW 10.7 mm). |
-| 2026-07-15 | Front lawn | 00:23, 01:30, 02:37, 03:44, 04:51, 05:58 | 41 | 0.51 in (13.0 mm) | 532 |  |
-| 2026-07-16 | Front lawn | — | — | — | — | Below RAW (deficit 6.5 mm, RAW 10.7 mm). |
-| 2026-07-17 | Front lawn | — | — | — | — | Minimum 3 days between waterings (2 since the last run). |
-| 2026-07-18 | Front lawn | 21:06, 22:13, 23:20, 00:27, 01:34, 02:41, 03:48, 04:55, 06:01 | 60 | 0.75 in (19.1 mm) | 779 | 1 min carries to the next allowed day. |
-| 2026-07-19 | Front lawn | — | — | — | — | Below RAW (deficit 6.8 mm, RAW 10.7 mm). |
+| 2026-07-14 | Front lawn | — | — | — | — | Below RAW (deficit 0.0 mm, RAW 10.7 mm). |
+| 2026-07-15 | Front lawn | — | — | — | — | Below RAW (deficit 6.5 mm, RAW 10.7 mm). |
+| 2026-07-16 | Front lawn | 00:23, 01:30, 02:37, 03:44, 04:51, 05:58 | 41 | 0.51 in (13.0 mm) | 532 |  |
+| 2026-07-17 | Front lawn | — | — | — | — | Below RAW (deficit 6.5 mm, RAW 10.7 mm). |
+| 2026-07-18 | Front lawn | — | — | — | — | Minimum 3 days between waterings (2 since the last run). |
+| 2026-07-18 | Front lawn | 21:06, 22:13, 23:20, 2026-07-19 00:27, 2026-07-19 01:34, 2026-07-19 02:41, 2026-07-19 03:48, 2026-07-19 04:55, 2026-07-19 06:01 | 60 | 0.75 in (19.1 mm) | 779 | 1 min carries to the next allowed day. |
+| 2026-07-20 | Front lawn | — | — | — | — | Below RAW (deficit 6.8 mm, RAW 10.7 mm). |
 ```
 
-July 17 is already past readily available water and is still skipped, because the last run was only two days earlier. July 18 is the night that used to show 61 minutes. It now stops at 60. The leftover minute would leave the bucket below readily available water, so July 19 does not schedule a one-minute run.
+The 16 July row is the first run. Its cycles all open after midnight, so the date is the 16th even though the plan was made on the evening of the 15th. The morning of 18 July is already past readily available water and is still skipped, because the last run was only two days earlier. The same date also holds the next night, which starts at 21:06 and used to show 61 minutes. That night stops at 60. Cycles after midnight are labeled 19 July. The leftover minute would leave the bucket below readily available water, so the following morning does not schedule a one-minute run.
 
 ### Three zones, one morning
 
@@ -264,14 +264,14 @@ Same site, same Monday evening, ET0 9.1 mm. Deficits are set so each zone is alr
 | Back lawn | St. Augustine, sand, spray | 600 sq ft | 6.0 mm | 5.4 mm |
 | Vegetable bed | Vegetable, sand, spray | 200 sq ft | 9.0 mm | 8.2 mm |
 
-Clay loam soaks 60 minutes, so the other two zones run inside that gap. One valve is on at a time. Valve-on time is 35 + 19 + 28 = 82, and no zone is over 60. The sensor state is `10 waterings · next 2026-07-13 Back lawn`. The first morning is:
+Clay loam soaks 60 minutes, so the other two zones run inside that gap. One valve is on at a time. Valve-on time is 35 + 19 + 28 = 82, and no zone is over 60. The sensor state is `10 waterings · next 2026-07-14 Back lawn`. The first morning is 14 July, the sunrise after Monday evening:
 
 ```text
 | Date | Zone | Starts | Minutes | Depth | Gallons | Note |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2026-07-13 | Back lawn | 01:35 | 19 | 0.24 in (6.0 mm) | 148 |  |
-| 2026-07-13 | Front lawn | 01:28, 02:35, 03:42, 04:49, 05:56 | 35 | 0.44 in (11.2 mm) | 454 |  |
-| 2026-07-13 | Vegetable bed | 01:54 | 28 | 0.35 in (9.0 mm) | 73 |  |
+| 2026-07-14 | Back lawn | 01:35 | 19 | 0.24 in (6.0 mm) | 148 |  |
+| 2026-07-14 | Front lawn | 01:28, 02:35, 03:42, 04:49, 05:56 | 35 | 0.44 in (11.2 mm) | 454 |  |
+| 2026-07-14 | Vegetable bed | 01:54 | 28 | 0.35 in (9.0 mm) | 73 |  |
 ```
 
 Clock order, local time on 14 July:

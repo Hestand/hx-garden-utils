@@ -1,6 +1,6 @@
 # Smart Water design
 
-Version 0.7.1 computes a nightly irrigation plan and, when the hub's Automatic watering switch is on, runs it. The switch is off on a new install and stays off across the upgrade, so an existing hub does not start watering by itself. `would_execute` is true only when that switch is on and the mode is not `off`. Notify-only does not block a run. Run now ignores the switch. 0.7 caps each zone on its own, waits for confident forecast rain, sends a freeze notice, and ships a Lovelace card. Flow learning, the interleaved dawn schedule, and gallon totals stay.
+Version 0.7.2 computes a nightly irrigation plan and, when the hub's Automatic watering switch is on, runs it. The switch is off on a new install and stays off across the upgrade, so an existing hub does not start watering by itself. `would_execute` is true only when that switch is on and the mode is not `off`. Notify-only does not block a run. Run now ignores the switch. 0.7 caps each zone on its own, waits for confident forecast rain, sends a freeze notice, and ships a Lovelace card. Flow learning, the interleaved dawn schedule, and gallon totals stay.
 
 `executor.py` turns on the entity stored in `valve_entity`. That selector accepts `switch`, `valve`, and `input_boolean`. The services are `switch.turn_on` / `turn_off`, `valve.open_valve` / `close_valve`, and `input_boolean.turn_on` / `turn_off`. It does not call a controller API or `hydrawise.start_watering`. Simulation entity ids (`simulation.*`) are never passed to a service.
 

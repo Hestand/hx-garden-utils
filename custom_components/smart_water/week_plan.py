@@ -4,6 +4,10 @@ Day 0 uses the deficit already stored (today's ET is already in it when the
 evening balance has run). Each later day adds one more day of the same crop
 ET and no rain. Future rain is not assumed. A scheduled day refills by the
 planned net depth and resets the days-since-watering counter.
+
+Each row is dated by the morning the valves open: the first cycle's start,
+or the sunrise deadline when nothing is scheduled. A sequence that starts
+before midnight is dated that evening, and any later cycle shows its own date.
 """
 
 from __future__ import annotations
@@ -136,7 +140,7 @@ def project_week(
                 hourly_wind=hourly_wind if offset == 0 else (),
             )
         )
-        rows.append(_day_row(moment.date().isoformat(), plan, areas))
+        rows.append(_day_row(plan, areas, tz))
         for zone_plan in plan.zones:
             if (zone_plan.reason or "").startswith("Deferred for forecast rain"):
                 waiting[zone_plan.zone_id] = waiting.get(zone_plan.zone_id, 0) + 1
@@ -201,12 +205,35 @@ def render_markdown(days: list[dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
+def _label_moment(plan: NightPlan) -> datetime:
+    """The calendar moment this row describes.
+
+    A scheduled night uses the first cycle. A skip still names the morning
+    the valves would have opened, which is ``run_on``.
+    """
+    if plan.timeline:
+        return plan.timeline[0].start
+    return plan.run_on
+
+
+def _format_start(moment: datetime, row_day: str, tz: ZoneInfo) -> str:
+    """Clock time, plus the date when this cycle is not on the row's day."""
+    local = moment.astimezone(tz)
+    clock = local.strftime("%H:%M")
+    if local.date().isoformat() == row_day:
+        return clock
+    return f"{local.date().isoformat()} {clock}"
+
+
 def _day_row(
-    day: str, plan: NightPlan, areas: dict[str, float | None]
+    plan: NightPlan, areas: dict[str, float | None], tz: ZoneInfo
 ) -> dict[str, object]:
+    day = _label_moment(plan).astimezone(tz).date().isoformat()
     by_zone: dict[str, list[str]] = {}
     for event in plan.timeline:
-        by_zone.setdefault(event.zone_id, []).append(event.start.strftime("%H:%M"))
+        by_zone.setdefault(event.zone_id, []).append(
+            _format_start(event.start, day, tz)
+        )
     zones = []
     for zone in plan.zones:
         gallons = None

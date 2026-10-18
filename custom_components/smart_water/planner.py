@@ -282,6 +282,9 @@ class NightPlan:
     summary: str
     zones: tuple[ZonePlan, ...]
     timeline: tuple[TimelineEvent, ...]
+    # When the valves would open. The allowed-day check and the schedule
+    # row both use this, including when the timeline was then cleared.
+    run_on: datetime
 
     def to_dict(self) -> dict[str, object]:
         """JSON-friendly view for entity attributes and the saved plan."""
@@ -528,7 +531,9 @@ def build_plan(request: PlanRequest) -> NightPlan:
                 moisture_skip_full=zone.moisture_skip_full,
                 forecast_skip=forecast_skip,
                 forecast_mm=request.forecast_precip_mm,
-                allowed_day=day_allowed(finish_by, request.allowed_weekdays),
+                # The watering day is the first cycle's date, which is only
+                # known once the timeline is placed. Apply it after that.
+                allowed_day=True,
                 ignores_schedule=zone.ignores_schedule,
                 weekday=weekday_name(finish_by),
                 window_closed=window_closed,
@@ -694,6 +699,10 @@ def build_plan(request: PlanRequest) -> NightPlan:
     ):
         warnings.append("The plan starts before the earliest allowed time.")
 
+    zone_plans, jobs, timeline, run_on = _apply_watering_day(
+        request, zone_plans, jobs, timeline, request_finish
+    )
+
     scheduled_ids = {event.zone_id for event in timeline}
     final_zones: list[ZonePlan] = []
     for zone_plan, job in _zip_jobs(zone_plans, jobs):
@@ -789,7 +798,69 @@ def build_plan(request: PlanRequest) -> NightPlan:
         summary=summary,
         zones=tuple(final_zones),
         timeline=timeline,
+        run_on=run_on,
     )
+
+
+def _outranks_watering_day(reason: str) -> bool:
+    """Rain, freeze, wind, and a pause beat the weekday check."""
+    return (
+        reason == "Zone is disabled."
+        or reason.startswith("Skipped because")
+        or reason.startswith("Skipped until")
+        or reason.startswith("Deferred for forecast")
+    )
+
+
+def _apply_watering_day(
+    request: PlanRequest,
+    zone_plans: list[ZonePlan],
+    jobs: list[_Job],
+    timeline: tuple[TimelineEvent, ...],
+    finish_by: datetime,
+) -> tuple[list[ZonePlan], list[_Job], tuple[TimelineEvent, ...], datetime]:
+    """Keep a run only when its first cycle falls on an allowed day.
+
+    The sequence ends at sunrise. A long soak can start the evening before,
+    and that start is the day the water runs. A short run opens the same
+    morning as the sunrise deadline.
+    """
+    run_on = timeline[0].start if timeline else finish_by
+    if day_allowed(run_on, request.allowed_weekdays):
+        return zone_plans, jobs, timeline, run_on
+    ignores = {zone.zone_id for zone in request.zones if zone.ignores_schedule}
+    note = f"Not an allowed watering day ({weekday_name(run_on)})."
+    drop: set[str] = set()
+    updated: list[ZonePlan] = []
+    for zone_plan in zone_plans:
+        if zone_plan.zone_id in ignores or _outranks_watering_day(zone_plan.reason):
+            updated.append(zone_plan)
+            continue
+        drop.add(zone_plan.zone_id)
+        updated.append(
+            ZonePlan(
+                zone_id=zone_plan.zone_id,
+                name=zone_plan.name,
+                due=zone_plan.due,
+                scheduled=False,
+                reason=note,
+                deficit_mm=zone_plan.deficit_mm,
+                raw_mm=zone_plan.raw_mm,
+                taw_mm=zone_plan.taw_mm,
+                etc_mm=zone_plan.etc_mm,
+                kc=zone_plan.kc,
+                p=zone_plan.p,
+                net_mm=0.0,
+                runtime_min=0,
+                max_cycle_min=zone_plan.max_cycle_min,
+                soak_min=zone_plan.soak_min,
+                cycles=(),
+                precipitation_rate_in_hr=zone_plan.precipitation_rate_in_hr,
+            )
+        )
+    kept = [job for job in jobs if job.zone.zone_id not in drop]
+    timeline = tuple(event for event in timeline if event.zone_id not in drop)
+    return updated, kept, timeline, run_on
 
 
 def _zone_in_jobs(zone_id: str, jobs: list[_Job]) -> bool:

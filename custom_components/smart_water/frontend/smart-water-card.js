@@ -356,6 +356,8 @@ class SmartWaterCard extends HTMLElement {
     }
     return date.toLocaleString(undefined, {
       weekday: "short",
+      month: "short",
+      day: "numeric",
       hour: "numeric",
       minute: "2-digit",
     });
