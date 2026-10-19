@@ -317,9 +317,17 @@ async def _move_store(
         got = copied.get(zone_id)
         if not isinstance(got, dict) or got.get("deficit_mm") != zone.get("deficit_mm"):
             raise RuntimeError(f"Sprinklecast storage lost the bucket for {zone_id}")
-    if old_path.is_file():
-        old_store = Store(hass, STORAGE_VERSION, old_key)
-        await old_store.async_remove()
+    old_store = Store(hass, STORAGE_VERSION, old_key)
+    old_store._manager.async_invalidate(old_key)  # noqa: SLF001
+    await old_store.async_remove()
+
+    def _unlink() -> None:
+        if old_path.is_file() or old_path.is_symlink():
+            old_path.unlink()
+
+    await hass.async_add_executor_job(_unlink)
+    if old_path.exists():
+        raise RuntimeError(f"Could not delete {old_path}")
 
 
 def _move_devices(hass: HomeAssistant, old_id: str, new_id: str) -> None:

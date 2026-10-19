@@ -87,7 +87,8 @@ async def _setup(hass: HomeAssistant, *, hubs: int = 1) -> list[MockConfigEntry]
         {"zones": {"front": {"deficit_mm": 0.0, "learn_factor": 1.2}}}
     )
     for entry in entries:
-        assert await hass.config_entries.async_setup(entry.entry_id)
+        if entry.state is ConfigEntryState.NOT_LOADED:
+            assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     return entries
 
@@ -101,7 +102,7 @@ def _entity(hass: HomeAssistant, domain: str, unique_id: str) -> str:
 async def test_setting_soil_water_updates_the_sensor_plan_and_store(
     hass: HomeAssistant,
 ) -> None:
-    """40% full writes 60% of TAW, including the learned factor, and rebuilds the plan."""
+    """20% full writes 80% of TAW, including the learned factor, and rebuilds the plan."""
     entry = (await _setup(hass))[0]
     assert entry.state is ConfigEntryState.LOADED
     front = next(
@@ -122,12 +123,12 @@ async def test_setting_soil_water_updates_the_sensor_plan_and_store(
     await hass.services.async_call(
         NUMBER_DOMAIN,
         "set_value",
-        {"entity_id": number_id, "value": 40},
+        {"entity_id": number_id, "value": 20},
         blocking=True,
     )
     zone = entry.runtime_data.data.zones[front]
-    assert zone.full_pct == pytest.approx(40, abs=0.2)
-    assert zone.deficit_mm == pytest.approx(zone.taw_mm * 0.6, rel=0.01)
+    assert zone.full_pct == pytest.approx(20, abs=0.2)
+    assert zone.deficit_mm == pytest.approx(zone.taw_mm * 0.8, rel=0.01)
     assert zone.learn_factor == pytest.approx(1.2)
     assert float(hass.states.get(sensor_id).state) == pytest.approx(zone.full_pct, abs=0.2)
     assert float(hass.states.get(number_id).state) == pytest.approx(zone.full_pct, abs=0.2)
@@ -136,9 +137,9 @@ async def test_setting_soil_water_updates_the_sensor_plan_and_store(
 
     stored = entry.runtime_data.store.zone(front)
     assert stored["bucket_history"][-1]["set"] is True
-    assert stored["bucket_history"][-1]["full_pct"] == pytest.approx(40, abs=0.2)
+    assert stored["bucket_history"][-1]["full_pct"] == pytest.approx(20, abs=0.2)
     assert stored["bucket_adjustments"][-1]["kind"] == "set"
-    assert stored["bucket_adjustments"][-1]["full_pct"] == pytest.approx(40, abs=0.2)
+    assert stored["bucket_adjustments"][-1]["full_pct"] == pytest.approx(20, abs=0.2)
     deficit_sensor = _entity(hass, "sensor", f"{entry.entry_id}_{front}_deficit")
     history = hass.states.get(deficit_sensor).attributes["history"]
     assert history[-1]["set"] is True
@@ -146,7 +147,7 @@ async def test_setting_soil_water_updates_the_sensor_plan_and_store(
 
     await entry.runtime_data.async_set_adjustment(front, 100)
     assert entry.runtime_data.store.zone(front)["bucket_history"][-1]["set"] is True
-    assert entry.runtime_data.data.zones[front].full_pct == pytest.approx(40, abs=0.2)
+    assert entry.runtime_data.data.zones[front].full_pct == pytest.approx(20, abs=0.2)
 
     calendar_id = _entity(hass, "calendar", f"{entry.entry_id}_watering_calendar")
     response = await hass.services.async_call(
@@ -187,7 +188,7 @@ async def test_setting_soil_water_updates_the_sensor_plan_and_store(
         blocking=True,
     )
     assert entry.runtime_data.data.zones[back].full_pct == pytest.approx(25, abs=0.2)
-    assert entry.runtime_data.data.zones[front].full_pct == pytest.approx(40, abs=0.2)
+    assert entry.runtime_data.data.zones[front].full_pct == pytest.approx(20, abs=0.2)
 
     await hass.services.async_call(
         DOMAIN,
@@ -250,8 +251,8 @@ async def test_soil_water_service_rejects_a_mixed_or_ambiguous_target(
     await hass.services.async_call(
         DOMAIN,
         "set_soil_water_level",
-        {"hub": "Other", "zone": "Front", "deficit": 1},
+        {"hub": "Other", "zone": "Front", "deficit": 0.5},
         blocking=True,
     )
     other_front = other.runtime_data.data.zones["front"]
-    assert other_front.deficit_mm == pytest.approx(inches_to_mm(1), abs=0.05)
+    assert other_front.deficit_mm == pytest.approx(inches_to_mm(0.5), abs=0.05)
