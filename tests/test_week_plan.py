@@ -244,10 +244,14 @@ async def test_live_schedule_and_next_run_share_the_morning(
     zone_id = next(iter(entry.subentries))
     schedule = _sensor(hass, entry, f"{entry.entry_id}_watering_schedule")
     next_run = _sensor(hass, entry, f"{entry.entry_id}_{zone_id}_next_run")
-    assert "next 2026-10-25 05:00 Test1" in schedule.state
+    assert schedule.state == "Next watering Sun Oct 25, 5:00 AM"
+    assert "estimated" not in schedule.state.lower()
     assert "Start 05:00" in schedule.attributes["window"]
-    assert "| 2026-10-25 | Test1 |" in schedule.attributes["markdown"]
-    assert "| 2026-10-24 | Test1 |" not in schedule.attributes["markdown"]
+    assert "2026-10-25" in schedule.attributes["markdown"]
+    assert "Test1" in schedule.attributes["markdown"]
+    assert "2026-10-24" not in schedule.attributes["markdown"]
+    assert schedule.attributes["days"][0]["date"] == "2026-10-25"
+    assert schedule.attributes["days"][0]["zones"][0]["scheduled"] is True
     parsed = dt_util.parse_datetime(next_run.state)
     assert parsed is not None
     assert parsed.astimezone(CHICAGO).date().isoformat() == "2026-10-25"
@@ -256,11 +260,14 @@ async def test_live_schedule_and_next_run_share_the_morning(
 async def test_live_allowed_day_names_the_morning(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Saturday is allowed, but this cycle opens Sunday, so the note says sun."""
+    """Saturday is the only allowed day, so the list skips Sunday and shows Saturday."""
     _freeze_saturday(monkeypatch)
     entry = await _load(hass, _live_entry(**{CONF_ALLOWED_WEEKDAYS: ["sat"]}))
     schedule = _sensor(hass, entry, f"{entry.entry_id}_watering_schedule")
+    assert len(schedule.attributes["days"]) == 1
     row = schedule.attributes["days"][0]
-    assert row["date"] == "2026-10-25"
-    assert row["zones"][0]["reason"] == "Not an allowed watering day (sun)."
+    assert row["date"] == "2026-10-31"
+    assert row["zones"][0]["scheduled"] is True
+    assert schedule.state == "Next watering Sat Oct 31, 5:00 AM"
+    assert "Not an allowed watering day" not in schedule.attributes["markdown"]
     assert entry.state is not None

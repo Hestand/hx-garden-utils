@@ -25,8 +25,17 @@ def test_a_dry_zone_waits_for_the_next_allowed_monday() -> None:
         max_cycle_override_min=30,
     )
     result = _project(zone, days=60, allowed_weekdays=("mon",))
-    week, outlook = split_outlook(result, timezone="America/Chicago")
-    assert len(week["days"]) == 7
+    week, outlook = split_outlook(
+        result,
+        timezone="America/Chicago",
+        allowed_weekdays=("mon",),
+        forecast_horizon_days=2,
+    )
+    assert len(week["days"]) == 1
+    assert week["days"][0]["date"] == "2026-11-09"
+    assert week["days"][0]["estimated"] is True
+    assert "estimated" not in str(week["summary"]).lower()
+    assert "~" not in str(week["summary"])
     info = outlook["by_zone"]["front"]
     assert info["at"] == datetime(2026, 11, 9, 5, 0, tzinfo=CHICAGO)
     assert info["estimated"] is True

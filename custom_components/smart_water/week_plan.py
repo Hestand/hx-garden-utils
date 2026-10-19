@@ -1,9 +1,16 @@
-"""Project the next seven mornings with the live planner.
+"""Project upcoming mornings with the live planner.
 
 Day 0 uses the deficit already stored (today's ET is already in it when the
 evening balance has run). Each later day adds one more day of the same crop
 ET and no rain. Future rain is not assumed. A scheduled day refills by the
-planned net depth and resets the days-since-watering counter.
+planned net depth and resets the days-since-watering counter, so the next
+watering day sees the bucket after this one.
+
+The projection keeps every calendar day. The schedule the sensor shows keeps
+only mornings when at least one zone waters, and only as many of those as the
+user allowed weekdays (every day means seven). Each of those rows is the full
+plan: local start and finish, and each zone's cycles, times, depth, gallons,
+and soak.
 
 Each row is dated by the morning the valves open: the first cycle's start,
 or the target start time when nothing is scheduled. A sequence that starts
@@ -17,6 +24,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .balance import apply_daily_balance
+from .const import WEEKDAYS
 from .flow import expected_gallons
 from .forecast_rain import defer_reason
 from .planner import NightPlan, PlanRequest, ZoneRequest, build_plan
@@ -159,7 +167,9 @@ def project_week(
                 sunrise_at=sunrise,
             )
         )
-        rows.append(_day_row(plan, areas, tz))
+        row = _day_row(plan, areas, tz)
+        row["offset"] = offset
+        rows.append(row)
         for zone_plan in plan.zones:
             if (zone_plan.reason or "").startswith("Deferred for forecast rain"):
                 waiting[zone_plan.zone_id] = waiting.get(zone_plan.zone_id, 0) + 1
@@ -266,13 +276,36 @@ def _day_row(
     plan: NightPlan, areas: dict[str, float | None], tz: ZoneInfo
 ) -> dict[str, object]:
     day = _label_moment(plan).astimezone(tz).date().isoformat()
-    by_zone: dict[str, list[str]] = {}
+    events_by_zone: dict[str, list] = {}
     for event in plan.timeline:
-        by_zone.setdefault(event.zone_id, []).append(
-            _format_start(event.start, day, tz)
-        )
+        events_by_zone.setdefault(event.zone_id, []).append(event)
+    start = ""
+    finish = ""
+    start_at = ""
+    finish_at = ""
+    if plan.timeline:
+        first = plan.timeline[0].start.astimezone(tz)
+        last = plan.timeline[-1].end.astimezone(tz)
+        start = _format_start(first, day, tz)
+        finish = _format_start(last, day, tz)
+        start_at = first.isoformat()
+        finish_at = last.isoformat()
     zones = []
     for zone in plan.zones:
+        events = events_by_zone.get(zone.zone_id, [])
+        bursts = []
+        for event in events:
+            last_cycle = event.cycle_index >= event.cycle_count
+            bursts.append(
+                {
+                    "cycle": event.cycle_index,
+                    "of": event.cycle_count,
+                    "minutes": event.duration_min,
+                    "start": _format_start(event.start, day, tz),
+                    "end": _format_start(event.end, day, tz),
+                    "soak_min": 0 if last_cycle else zone.soak_min,
+                }
+            )
         gallons = None
         if zone.scheduled:
             gallons = expected_gallons(
@@ -287,12 +320,14 @@ def _day_row(
                 "name": zone.name,
                 "scheduled": zone.scheduled,
                 "reason": zone.reason,
-                "starts": ", ".join(by_zone.get(zone.zone_id, [])),
+                "starts": ", ".join(str(burst["start"]) for burst in bursts),
                 "minutes": zone.runtime_min,
                 "mm": round(zone.net_mm, 2),
                 "inches": round(mm_to_inches(zone.net_mm), 3) if zone.scheduled else 0.0,
                 "gallons": None if gallons is None else round(gallons, 1),
                 "cycles": list(zone.cycles),
+                "soak_min": zone.soak_min if zone.scheduled else 0,
+                "bursts": bursts,
                 "note": (
                     f"{zone.carried_min:.0f} min carries to the next allowed day."
                     if zone.scheduled and zone.carried_min >= 0.5
@@ -300,7 +335,122 @@ def _day_row(
                 ),
             }
         )
-    return {"date": day, "zones": zones}
+    return {
+        "date": day,
+        "start": start,
+        "finish": finish,
+        "start_at": start_at,
+        "finish_at": finish_at,
+        "zones": zones,
+    }
+
+
+def watering_day_limit(allowed_weekdays: tuple[str, ...] | None) -> int:
+    """How many upcoming watering days the schedule lists.
+
+    None means every day, which lists seven watering mornings. An empty
+    selection lists none. Any other selection lists one watering morning
+    per chosen weekday, however far apart those mornings are.
+    """
+    if allowed_weekdays is None:
+        return len(WEEKDAYS)
+    return len(allowed_weekdays)
+
+
+def select_watering_days(
+    days: list[dict[str, object]],
+    *,
+    limit: int,
+    forecast_horizon_days: int,
+) -> list[dict[str, object]]:
+    """The next watering mornings, skipping days when nothing runs.
+
+    ``estimated`` is set only when the morning is past the weather forecast.
+    The date and clocks stay exact either way.
+    """
+    if limit <= 0:
+        return []
+    chosen: list[dict[str, object]] = []
+    for day in days:
+        zones = [
+            zone
+            for zone in list(day.get("zones") or [])
+            if isinstance(zone, dict) and zone.get("scheduled")
+        ]
+        if not zones:
+            continue
+        offset = int(day.get("offset") or 0)  # type: ignore[arg-type]
+        past_forecast = forecast_horizon_days > 0 and offset >= forecast_horizon_days
+        chosen.append(
+            {
+                "date": day.get("date"),
+                "start": day.get("start") or "",
+                "finish": day.get("finish") or "",
+                "start_at": day.get("start_at") or "",
+                "finish_at": day.get("finish_at") or "",
+                "estimated": past_forecast,
+                "zones": zones,
+            }
+        )
+        if len(chosen) >= limit:
+            break
+    return chosen
+
+
+def render_watering_markdown(
+    days: list[dict[str, object]], window: str = "", horizon: int | None = None
+) -> str:
+    """The watering-day list, with exact dates and times and no estimate wording."""
+    if horizon is None:
+        horizon = OUTLOOK_DAYS
+    count = len(days)
+    if count == 0:
+        intro = f"No watering days in the next {horizon} days."
+    elif count == 1:
+        intro = "Next watering day."
+    else:
+        intro = f"Next {count} watering days."
+    intro += (
+        " Days with no watering are left out. Later days use the forecast "
+        "or the recent water-loss average and assume no rain."
+    )
+    if window:
+        intro = f"{intro} {window}"
+    lines = [intro, ""]
+    for day in days:
+        start = str(day.get("start") or "—")
+        finish = str(day.get("finish") or "—")
+        lines.append(f"{day.get('date')} {start}–{finish}")
+        zones = list(day.get("zones") or [])
+        if not zones:
+            lines.append("- No zones.")
+            lines.append("")
+            continue
+        for zone in zones:
+            if not isinstance(zone, dict):
+                continue
+            gallons = zone.get("gallons")
+            gal = "" if gallons is None else f", {float(gallons):.0f} gal"
+            soak = int(zone.get("soak_min") or 0)
+            lines.append(
+                f"- {zone['name']}: {zone['minutes']} min, "
+                f"{float(zone['inches']):.2f} in ({float(zone['mm']):.1f} mm){gal}, "
+                f"soak {soak} min"
+            )
+            note = str(zone.get("note") or "")
+            if note:
+                lines.append(f"  {note}")
+            for burst in list(zone.get("bursts") or []):
+                if not isinstance(burst, dict):
+                    continue
+                soak_after = int(burst.get("soak_min") or 0)
+                soak_text = f", soak {soak_after} min" if soak_after else ""
+                lines.append(
+                    f"  {burst['cycle']}/{burst['of']} {burst['start']}–{burst['end']} "
+                    f"({burst['minutes']} min{soak_text})"
+                )
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 FIRM_DAYS = 7
@@ -313,15 +463,32 @@ def split_outlook(
     timezone: str,
     firm_days: int = FIRM_DAYS,
     horizon: int = OUTLOOK_DAYS,
+    allowed_weekdays: tuple[str, ...] | None = None,
+    forecast_horizon_days: int = 0,
+    watering_days: int | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
-    """Keep a 7-day table, and a longer outlook for the next-watering date."""
-    days = list(full.get("days") or [])
-    firm = days[:firm_days]
+    """Keep the next watering days, and a year-long outlook for each zone.
+
+    ``watering_days`` overrides the count. Otherwise the count is the number
+    of allowed weekdays (seven when every day is allowed). Calendar days with
+    no watering are left out. ``firm_days`` still decides which next-run
+    dates count as this week's plan in the per-zone outlook.
+    """
+    days = [day for day in list(full.get("days") or []) if isinstance(day, dict)]
+    limit = watering_day_limit(allowed_weekdays) if watering_days is None else watering_days
+    shown = select_watering_days(
+        days, limit=limit, forecast_horizon_days=forecast_horizon_days
+    )
     window = str(full.get("window") or "")
+    summary = ""
+    if shown and shown[0].get("start_at"):
+        summary = exact_next_text(datetime.fromisoformat(str(shown[0]["start_at"])))
+    elif not shown:
+        summary = f"No watering days in the next {horizon} days"
     week = {
-        "summary": _summary(firm),
-        "days": firm,
-        "markdown": render_markdown(firm, window),
+        "summary": summary[:255],
+        "days": shown,
+        "markdown": render_watering_markdown(shown, window, horizon),
         "window": window,
         "note": full.get("note") or "",
     }

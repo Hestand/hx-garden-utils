@@ -46,12 +46,16 @@ class SmartWaterCard extends HTMLElement {
     }
     const model = this._model(state);
     if (!model) {
-      body.append(this._markdown(state.attributes.markdown || "No schedule yet."));
+      body.append(this._scheduleBody(state));
       card.append(body);
       root.append(card);
       return;
     }
     body.append(this._hub(model, state));
+    const days = this._days(state);
+    if (days.childElementCount) {
+      body.append(days);
+    }
     model.zones.forEach((zone) => body.append(this._zone(zone)));
     card.append(body);
     root.append(card);
@@ -87,6 +91,18 @@ class SmartWaterCard extends HTMLElement {
         button.sw-quiet { background: var(--secondary-background-color, #f0f0f0); color: var(--primary-text-color, #212121); }
         .sw-alert { color: var(--error-color, #db4437); font-size: 0.9rem; }
         .sw-md { white-space: pre-wrap; font-size: 0.85rem; overflow-x: auto; }
+        .sw-days { display: flex; flex-direction: column; gap: 12px; }
+        .sw-day {
+          border: 1px solid var(--divider-color, #e0e0e0);
+          border-radius: 12px;
+          padding: 12px;
+        }
+        .sw-zone-line { margin-top: 6px; font-size: 0.95rem; }
+        .sw-burst {
+          color: var(--secondary-text-color, #727272);
+          font-size: 0.85rem;
+          margin-left: 12px;
+        }
         svg { width: 100%; height: 36px; display: block; margin-top: 6px; }
         @media (max-width: 500px) {
           .sw-actions button { flex: 1 1 auto; }
@@ -237,19 +253,119 @@ class SmartWaterCard extends HTMLElement {
       windowLine.textContent = String(schedule.attributes.window);
       box.append(windowLine);
     }
-    if (model.next && model.next !== "unknown" && model.next !== "unavailable") {
+    const stateText = this._stateText(schedule);
+    if (stateText) {
+      const summary = document.createElement("div");
+      summary.className = "sw-muted";
+      summary.textContent = stateText;
+      box.append(summary);
+    } else if (model.next && model.next !== "unknown" && model.next !== "unavailable") {
       const next = document.createElement("div");
       next.className = "sw-muted";
       next.textContent = `Next watering ${this._exact(model.next)}`;
       box.append(next);
     }
-    if (schedule.state && schedule.state !== "unknown" && schedule.state !== "unavailable") {
-      const summary = document.createElement("div");
-      summary.className = "sw-muted";
-      summary.textContent = schedule.state;
-      box.append(summary);
-    }
     return box;
+  }
+
+  _stateText(schedule) {
+    const text = schedule && schedule.state ? String(schedule.state) : "";
+    if (!text || text === "unknown" || text === "unavailable") {
+      return "";
+    }
+    return text;
+  }
+
+  _scheduleBody(state) {
+    const wrap = document.createElement("div");
+    wrap.className = "sw-days";
+    const text = this._stateText(state);
+    if (text) {
+      wrap.append(this._note(text));
+    }
+    const days = this._days(state);
+    if (days.childElementCount) {
+      wrap.append(days);
+      return wrap;
+    }
+    wrap.append(this._markdown((state.attributes && state.attributes.markdown) || "No schedule yet."));
+    return wrap;
+  }
+
+  _days(schedule) {
+    const wrap = document.createElement("div");
+    wrap.className = "sw-days";
+    const days = (schedule.attributes && schedule.attributes.days) || [];
+    days.forEach((day) => this._appendDay(wrap, day));
+    return wrap;
+  }
+
+  _appendDay(wrap, day) {
+    const box = document.createElement("div");
+    box.className = "sw-day";
+    const title = document.createElement("div");
+    title.className = "sw-title";
+    title.textContent = this._dayTitle(day);
+    box.append(title);
+    (day.zones || []).forEach((zone) => {
+      if (zone.scheduled === false) {
+        return;
+      }
+      const line = document.createElement("div");
+      line.className = "sw-zone-line";
+      line.textContent = this._zonePlan(zone);
+      box.append(line);
+      (zone.bursts || []).forEach((burst) => {
+        const burstLine = document.createElement("div");
+        burstLine.className = "sw-burst";
+        burstLine.textContent = this._burst(burst);
+        box.append(burstLine);
+      });
+      if (zone.note) {
+        const note = document.createElement("div");
+        note.className = "sw-burst";
+        note.textContent = String(zone.note);
+        box.append(note);
+      }
+    });
+    wrap.append(box);
+  }
+
+  _dayTitle(day) {
+    const start = day.start_at ? this._exact(day.start_at) : String(day.date || "");
+    if (!day.finish_at) {
+      return start;
+    }
+    const sameDay = day.start_at && this._part(day.start_at, "day") === this._part(day.finish_at, "day")
+      && this._part(day.start_at, "month") === this._part(day.finish_at, "month");
+    const finish = sameDay ? this._clock(day.finish_at) : this._exact(day.finish_at);
+    return `${start} – ${finish}`;
+  }
+
+  _zonePlan(zone) {
+    const parts = [`${zone.name}: ${this._minutes(zone.minutes)} min`];
+    if (zone.inches != null && zone.mm != null) {
+      parts.push(`${Number(zone.inches).toFixed(2)} in (${zone.mm} mm)`);
+    }
+    if (zone.gallons != null && zone.gallons !== "") {
+      parts.push(`${Math.round(Number(zone.gallons))} gal`);
+    }
+    parts.push(`soak ${Number(zone.soak_min || 0)} min`);
+    return parts.join(", ");
+  }
+
+  _burst(burst) {
+    const soak = Number(burst.soak_min || 0);
+    const soakText = soak ? `, soak ${soak} min` : "";
+    return `${burst.cycle}/${burst.of} ${burst.start}–${burst.end} (${this._minutes(burst.minutes)} min${soakText})`;
+  }
+
+  _minutes(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      return String(value ?? "");
+    }
+    return Number.isInteger(number) ? String(number) : String(Math.round(number * 10) / 10);
   }
 
   _zone(zone) {
@@ -365,41 +481,68 @@ class SmartWaterCard extends HTMLElement {
     return `${Math.round(number)} gal`;
   }
 
-  _exact(value) {
+  _parts(value, timeOnly) {
     if (!value) {
-      return "—";
+      return null;
     }
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
-      return String(value);
+      return null;
     }
     const timeZone = this._hass && this._hass.config && this._hass.config.time_zone;
+    const options = {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    };
+    if (!timeOnly) {
+      options.weekday = "short";
+      options.month = "short";
+      options.day = "numeric";
+    }
     let parts;
     try {
       parts = new Intl.DateTimeFormat("en-US", {
+        ...options,
         timeZone: timeZone || undefined,
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
       }).formatToParts(date);
     } catch (_err) {
-      parts = new Intl.DateTimeFormat("en-US", {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-      }).formatToParts(date);
+      parts = new Intl.DateTimeFormat("en-US", options).formatToParts(date);
+    }
+    return parts;
+  }
+
+  _part(value, type) {
+    const parts = this._parts(value, false);
+    if (!parts) {
+      return "";
+    }
+    const found = parts.find((item) => item.type === type);
+    return found ? found.value : "";
+  }
+
+  _exact(value) {
+    const parts = this._parts(value, false);
+    if (!parts) {
+      return value ? String(value) : "—";
     }
     const part = (type) => {
       const found = parts.find((item) => item.type === type);
       return found ? found.value : "";
     };
     return `${part("weekday")} ${part("month")} ${part("day")}, ${part("hour")}:${part("minute")} ${part("dayPeriod")}`;
+  }
+
+  _clock(value) {
+    const parts = this._parts(value, true);
+    if (!parts) {
+      return value ? String(value) : "";
+    }
+    const part = (type) => {
+      const found = parts.find((item) => item.type === type);
+      return found ? found.value : "";
+    };
+    return `${part("hour")}:${part("minute")} ${part("dayPeriod")}`;
   }
 
   _note(text) {
@@ -491,6 +634,6 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: CARD_TYPE,
   name: "Smart Water",
-  description: "Soil level, next run, and watering controls for each zone.",
+  description: "Soil level, the next watering days, and watering controls for each zone.",
   preview: true,
 });

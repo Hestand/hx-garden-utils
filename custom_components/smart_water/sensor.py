@@ -32,6 +32,7 @@ from .const import (
 from .coordinator import SmartWaterConfigEntry
 from .entity import SmartWaterHubEntity, SmartWaterZoneEntity
 from .units import mm_to_inches
+from .week_plan import exact_next_text
 
 
 def _drop_sensor(hass: HomeAssistant, unique_id: str) -> None:
@@ -588,7 +589,7 @@ class MoistureSensor(_ZoneSensor):
 
 
 class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
-    """The next seven days of planned watering."""
+    """The next watering days, one for each allowed weekday."""
 
     _attr_translation_key = "watering_schedule"
     _attr_icon = "mdi:calendar-clock"
@@ -600,21 +601,15 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def native_value(self) -> str | None:
-        """Return this week's plan, a later exact date, or why there is none."""
+        """Return the next watering as an exact local date and time."""
         data = self.coordinator.data
         if data is None or not data.zones:
             return None
-        planned = [
-            (day["date"], zone)
-            for day in data.schedule_days or []
-            for zone in day.get("zones", [])
-            if zone.get("scheduled")
-        ]
-        if planned:
-            day, zone = planned[0]
-            start = str(zone.get("starts") or "").split(",")[0].strip()
-            clock = f" {start}" if start else ""
-            return f"{len(planned)} waterings · next {day}{clock} {zone['name']}"[:255]
+        for day in data.schedule_days or []:
+            start_at = str(day.get("start_at") or "")
+            if not start_at:
+                continue
+            return exact_next_text(datetime.fromisoformat(start_at))[:255]
         if data.outlook_summary:
             return data.outlook_summary[:255]
         for zone in data.zones.values():
@@ -626,7 +621,7 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Days, skip reasons, and a markdown table for a Lovelace card."""
+        """Watering days, each zone's plan, and markdown for a Lovelace card."""
         data = self.coordinator.data
         if data is None:
             return {}
@@ -635,8 +630,10 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
             "markdown": data.schedule_markdown,
             "window": data.schedule_window,
             "note": (
-                "Later days use the forecast or the recent water-loss average "
-                "and assume no rain."
+                "The list is the next watering days, one for each allowed weekday, "
+                "within a year. Days with nothing scheduled are left out. Later days "
+                "use the forecast or the recent water-loss average and assume no rain. "
+                "A day past the weather forecast has estimated set. The date and time stay exact."
             ),
             "alerts": data.alerts,
             "week_gal": round(sum(zone.water_week_gal for zone in data.zones.values()), 1),

@@ -1520,7 +1520,10 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 elevation_m=0.0 if sun is None else sun[2],
             )
             self._week, self._outlook = split_outlook(
-                full, timezone=self._timezone().key
+                full,
+                timezone=self._timezone().key,
+                allowed_weekdays=schedule.allowed_weekdays,
+                forecast_horizon_days=self._forecast_horizon_days(),
             )
         except (KeyError, TypeError, ValueError) as err:
             _LOGGER.debug("Smart Water could not project a week: %s", err)

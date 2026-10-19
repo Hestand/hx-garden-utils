@@ -2,7 +2,7 @@
 
 Work in progress, not ready for general use.
 
-Water-balance planner and zone controller for Home Assistant (`smart_water` 0.11.0).
+Water-balance planner and zone controller for Home Assistant (`smart_water` 0.11.1).
 
 It estimates reference evapotranspiration, tracks a soil-water deficit for each zone, and builds a cycle-and-soak plan for the next morning. The plan is made at the plan hour (default 23:00). A new hub turns **Dynamic start time** on: the run aims to finish at that day's local sunrise, and it never opens before **Don't start before** (default 04:00). If that is still too early, it starts then and may run past sunrise, but it ends by the finish time (default 09:00). Turn Dynamic start time off to open at the start time (default 05:00) instead. **Automatic watering is off after a new install and after an upgrade.** Turn the hub's **Automatic watering** switch on when you want it to open valves. Until then the plan is only sensors and an optional notification. Run now is a manual action and runs even while that switch is off. A simulation hub still plays an example week and never calls a real on/off entity. The controller calls `switch`, `valve`, or `input_boolean` services only. It does not call a controller API.
 
@@ -36,7 +36,7 @@ Requires Home Assistant **2025.3** or newer (config subentries). Tested on **202
 
 1. HACS → Integrations → ⋮ → Custom repositories.
 2. Add `https://github.com/Hestand/hx-garden-utils` as category **Integration**.
-3. Download **Smart Water** (release `v0.11.0`), then restart Home Assistant.
+3. Download **Smart Water** (release `v0.11.1`), then restart Home Assistant.
 
 `hacs.json` is included. This is not in the default HACS store.
 
@@ -52,7 +52,7 @@ That directory must contain `__init__.py` and `manifest.json`. Restart Home Assi
 
 ### Upgrading from 0.5.x, 0.4.x, 0.3.x, 0.2.x, or 0.1.x
 
-Download 0.11.0 and restart. No setup step. The config entry moves to version 9 and writes **Dynamic start time** off, so an existing hub keeps opening at its start time until you turn the option on. A new hub defaults that option on. Clay, clay loam, and compact silt loam now soak 30 minutes unless the zone stored its own soak; a blank Soak field uses that preset. Bug-fix releases bump the patch number (0.10.0, then 0.10.1). Releases with new features bump the middle number (0.10, then 0.11). 1.0.0 is reserved for the true release. 0.10.1 keeps a short run on the configured start time. Soak time between cycles does not move that start earlier. A run whose valve time cannot finish by the finish time may still open as early as the earliest start, and the rest waits. The dashboard card shows the next watering as a date and time, such as Thu Nov 5, 5:00 AM. 0.10.0 keeps the morning window on the wall clock in Home Assistant's time zone, including the mornings when daylight saving starts or ends. A 05:00 start stays 05:00 local. Next watering is an exact local date and time, such as Sun Nov 1, 5:00 AM. Whether that date is past this week stays an `estimated` attribute and is not written into the text. The projection looks out up to a year, using the forecast and then the recent water-loss average, so a deep bed still gets a date. A disabled zone, or a zone that stays dormant for that whole year, stays unknown and the note says why. The hub's next watering is the earliest enabled zone. 0.9.0 projects the next watering out to about 60 days, so the date stays filled when nothing is due this week. The flow meter moves to the hub: one sensor, and a required choice of whole-home or irrigation-only. A whole-home meter does not alert while nothing is running. An existing per-zone flow sensor is copied onto the hub as irrigation-only, and the zone copy is removed. You are not asked to run setup again. Soil moisture level shows the sensor's own percent. That entity, and the flow entities, are created only when the sensor is set. The config entry moves to version 8. 0.8.1 renames the sensors and settings into plain English. Entity ids and history stay the same, because the unique ids did not change. Reference water loss and other technical sensors move to the diagnostic section, so the device page leads with soil water, the next watering, the last run, and water used. 0.8.0 replaces the sunrise deadline with a morning window: start at **05:00**, finish by **09:00**, and start no earlier than **04:00**. A sequence that does not fit 05:00–09:00 may start earlier, down to 04:00, and the rest stays in the bucket for the next allowed day. An allowed day is the morning the valves open. Existing hubs pick up these times on restart. They are not asked to run setup again, zone data is not rewritten, and the stored bucket (storage version 1) is kept. **Automatic watering stays off.** 0.7.2 dated each schedule row by the morning the valves open. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
+Download 0.11.1 and restart. No setup step. 0.11.1 lists the next watering days on the schedule sensor and the dashboard card: one day for each allowed weekday, however far out, instead of seven calendar rows that are mostly not dry enough. Each of those days is the full morning plan. A day past the weather forecast sets `estimated`; the date and time stay exact. The bucket is refilled in the projection, so the second and third days follow the water that was already applied. The config entry moves to version 9 and writes **Dynamic start time** off, so an existing hub keeps opening at its start time until you turn the option on. A new hub defaults that option on. Clay, clay loam, and compact silt loam now soak 30 minutes unless the zone stored its own soak; a blank Soak field uses that preset. Bug-fix releases bump the patch number (0.10.0, then 0.10.1). Releases with new features bump the middle number (0.10, then 0.11). 1.0.0 is reserved for the true release. 0.10.1 keeps a short run on the configured start time. Soak time between cycles does not move that start earlier. A run whose valve time cannot finish by the finish time may still open as early as the earliest start, and the rest waits. The dashboard card shows the next watering as a date and time, such as Thu Nov 5, 5:00 AM. 0.10.0 keeps the morning window on the wall clock in Home Assistant's time zone, including the mornings when daylight saving starts or ends. A 05:00 start stays 05:00 local. Next watering is an exact local date and time, such as Sun Nov 1, 5:00 AM. Whether that date is past this week stays an `estimated` attribute and is not written into the text. The projection looks out up to a year, using the forecast and then the recent water-loss average, so a deep bed still gets a date. A disabled zone, or a zone that stays dormant for that whole year, stays unknown and the note says why. The hub's next watering is the earliest enabled zone. 0.9.0 projects the next watering out to about 60 days, so the date stays filled when nothing is due this week. The flow meter moves to the hub: one sensor, and a required choice of whole-home or irrigation-only. A whole-home meter does not alert while nothing is running. An existing per-zone flow sensor is copied onto the hub as irrigation-only, and the zone copy is removed. You are not asked to run setup again. Soil moisture level shows the sensor's own percent. That entity, and the flow entities, are created only when the sensor is set. The config entry moves to version 8. 0.8.1 renames the sensors and settings into plain English. Entity ids and history stay the same, because the unique ids did not change. Reference water loss and other technical sensors move to the diagnostic section, so the device page leads with soil water, the next watering, the last run, and water used. 0.8.0 replaces the sunrise deadline with a morning window: start at **05:00**, finish by **09:00**, and start no earlier than **04:00**. A sequence that does not fit 05:00–09:00 may start earlier, down to 04:00, and the rest stays in the bucket for the next allowed day. An allowed day is the morning the valves open. Existing hubs pick up these times on restart. They are not asked to run setup again, zone data is not rewritten, and the stored bucket (storage version 1) is kept. **Automatic watering stays off.** 0.7.2 dated each schedule row by the morning the valves open. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
 
 0.7 caps each zone on its own, can wait for confident forecast rain, warns before a freeze, and includes a dashboard card. Flow alerts still notify only until you change that. The weekly summary is off. Cost and the weekly gallon budget stay empty until you set them.
 
@@ -239,14 +239,16 @@ The switch is **off** on a new hub and stays **off** when you upgrade. That is d
 
 ## Watering schedule
 
-The hub sensor **Watering schedule** (`sensor.<hub>_watering_schedule`) lists the next 7 days for every zone. Its state is a short line such as `2 waterings · next 2026-07-17 05:00 Front lawn`, or `No watering in the next 7 days`. The date is the morning the valves open, and the clock is the first cycle. The `window` attribute is the start, finish, and Don't start before time. With Dynamic start time on it says the run aims to finish at sunrise. Attributes:
+The hub sensor **Watering schedule** (`sensor.<hub>_watering_schedule`) lists the next watering days, not every calendar day. The count is the number of allowed weekdays: Monday, Wednesday, and Friday means the next three mornings when at least one zone is projected to water, even if those mornings are weeks apart. Every day allowed means the next seven watering mornings. An empty selection shows none. The search stops at about 365 days. Days when nothing waters are left out.
+
+The state is the next watering as an exact local date and time, such as `Next watering Fri Jul 17, 5:00 AM`. A day past the weather forecast has `estimated` set on that day. The word is not written into the state or the markdown. The date is the morning the valves open, and the clock is the first cycle. Each day includes the local start and finish, and each zone that waters: its cycles and times, minutes, inches and millimeters, gallons when the area is known, and soak. The projection refills the bucket after each of those mornings, so the second and third days are the water still needed, not a copy of the first. Near days and later days both use the morning planner, including Dynamic start time, Don't start before, the finish time, interleaving, and the 60-minute zone cap. The `window` attribute is the start, finish, and Don't start before time. With Dynamic start time on it says the run aims to finish at sunrise. Attributes:
 
 | Attribute | What it holds |
 | --- | --- |
-| `days` | One entry per date, and inside it each zone: start times, minutes, inches, millimeters, gallons when the area is known, and the skip reason when it will not run. |
-| `markdown` | The same rows as a table. |
+| `days` | One entry per watering day: date, local start and finish, `estimated` when the day is past the weather forecast, and each zone that waters (cycles, times, minutes, inches, millimeters, gallons when the area is known, and soak). |
+| `markdown` | The same watering days as text. |
 | `window` | Start, finish by, and Don't start before. Default with Dynamic start time off: `Start 05:00, finish by 09:00, earliest 04:00.` |
-| `note` | Later days repeat today's crop ET and assume no rain. |
+| `note` | Later days use the forecast or the recent water-loss average and assume no rain. |
 
 A markdown card, for a hub named Garden:
 
@@ -260,23 +262,23 @@ content: "{{ state_attr('sensor.garden_watering_schedule', 'markdown') }}"
 
 ### Sample
 
-Computed by `project_week`, not typed by hand. Same design site and the same Monday 13 July 2026 hot-dry day used above (ET0 9.1 mm, Penman-Monteith). St. Augustine, clay loam, spray, full sun, 1000 sq ft, slope blank, July coefficient 0.71, crop ET 6.5 mm, readily available water 10.8 mm, soak 30 minutes. The bucket starts at field capacity (deficit 0; today's ET is already in the deficit the sensor uses, and here that deficit is still 0) and the last watering is treated as today, so the 3-day interval has not elapsed. Every day is allowed, there is no blackout, and Dynamic start time is off. Later days repeat that 6.5 mm and add no rain. Each zone is capped at 60 valve-on minutes. The hub total is off. Clock times are local. Each row is dated by the first cycle, the morning the valves open. The sensor state for this week is `2 waterings · next 2026-07-17 05:00 Front lawn`.
+Computed by `project_week`, not typed by hand. Same design site and the same Monday 13 July 2026 hot-dry day used above (ET0 9.1 mm, Penman-Monteith). St. Augustine, clay loam, spray, full sun, 1000 sq ft, slope blank, July coefficient 0.71, crop ET 6.5 mm, readily available water 10.8 mm, soak 30 minutes. The bucket starts at field capacity (deficit 0; today's ET is already in the deficit the sensor uses, and here that deficit is still 0) and the last watering is treated as today, so the 3-day interval has not elapsed. Every day is allowed, there is no blackout, and Dynamic start time is off. Later days repeat that 6.5 mm and add no rain. Each zone is capped at 60 valve-on minutes. The hub total is off. Clock times are local. Each row is dated by the first cycle, the morning the valves open. The 14th, 15th, 16th, 18th, and 19th have no watering, so the sensor leaves them out. Every day is allowed, so the list continues until it has seven watering mornings. The state is `Next watering Fri Jul 17, 5:00 AM`. The first two of those mornings:
 
 ```text
-Next 7 days. Later days use the forecast or the recent water-loss average and assume no rain. Start 05:00, finish by 09:00, earliest 04:00.
+Next 7 watering days. Days with no watering are left out. Later days use the forecast or the recent water-loss average and assume no rain. Start 05:00, finish by 09:00, earliest 04:00.
 
-| Date | Zone | Starts | Minutes | Depth | Gallons | Note |
-| --- | --- | --- | --- | --- | --- | --- |
-| 2026-07-14 | Front lawn | — | — | — | — | Not dry enough (water needed 0.0 mm, watering point 10.8 mm). |
-| 2026-07-15 | Front lawn | — | — | — | — | Not dry enough (water needed 6.5 mm, watering point 10.8 mm). |
-| 2026-07-16 | Front lawn | — | — | — | — | Minimum 3 days between waterings (2 since the last run). |
-| 2026-07-17 | Front lawn | 05:00, 05:37, 06:14, 06:51, 07:28, 08:05, 08:42 | 49 | 0.61 in (15.6 mm) | 636 | 12 min carries to the next allowed day. |
-| 2026-07-18 | Front lawn | — | — | — | — | Not dry enough (water needed 10.3 mm, watering point 10.8 mm). |
-| 2026-07-19 | Front lawn | — | — | — | — | Minimum 3 days between waterings (2 since the last run). |
-| 2026-07-20 | Front lawn | 05:00, 05:37, 06:14, 06:51, 07:28, 08:05, 08:42 | 49 | 0.61 in (15.6 mm) | 636 | 24 min carries to the next allowed day. |
+2026-07-17 05:00–08:49
+- Front lawn: 49 min, 0.61 in (15.6 mm), 636 gal, soak 30 min
+  12 min carries to the next allowed day.
+  05:00–05:07, 05:37–05:44, 06:14–06:21, 06:51–06:58, 07:28–07:35, 08:05–08:12, 08:42–08:49
+
+2026-07-20 05:00–08:49
+- Front lawn: 49 min, 0.61 in (15.6 mm), 636 gal, soak 30 min
+  24 min carries to the next allowed day.
+  05:00–05:07, 05:37–05:44, 06:14–06:21, 06:51–06:58, 07:28–07:35, 08:05–08:12, 08:42–08:49
 ```
 
-The 17 July row is the first run. The plan was made on the evening of the 16th, and the valves open at 05:00 on the morning of the 17th. With a 30 minute soak the sequence fits the fixed start; 12 minutes still wait because of the per-zone cap. The morning of 19 July is skipped because the last run was only two days earlier. The next run is the morning of the 20th.
+The 17 July row is the first run. The valves open at 05:00 on the morning of the 17th. With a 30 minute soak the sequence fits the fixed start; 12 minutes still wait because of the per-zone cap. The morning of 19 July is skipped because the last run was only two days earlier, and the bucket already had the 17 July water taken out, so the 20th carries 24 minutes instead of repeating the first morning from an empty plan. The next run is the morning of the 20th.
 
 ### Six zones, one morning
 
@@ -433,7 +435,7 @@ Math tests do not import Home Assistant. Config-flow tests need `pytest-homeassi
 
 ## Limits
 
-- The dashboard card loads with the frontend. A markdown card can still show the watering schedule or the simulation sensor's `markdown` attribute.
+- The dashboard card loads with the frontend and lists the next watering days. A markdown card can still show the watering schedule or the simulation sensor's `markdown` attribute.
 - A flow alert notifies, or skips until you reset it, according to the hub action. It does not change another integration's own schedule.
 - The watering window is a clock (default 05:00–09:00, earliest 04:00), not sunrise. Latitude is still used for ET.
 - Soil, plant, sprinkler, and sun are chosen per zone. Slope and the other derived numbers are presets until overridden.
