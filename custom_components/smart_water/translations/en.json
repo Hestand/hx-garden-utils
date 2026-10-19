@@ -258,7 +258,7 @@
       },
       "zone": {
         "title": "Zone {index} of {total}",
-        "description": "Name the zone. A live hub also asks for the on/off entity. Then plant, soil, sprinkler, and sun. Same as previous zone copies those four. Advanced stays on the zone after the hub is created. Nothing is turned on.",
+        "description": "Name the zone. A live hub also asks for the on/off entity. Then plant, soil, sprinkler, and sun. After the first zone, those four start filled in from the previous zone, and you can change them. Advanced stays on the zone after the hub is created. Nothing is turned on.",
         "data": {
           "name": "Name",
           "valve_entity": "On/off entity",
@@ -266,7 +266,6 @@
           "soil_type": "Soil type",
           "sprinkler_type": "Sprinkler type",
           "sun_exposure": "Sun exposure",
-          "same_as_previous": "Same as previous zone",
           "area_sqft": "Area",
           "slope_pct": "Slope"
         },
@@ -275,8 +274,7 @@
           "plant_type": "Sets how fast the plants use water, the root depth, and how dry the soil may get, unless you override them later.",
           "soil_type": "Sets available water and the intake rate.",
           "sprinkler_type": "Sets the precipitation rate and efficiency. A bubbler asks for a rate on the zone's Advanced step.",
-          "sun_exposure": "Scales how fast the plants use water. Full sun leaves it unchanged.",
-          "same_as_previous": "Copies plant, soil, sprinkler, and sun from the zone you just added. The name and on/off entity stay this zone's own.",
+          "sun_exposure": "Scales how fast the plants use water. Full sun leaves it unchanged. After the first zone this starts as the previous zone's choice.",
           "area_sqft": "Optional, on a simulation hub. Used to estimate gallons.",
           "slope_pct": "Optional, on a simulation hub. Blank uses 0%.",
           "name": "The name shown for this hub or zone."

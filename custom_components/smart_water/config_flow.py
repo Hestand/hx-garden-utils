@@ -5,7 +5,8 @@ a name and either a weather entity or a temperature sensor. A simulation
 hub asks for a name, an example week, and a starting soil, and its zones
 have no on/off entity. The hub form then asks how many zones to add. Each
 zone is the quick form (name, on/off entity, plant, soil, sprinkler, sun).
-Same as previous zone copies those four. Advanced stays on the zone after
+After the first zone, those four dropdowns start with the previous zone's
+choices. What is submitted is what is saved. Advanced stays on the zone after
 the hub exists. Every derived number stays blank unless the user types an
 override; blank means the preset in ``presets.py``.
 
@@ -542,12 +543,6 @@ def _simulation_schema() -> vol.Schema:
     )
 
 
-_ZONE_COPY_KEYS = (
-    CONF_PLANT_TYPE,
-    CONF_SOIL_TYPE,
-    CONF_SPRINKLER_TYPE,
-    CONF_SUN_EXPOSURE,
-)
 _MAX_SETUP_ZONES = 24
 
 
@@ -559,8 +554,6 @@ def _zone_quick_schema(
     }
     if not simulation:
         fields[vol.Required(CONF_VALVE_ENTITY)] = _ON_OFF
-    if previous is not None:
-        fields[vol.Required("same_as_previous", default=True)] = _BOOL
     plant = previous.get(CONF_PLANT_TYPE) if previous else None
     soil = previous.get(CONF_SOIL_TYPE) if previous else None
     sprinkler = (
@@ -927,12 +920,8 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
             ):
                 return {"name": "name_exists"}
         data = dict(user_input)
-        same = bool(data.pop("same_as_previous", False))
+        data.pop("same_as_previous", None)
         data.pop("name", None)
-        previous = self._previous_zone()
-        if same and previous is not None:
-            for key in _ZONE_COPY_KEYS:
-                data[key] = previous[key]
         stored = _drop_blanks(data)
         if self._hub_simulation:
             stored[CONF_VALVE_ENTITY] = f"simulation.{slug}"

@@ -598,10 +598,10 @@ def _quick_zone(name: str, valve: str, **overrides: Any) -> dict[str, Any]:
     return data
 
 
-async def test_hub_flow_adds_zones_and_can_copy_the_previous(
+async def test_hub_flow_adds_zones_and_keeps_later_picks(
     hass: HomeAssistant,
 ) -> None:
-    """Setup asks how many zones, then the quick fields, and can copy the last zone."""
+    """Later zones start from the previous zone, and the submitted picks are saved."""
     result = await _open_live(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -618,24 +618,35 @@ async def test_hub_flow_adds_zones_and_can_copy_the_previous(
     assert _field(fields, CONF_VALVE_ENTITY)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        _quick_zone("Front", "switch.front"),
+        _quick_zone(
+            "Front",
+            "switch.front",
+            **{
+                CONF_PLANT_TYPE: "shrub",
+                CONF_SOIL_TYPE: "clay_loam",
+                CONF_SPRINKLER_TYPE: "spray",
+                CONF_SUN_EXPOSURE: "part_sun",
+            },
+        ),
     )
     assert result["step_id"] == "zone"
     assert result["last_step"] is True
     fields = _serialize(result)
-    copied = _field(fields, "same_as_previous")
-    assert "boolean" in copied["selector"]
+    assert all(field["name"] != "same_as_previous" for field in fields)
+    assert _field(fields, CONF_PLANT_TYPE)["default"] == "shrub"
+    assert _field(fields, CONF_SOIL_TYPE)["default"] == "clay_loam"
+    assert _field(fields, CONF_SPRINKLER_TYPE)["default"] == "spray"
+    assert _field(fields, CONF_SUN_EXPOSURE)["default"] == "part_sun"
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         _quick_zone(
             "Back",
             "switch.back",
-            same_as_previous=True,
             **{
-                CONF_PLANT_TYPE: "st_augustine",
+                CONF_PLANT_TYPE: "bermuda",
                 CONF_SOIL_TYPE: "sand",
-                CONF_SPRINKLER_TYPE: "drip",
-                CONF_SUN_EXPOSURE: "shade",
+                CONF_SPRINKLER_TYPE: "rotor",
+                CONF_SUN_EXPOSURE: "full_sun",
             },
         ),
     )
@@ -645,17 +656,19 @@ async def test_hub_flow_adds_zones_and_can_copy_the_previous(
     zones = {zone.title: zone for zone in entry.subentries.values()}
     assert set(zones) == {"Front", "Back"}
     assert zones["Front"].data[CONF_VALVE_ENTITY] == "switch.front"
+    assert zones["Front"].data[CONF_PLANT_TYPE] == "shrub"
+    assert zones["Front"].data[CONF_SUN_EXPOSURE] == "part_sun"
     assert zones["Back"].data[CONF_VALVE_ENTITY] == "switch.back"
-    assert zones["Back"].data[CONF_PLANT_TYPE] == "warm_season_turf"
-    assert zones["Back"].data[CONF_SOIL_TYPE] == "clay_loam"
-    assert zones["Back"].data[CONF_SPRINKLER_TYPE] == "spray"
+    assert zones["Back"].data[CONF_PLANT_TYPE] == "bermuda"
+    assert zones["Back"].data[CONF_SOIL_TYPE] == "sand"
+    assert zones["Back"].data[CONF_SPRINKLER_TYPE] == "rotor"
     assert zones["Back"].data[CONF_SUN_EXPOSURE] == "full_sun"
     assert "same_as_previous" not in zones["Back"].data
     assert CONF_EFFICIENCY not in zones["Front"].data
 
 
-async def test_same_as_previous_off_keeps_this_zone(hass: HomeAssistant) -> None:
-    """Unchecking the copy box stores the plant and soil entered for this zone."""
+async def test_duplicate_zone_name_is_rejected(hass: HomeAssistant) -> None:
+    """A second zone cannot reuse the first zone's name."""
     result = await _open_live(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -682,7 +695,6 @@ async def test_same_as_previous_off_keeps_this_zone(hass: HomeAssistant) -> None
         _quick_zone(
             "Back",
             "switch.back",
-            same_as_previous=False,
             **{CONF_PLANT_TYPE: "st_augustine", CONF_SOIL_TYPE: "sand"},
         ),
     )

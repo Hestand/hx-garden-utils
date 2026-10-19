@@ -71,7 +71,7 @@ A zone with no on/off entity still loads. The next time you edit it, the form as
 1. Settings → Devices & services → Add integration → **Smart Water**.
 2. Choose **Live hub** or **Simulation hub**. A simulation needs no weather entity and no on/off entity. See [Simulation](#simulation).
 3. On a live hub, name it. Pick a weather entity, or open **Sensors** and pick a temperature sensor. A Tempest (or WeatherFlow) station is filled in when Home Assistant has exactly one. Submit. Location and schedule can stay collapsed.
-4. **How many zones?** Default is 1. Zero creates the hub with no zones. Then, for each zone, enter the name, the on/off entity on a live hub (`switch`, `valve`, or `input_boolean`), and plant, soil, sprinkler, and sun. **Same as previous zone** copies those four. The name and on/off entity are always this zone's own.
+4. **How many zones?** Default is 1. Zero creates the hub with no zones. Then, for each zone, enter the name, the on/off entity on a live hub (`switch`, `valve`, or `input_boolean`), and plant, soil, sprinkler, and sun. After the first zone, those four start filled in from the previous zone. Change any of them; what you submit is what is saved. The name and on/off entity are always this zone's own.
 5. Advanced is not part of that loop. Open the zone afterward and leave the Advanced fields blank. Blank means the preset. A bubbler has no published precipitation rate, so enter a rate or both flow and area there.
 
 Add, edit, or remove zones later from the hub's device page. Options edits the sensors and the schedule. Reconfigure edits the hub name and weather entity. Existing hubs are not asked to run this again.
