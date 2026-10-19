@@ -185,18 +185,25 @@ def zone_is_due(
     if deficit_mm >= raw_mm:
         return (
             True,
-            f"Deficit {deficit_mm:.1f} mm is at or above RAW {raw_mm:.1f} mm.",
+            (
+                f"Water needed {deficit_mm:.1f} mm has reached the watering point "
+                f"{raw_mm:.1f} mm."
+            ),
         )
     projected = min(taw_mm, deficit_mm + max(0.0, days_ahead) * max(0.0, etc_mm))
     if projected >= raw_mm:
         return (
             True,
             (
-                f"Deficit {deficit_mm:.1f} mm is below RAW {raw_mm:.1f} mm, "
-                f"but {days_ahead} day of ET would reach {projected:.1f} mm."
+                f"Water needed {deficit_mm:.1f} mm is under the watering point "
+                f"{raw_mm:.1f} mm, but {days_ahead} day of water use would reach "
+                f"{projected:.1f} mm."
             ),
         )
     return (
         False,
-        f"Below RAW (deficit {deficit_mm:.1f} mm, RAW {raw_mm:.1f} mm).",
+        (
+            f"Not dry enough (water needed {deficit_mm:.1f} mm, "
+            f"watering point {raw_mm:.1f} mm)."
+        ),
     )

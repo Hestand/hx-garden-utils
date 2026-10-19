@@ -124,7 +124,7 @@ def test_zone_below_raw_is_not_scheduled() -> None:
     plan = build_plan(_request(quiet))
     assert plan.timeline == ()
     assert plan.zones[0].scheduled is False
-    assert "Below RAW" in plan.zones[0].reason
+    assert "Not dry enough" in plan.zones[0].reason
     assert "No zones scheduled" in plan.summary
 
 
@@ -168,7 +168,7 @@ def test_window_overflow_carries_the_rest_of_a_long_cycle() -> None:
         )
     )
     assert plan.warning is not None
-    assert "bucket" in plan.warning.lower()
+    assert "next allowed day" in plan.warning.lower()
     assert plan.timeline[-1].end == finish
     assert plan.timeline[0].start == earliest
     assert plan.zones[0].runtime_min <= 30
@@ -418,7 +418,7 @@ def test_overflow_starts_at_04_and_carries_the_rest() -> None:
     assert plan.zones[0].carried_min > 0
     assert plan.zones[0].scheduled is True
     assert plan.warning is not None
-    assert "bucket" in plan.warning.lower()
+    assert "next allowed day" in plan.warning.lower()
 
 
 def test_priority_then_deficit_keeps_the_first_zone_when_the_window_is_short() -> None:

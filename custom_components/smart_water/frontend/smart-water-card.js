@@ -253,7 +253,7 @@ class SmartWaterCard extends HTMLElement {
     title.textContent = zone.name;
     const pct = document.createElement("div");
     pct.className = "sw-muted";
-    pct.textContent = `${Math.round(zone.full)}% full`;
+    pct.textContent = `Soil water ${Math.round(zone.full)}%`;
     row.append(title, pct);
     const bar = document.createElement("div");
     bar.className = "sw-bar";
@@ -265,7 +265,7 @@ class SmartWaterCard extends HTMLElement {
       const tick = document.createElement("div");
       tick.className = "sw-tick";
       tick.style.left = `${zone.rawTick}%`;
-      tick.title = "Readily available water";
+      tick.title = "Watering point";
       bar.append(tick);
     }
     const detail = document.createElement("div");

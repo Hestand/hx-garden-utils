@@ -164,7 +164,7 @@ def project_week(
         "markdown": render_markdown(rows, window),
         "window": window,
         "note": (
-            "Later days repeat today's crop ET and assume no rain. "
+            "Later days repeat today's plant water use and assume no rain. "
             "A skip on a later day can change when the real morning arrives."
         ),
     }
@@ -172,7 +172,7 @@ def project_week(
 
 def render_markdown(days: list[dict[str, object]], window: str = "") -> str:
     """A table a markdown card can show as-is."""
-    intro = "Next 7 days. Later days repeat today's crop ET and assume no rain."
+    intro = "Next 7 days. Later days repeat today's plant water use and assume no rain."
     if window:
         intro = f"{intro} {window}"
     lines = [

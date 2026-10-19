@@ -2,11 +2,28 @@
 
 Work in progress, not ready for general use.
 
-Water-balance planner and zone controller for Home Assistant (`smart_water` 0.8.0).
+Water-balance planner and zone controller for Home Assistant (`smart_water` 0.8.1).
 
 It estimates reference evapotranspiration, tracks a soil-water deficit for each zone, and builds a cycle-and-soak plan for the next morning. The plan is made at the plan hour (default 23:00). Valves open at the start time (default 05:00) and must finish by 09:00. **Automatic watering is off after a new install and after an upgrade.** Turn the hub's **Automatic watering** switch on when you want it to open valves. Until then the plan is only sensors and an optional notification. Run now is a manual action and runs even while that switch is off. A simulation hub still plays an example week and never calls a real on/off entity. The controller calls `switch`, `valve`, or `input_boolean` services only. It does not call a controller API.
 
 The formulas follow FAO-56 (Penman-Monteith, the soil-water bucket, and the depletion fraction) and the NRCS maximum sprinkler application rates by soil and slope. Plant, soil, and sprinkler defaults, each with a source, live in `presets.py`. `docs/design.md` is the design note.
+
+## Glossary
+
+The screens use plain names. The technical term is here so a manual or a forum post still makes sense. Entity ids are unchanged.
+
+| On screen | Also called | What it means |
+| --- | --- | --- |
+| Soil water | Bucket, percent full | How full the root zone is, from 0% to 100%. |
+| Water needed | Deficit, Dr | How much water the root zone is missing. |
+| Watering point | RAW, readily available water | How dry the soil may get before a watering. |
+| Water loss today (reference lawn) | ET0 | How much water a reference lawn would lose today. |
+| Plant water use | ETc, crop ET | Water loss today times the plant factor. |
+| Plant water use factor | Kc, crop coefficient | How fast this planting uses water compared with a reference lawn. |
+| Allowed dry-out | MAD, management allowed depletion | The fraction of soil water that can be used before watering. |
+| Water the soil can hold | AWC, TAW | Inches of water an inch of soil can store, and the total in the root zone. |
+| Distribution uniformity | DU_lq | From a catch-cup test: the driest quarter of cups divided by the average cup. |
+| Evening plan hour | Plan hour | When today's water loss is saved and the morning plan is built. Default 23:00. |
 
 ## Install on Home Assistant OS
 
@@ -16,7 +33,7 @@ Requires Home Assistant **2025.3** or newer (config subentries). Tested on **202
 
 1. HACS → Integrations → ⋮ → Custom repositories.
 2. Add `https://github.com/Hestand/hx-garden-utils` as category **Integration**.
-3. Download **Smart Water** (release `v0.8.0`), then restart Home Assistant.
+3. Download **Smart Water** (release `v0.8.1`), then restart Home Assistant.
 
 `hacs.json` is included. This is not in the default HACS store.
 
@@ -32,7 +49,7 @@ That directory must contain `__init__.py` and `manifest.json`. Restart Home Assi
 
 ### Upgrading from 0.5.x, 0.4.x, 0.3.x, 0.2.x, or 0.1.x
 
-Download 0.8.0 and restart. The config entry moves to version 7. 0.8.0 replaces the sunrise deadline with a morning window: start at **05:00**, finish by **09:00**, and start no earlier than **04:00**. A sequence that does not fit 05:00–09:00 may start earlier, down to 04:00, and the rest stays in the bucket for the next allowed day. An allowed day is the morning the valves open. Existing hubs pick up these times on restart. They are not asked to run setup again, zone data is not rewritten, and the stored bucket (storage version 1) is kept. **Automatic watering stays off.** 0.7.2 dated each schedule row by the morning the valves open. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
+Download 0.8.1 and restart. 0.8.1 renames the sensors and settings into plain English. Entity ids and history stay the same, because the unique ids did not change. Reference water loss and other technical sensors move to the diagnostic section, so the device page leads with soil water, the next watering, the last run, and water used. The config entry stays at version 7. 0.8.0 replaces the sunrise deadline with a morning window: start at **05:00**, finish by **09:00**, and start no earlier than **04:00**. A sequence that does not fit 05:00–09:00 may start earlier, down to 04:00, and the rest stays in the bucket for the next allowed day. An allowed day is the morning the valves open. Existing hubs pick up these times on restart. They are not asked to run setup again, zone data is not rewritten, and the stored bucket (storage version 1) is kept. **Automatic watering stays off.** 0.7.2 dated each schedule row by the morning the valves open. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
 
 0.7 caps each zone on its own, can wait for confident forecast rain, warns before a freeze, and includes a dashboard card. Flow alerts still notify only until you change that. The weekly summary is off. Cost and the weekly gallon budget stay empty until you set them.
 
@@ -192,14 +209,14 @@ content: "{{ state_attr('sensor.play_yard_simulation', 'markdown') }}"
 
 Computed by `run_week`, not typed by hand. Location is the design site: latitude 31.5493, longitude −97.1467, elevation 219 m, America/Chicago. The week starts Monday 13 July 2026, so July's warm-season coefficient is 0.71. The zone is 1000 sq ft. Slope is blank, so clay loam intake is 0.15 in/hr and the max cycle is 7 minutes with a 60 minute soak. The bucket starts full. The schedule is any day, starting at 05:00 and finishing by 09:00, with 04:00 as the earliest start. A soak sequence that does not fit slides earlier and carries the rest. Gallons are gross water from the heads (`runtime × 1.25 in/hr × 1000 sq ft × 0.623`), rounded in the table. Look-ahead is 0 days, so a morning is watered only when the deficit is already at readily available water. This simulation does not apply the 3-day turf interval. Total runtime is 135 minutes. `would_execute` is false.
 
-| Day | Zone | ET0 mm | Rain in | Effective in | Deficit mm | Water | Minutes | Cycles | Start | Gallons | Why |
+| Day | Zone | Water loss mm | Rain in | Rain counted in | Water needed mm | Water | Minutes | Cycles | Start | Gallons | Why |
 | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | --- | --- | ---: | --- |
-| Mon 07-13 | Front lawn | 9.1 | 0.00 | 0.00 | 6.5 | no | 0 | — | — | 0 | Below RAW (deficit 6.5 mm, RAW 10.7 mm). |
+| Mon 07-13 | Front lawn | 9.1 | 0.00 | 0.00 | 6.5 | no | 0 | — | — | 0 | Not dry enough (water needed 6.5 mm, watering point 10.7 mm). |
 | Tue 07-14 | Front lawn | 9.9 | 0.00 | 0.00 | 13.5 | yes | 35 | 7+7+7+7+7, soak 60 | Wed 04:25, Wed 05:32, Wed 06:39, Wed 07:46, Wed 08:53 | 454 | Due. 7 min carries. |
 | Wed 07-15 | Front lawn | 10.7 | 0.00 | 0.00 | 9.9 | yes | 31 | 7+6+6+6+6, soak 60 | Thu 04:29, Thu 05:36, Thu 06:42, Thu 07:48, Thu 08:54 | 402 | Due. |
-| Thu 07-16 | Front lawn | 10.0 | 0.00 | 0.00 | 7.1 | no | 0 | — | — | 0 | Below RAW (deficit 7.1 mm, RAW 10.1 mm). |
+| Thu 07-16 | Front lawn | 10.0 | 0.00 | 0.00 | 7.1 | no | 0 | — | — | 0 | Not dry enough (water needed 7.1 mm, watering point 10.1 mm). |
 | Fri 07-17 | Front lawn | 9.0 | 0.00 | 0.00 | 13.5 | yes | 35 | 7+7+7+7+7, soak 60 | Sat 04:25, Sat 05:32, Sat 06:39, Sat 07:46, Sat 08:53 | 454 | Due. 7 min carries. |
-| Sat 07-18 | Front lawn | 8.9 | 0.00 | 0.00 | 8.6 | no | 0 | — | — | 0 | Below RAW (deficit 8.6 mm, RAW 10.9 mm). |
+| Sat 07-18 | Front lawn | 8.9 | 0.00 | 0.00 | 8.6 | no | 0 | — | — | 0 | Not dry enough (water needed 8.6 mm, watering point 10.9 mm). |
 | Sun 07-19 | Front lawn | 8.6 | 0.00 | 0.00 | 14.7 | yes | 34 | 7+7+7+7+6, soak 60 | Mon 04:26, Mon 05:33, Mon 06:40, Mon 07:47, Mon 08:54 | 441 | Due. 12 min carries. |
 
 ## Turn automatic watering on
@@ -235,21 +252,21 @@ title: Watering schedule
 content: "{{ state_attr('sensor.garden_watering_schedule', 'markdown') }}"
 ```
 
-**Currently watering** is the zone that is on, or `Idle`. Each zone has a **Last run** sensor (state is the result; attributes are when, minutes, net millimeters, gallons, gallons per minute, and result) and a **Dormancy** sensor (`active`, `slow`, or `dormant`).
+**Watering now** is the zone that is on, or `Idle`. Each zone has a **Last run** sensor (state is the result; attributes are when, minutes, net millimeters, gallons, gallons per minute, and result) and a **Plant activity** sensor (`active`, `slow`, or `dormant`).
 
 ### Sample
 
 Computed by `project_week`, not typed by hand. Same design site and the same Monday 13 July 2026 hot-dry day used above (ET0 9.1 mm, Penman-Monteith). St. Augustine, clay loam, spray, full sun, 1000 sq ft, slope blank, July coefficient 0.71, crop ET 6.5 mm, readily available water 10.8 mm. The bucket starts at field capacity (deficit 0; today's ET is already in the deficit the sensor uses, and here that deficit is still 0). Every day is allowed, there is no blackout, and the turf minimum interval is 3 days. Later days repeat that 6.5 mm and add no rain. Each zone is capped at 60 valve-on minutes. The hub total is off. Clock times are local. Each row is dated by the first cycle, the morning the valves open. The sensor state for this week is `2 waterings · next 2026-07-16 04:25 Front lawn`.
 
 ```text
-Next 7 days. Later days repeat today's crop ET and assume no rain. Start 05:00, finish by 09:00, earliest 04:00.
+Next 7 days. Later days repeat today's plant water use and assume no rain. Start 05:00, finish by 09:00, earliest 04:00.
 
 | Date | Zone | Starts | Minutes | Depth | Gallons | Note |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2026-07-14 | Front lawn | — | — | — | — | Below RAW (deficit 0.0 mm, RAW 10.8 mm). |
-| 2026-07-15 | Front lawn | — | — | — | — | Below RAW (deficit 6.5 mm, RAW 10.8 mm). |
+| 2026-07-14 | Front lawn | — | — | — | — | Not dry enough (water needed 0.0 mm, watering point 10.8 mm). |
+| 2026-07-15 | Front lawn | — | — | — | — | Not dry enough (water needed 6.5 mm, watering point 10.8 mm). |
 | 2026-07-16 | Front lawn | 04:25, 05:32, 06:39, 07:46, 08:53 | 35 | 0.43 in (11.0 mm) | 454 | 6 min carries to the next allowed day. |
-| 2026-07-17 | Front lawn | — | — | — | — | Below RAW (deficit 8.4 mm, RAW 10.8 mm). |
+| 2026-07-17 | Front lawn | — | — | — | — | Not dry enough (water needed 8.4 mm, watering point 10.8 mm). |
 | 2026-07-18 | Front lawn | — | — | — | — | Minimum 3 days between waterings (2 since the last run). |
 | 2026-07-19 | Front lawn | 04:25, 05:32, 06:39, 07:46, 08:53 | 35 | 0.44 in (11.1 mm) | 454 | 32 min carries to the next allowed day. |
 | 2026-07-20 | Front lawn | — | — | — | — | Minimum 3 days between waterings (1 since the last run). |
@@ -261,7 +278,7 @@ The 16 July row is the first run. The plan was made on the evening of the 15th, 
 
 Same site, Monday evening 13 July 2026, so the valves open Tuesday 14 July. ET0 is 9.1 mm. Deficits are already past readily available water. Slope is blank. No blackout, every day allowed. Each zone may use 60 valve-on minutes. The hub total is off. The window is 05:00–09:00, and the earliest start is 04:00. Order is priority, then the larger deficit. One valve is on at a time. The whole sequence does not fit, so it starts at 04:00 and stops at 09:00. Shade bed does not get a cycle; its minutes stay in the bucket.
 
-| Zone | Plant, soil, sprinkler | Priority | Area | Deficit | RAW | This morning |
+| Zone | Plant, soil, sprinkler | Priority | Area | Water needed | Watering point | This morning |
 | --- | --- | --- | --- | --- | --- | --- |
 | Front lawn | St. Augustine, clay loam, spray | 1 | 1000 sq ft | 18 mm | 10.8 mm | 25 min, 0.31 in, 324 gal. 32 min carries. |
 | Back lawn | Bermuda, sandy loam, rotor | 1 | 800 sq ft | 16 mm | 8.7 mm | 60 min, 0.35 in, 249 gal. 48 min carries (cap). |
@@ -343,7 +360,7 @@ ET0 uses FAO-56 Penman-Monteith when humidity and wind are available. Daily sola
 | Service | Effect |
 | --- | --- |
 | `calculate_plan` | Commit today's balance if needed, then rebuild the plan. If automatic watering is on, this can arm tonight's run. |
-| `reset_bucket` / `set_bucket` | Deficit 0, or an absolute deficit clamped to total available water. |
+| `reset_bucket` / `set_bucket` | Water needed 0, or a set amount that cannot exceed what the soil can hold. |
 | `mark_watered` | Credit net irrigation already applied. Empty depth refills the bucket. |
 | `skip_zone` | Skip through a date. Default is the next local morning. |
 | `pause_zone` | Skip N local days. Zero clears the pause. |
@@ -360,9 +377,9 @@ A zone is usable when Home Assistant already exposes it as a valve, switch, or i
 
 ## Entities
 
-Per zone: deficit, readily available water, next planned run, plan reason, plan (scheduled or idle, with runtime, cycles, adjustment, sprinkler, and the on/off entity), flow status, learned flow, last-run flow, water use, water saved, moisture deficit, last run, dormancy, an adjustment number (0–300%), a run-now button, and an enabled switch.
+Per zone, on the device page: soil water (percent full), water needed, next watering, why this plan, today's run, flow check, last run, plant activity, water used, water saved, a watering-amount number (0–300%), a run-now button, and an enabled switch. The watering point, the moisture sensor's water needed, and the learned flow rates are diagnostic.
 
-Hub: mode, tonight's plan, today's ET0, rain today (effective rain and whether it was ignored), next run (allowed days, blackout, whole-minute rounding), watering schedule, currently watering, water use, water saved, water cost when a price is set, and the Automatic watering switch. A simulation hub also has a Simulation sensor and a Run simulation button.
+Hub: mode, today's plan, rain today, next watering, watering schedule, watering now, water used, water saved, water cost when a price is set, and the Automatic watering switch. Water loss today (reference lawn) is diagnostic. A simulation hub also has a Sample week sensor and a Run simulation button. Entity ids are the ones created with the old names; renaming the label does not change them.
 
 Bucket state, the day's weather accumulation (including rain events), flow totals, adjustment, last run, the learned factor, and the last plan are stored and survive a restart. Storage version stays 1; new keys are filled in when an older file is loaded. On startup, an entity this hub recorded as on is turned off.
 
@@ -377,7 +394,7 @@ entity: sensor.garden_watering_schedule
 
 `entity` is the hub watering-schedule sensor. The name follows the hub, so a hub named Garden is `sensor.garden_watering_schedule`.
 
-The card shows each zone's soil-water bar (bucket percent, with a tick at readily available water), the next run and its minutes, the last run, a 7-day soil chart, the skip reason, and Run now, Skip, and Pause buttons. The hub row has the Automatic watering toggle, what is watering now, this week's gallons and gallons saved, and alerts. The editor is a schedule-entity list and a history checkbox.
+The card shows each zone's soil-water bar (percent full, with a tick at the watering point), the next watering and its minutes, the last run, a 7-day soil chart, the skip reason, and Run now, Skip, and Pause buttons. The hub row has the Automatic watering toggle, what is watering now, this week's gallons and gallons saved, and alerts. The editor is a schedule-entity list and a history checkbox.
 
 If the card does not appear, add a dashboard resource by hand: **Settings → Dashboards → Resources → Add resource**, URL `/smart_water_static/smart-water-card.js`, type **JavaScript module**. The markdown card above still works and does not need the custom card.
 

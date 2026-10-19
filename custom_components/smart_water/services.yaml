@@ -1,8 +1,8 @@
 calculate_plan:
   name: Calculate plan
   description: >-
-    Build tonight's watering plan from the current buckets. Does not
-    open a valve or call a controller. Commits today's ET and rain if that has
+    Build this morning's watering plan from the current soil water. Does not
+    open a valve or call a controller. Saves today's water loss and rain if that has
     not happened yet.
   fields:
     hub:
@@ -18,9 +18,9 @@ calculate_plan:
         boolean:
 
 reset_bucket:
-  name: Reset bucket
+  name: Reset soil water
   description: >-
-    Set a zone's soil-water deficit to zero (field capacity). Does not open a valve.
+    Set the water a zone still needs to zero, as if the soil were full. Does not open a valve.
   fields:
     hub:
       name: Hub
@@ -35,10 +35,10 @@ reset_bucket:
         text:
 
 set_bucket:
-  name: Set bucket
+  name: Set water needed
   description: >-
-    Set a zone's soil-water deficit. Provide millimeters or inches. The value
-    is clamped to total available water. Does not open a valve.
+    Set how much water a zone still needs. Provide millimeters or inches. The value
+    cannot be more than the soil can hold. Does not open a valve.
   fields:
     hub:
       name: Hub
@@ -50,7 +50,7 @@ set_bucket:
       selector:
         text:
     deficit_mm:
-      name: Deficit (mm)
+      name: Water needed (mm)
       selector:
         number:
           min: 0
@@ -58,7 +58,7 @@ set_bucket:
           step: 0.1
           unit_of_measurement: mm
     deficit_in:
-      name: Deficit (in)
+      name: Water needed (in)
       selector:
         number:
           min: 0
@@ -161,7 +161,7 @@ set_adjustment:
       selector:
         text:
     percent:
-      name: Adjustment
+      name: Watering amount
       required: true
       selector:
         number:
@@ -192,7 +192,7 @@ simulate:
   description: >-
     Play a 7-day weather week through the same planner a live hub uses.
     A preset is enough. Custom days replace the preset for this run.
-    This does not open a valve, call a controller, or change the stored bucket.
+    This does not open a valve, call a controller, or change the stored soil water.
   fields:
     hub:
       name: Hub
@@ -212,7 +212,7 @@ simulate:
             - fall_cooldown
     bucket:
       name: Starting soil
-      description: Full is field capacity. Half is half the root zone used. Raw is ready to water.
+      description: Full means the soil is holding all the water it can. Half means half of that is already used. Dry enough to water means it is time to irrigate.
       selector:
         select:
           options:

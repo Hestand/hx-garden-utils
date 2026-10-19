@@ -475,7 +475,8 @@ def _summary(
             cycles = "+".join(str(minutes) for minutes in zone.cycles)
             lines.append(
                 f"{zone.name}: {cycles} min, soak {zone.soak_min} min "
-                f"(deficit {zone.deficit_mm:.1f} mm, RAW {zone.raw_mm:.1f} mm)."
+                f"(water needed {zone.deficit_mm:.1f} mm, "
+                f"watering point {zone.raw_mm:.1f} mm)."
             )
         else:
             lines.append(f"{zone.name}: not scheduled — {zone.reason}")
@@ -535,7 +536,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
             days_ahead=request.days_ahead,
         )
         if zone.target_depth_mm is not None:
-            due_reason = due_reason.replace("RAW", "target depth")
+            due_reason = due_reason.replace("watering point", "target depth")
         blocked_reason = skip_reason(
             SkipInputs(
                 enabled=zone.enabled,
@@ -685,13 +686,13 @@ def build_plan(request: PlanRequest) -> NightPlan:
     events, zone_deferred = _trim_zone_caps(events, whole=request.whole_minutes)
     if zone_deferred > 0:
         warnings.append(
-            f"A zone cap left {zone_deferred:.0f} min in the bucket for the next allowed day."
+            f"A zone cap left {zone_deferred:.0f} min for the next allowed day."
         )
     events, deferred = _trim_run_cap(events, request.max_run_min, whole=request.whole_minutes)
     if deferred > 0 and request.max_run_min is not None:
         warnings.append(
-            f"Valve-on time for all zones is capped at {request.max_run_min:.0f} min tonight. "
-            f"{deferred:.0f} min stays in the bucket for the next allowed day."
+            f"Valve-on time for all zones is capped at {request.max_run_min:.0f} min this morning. "
+            f"{deferred:.0f} min waits for the next allowed day."
         )
     ids_after_caps = {item[0].zone.zone_id for item in events}
     full_min = (request_finish - request_earliest).total_seconds() / 60.0
@@ -702,7 +703,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
         )
     if window_deferred > 0:
         warnings.append(
-            f"The morning window left {window_deferred:.0f} min in the bucket "
+            f"The morning window left {window_deferred:.0f} min "
             "for the next allowed day."
         )
     ids_after_window = {item[0].zone.zone_id for item in events}

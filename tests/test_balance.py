@@ -105,13 +105,13 @@ def test_deficit_cannot_exceed_taw() -> None:
 def test_zone_is_due_at_raw_and_on_projection() -> None:
     due, reason = zone_is_due(14.2, 14.1, 24.0, 3.0)
     assert due is True
-    assert "at or above RAW" in reason
+    assert "has reached the watering point" in reason
     projected, projected_reason = zone_is_due(10.0, 12.0, 24.0, 3.0)
     assert projected is True
     assert "would reach" in projected_reason
     below, below_reason = zone_is_due(2.0, 12.0, 24.0, 3.0)
     assert below is False
-    assert "Below RAW" in below_reason
+    assert "Not dry enough" in below_reason
 
 
 def test_balance_is_applied_once_per_date() -> None:

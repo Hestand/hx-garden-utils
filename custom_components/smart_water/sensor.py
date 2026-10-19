@@ -9,6 +9,8 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import (
     CURRENCY_DOLLAR,
+    PERCENTAGE,
+    EntityCategory,
     UnitOfPrecipitationDepth,
     UnitOfVolume,
     UnitOfVolumeFlowRate,
@@ -51,6 +53,7 @@ async def async_setup_entry(
         zone_id = subentry.subentry_id
         async_add_entities(
             [
+                SoilWaterSensor(coordinator, zone_id),
                 DeficitSensor(coordinator, zone_id),
                 RawSensor(coordinator, zone_id),
                 NextRunSensor(coordinator, zone_id),
@@ -142,6 +145,7 @@ class ET0Sensor(SmartWaterHubEntity, SensorEntity):
     """Today's reference evapotranspiration."""
 
     _attr_translation_key = "et0"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.PRECIPITATION
     _attr_native_unit_of_measurement = UnitOfPrecipitationDepth.MILLIMETERS
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -184,8 +188,31 @@ class _ZoneSensor(SmartWaterZoneEntity, SensorEntity):
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{zone_id}_{key}"
 
 
+class SoilWaterSensor(_ZoneSensor):
+    """How full the root zone is, as a percent."""
+
+    _attr_translation_key = "soil_water"
+    _attr_device_class = SensorDeviceClass.MOISTURE
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+    _attr_icon = "mdi:water-percent"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the soil-water sensor."""
+        super().__init__(coordinator, zone_id, "soil_water")
+
+    @property
+    def native_value(self) -> float | None:
+        """Return how full the soil is, from 0 to 100."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.full_pct
+
+
 class DeficitSensor(_ZoneSensor):
-    """Root-zone depletion Dr."""
+    """How much water the root zone still needs."""
 
     _attr_translation_key = "deficit"
     _attr_device_class = SensorDeviceClass.PRECIPITATION
@@ -237,9 +264,10 @@ class DeficitSensor(_ZoneSensor):
 
 
 class RawSensor(_ZoneSensor):
-    """Readily available water, the irrigation threshold."""
+    """The soil dryness that means it is time to water."""
 
     _attr_translation_key = "raw"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.PRECIPITATION
     _attr_native_unit_of_measurement = UnitOfPrecipitationDepth.MILLIMETERS
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -468,9 +496,10 @@ class FlowSensor(_ZoneSensor):
 
 
 class MoistureSensor(_ZoneSensor):
-    """Sensor-derived deficit. The bucket uses it only in correct or override mode."""
+    """Water the moisture sensor says the zone still needs."""
 
     _attr_translation_key = "moisture"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.PRECIPITATION
     _attr_native_unit_of_measurement = UnitOfPrecipitationDepth.MILLIMETERS
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -543,7 +572,7 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
             "markdown": data.schedule_markdown,
             "window": data.schedule_window,
             "note": (
-                "Later days repeat today's crop ET and assume no rain."
+                "Later days repeat today's plant water use and assume no rain."
             ),
             "alerts": data.alerts,
             "week_gal": round(sum(zone.water_week_gal for zone in data.zones.values()), 1),
@@ -645,6 +674,7 @@ class LearnedGpmSensor(_ZoneSensor):
     """Median gallons per minute learned from finished runs."""
 
     _attr_translation_key = "learned_gpm"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
     _attr_native_unit_of_measurement = UnitOfVolumeFlowRate.GALLONS_PER_MINUTE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -668,6 +698,7 @@ class LastRunGpmSensor(_ZoneSensor):
     """Gallons per minute measured on the last finished cycle."""
 
     _attr_translation_key = "last_run_gpm"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
     _attr_native_unit_of_measurement = UnitOfVolumeFlowRate.GALLONS_PER_MINUTE
     _attr_state_class = SensorStateClass.MEASUREMENT

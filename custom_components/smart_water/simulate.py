@@ -415,9 +415,9 @@ def render_markdown(result: dict[str, Any]) -> str:
         "",
         result["note"],
         "Each row is that day's weather and soil. Start times are the next morning, at the start time.",
-        f"Bucket at the start: {result['bucket']}.",
+        f"Soil water at the start: {result['bucket']}.",
         "",
-        "| Day | Zone | ET0 mm | Rain in | Effective in | Deficit mm | Water | Minutes | Cycles | Start | Gallons | Why |",
+        "| Day | Zone | Water loss mm | Rain in | Rain counted in | Water needed mm | Water | Minutes | Cycles | Start | Gallons | Why |",
         "| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | --- | --- | ---: | --- |",
     ]
     for day in result["days"]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, ServiceRegistry
 from homeassistant.helpers import entity_registry as er
 import pytest
@@ -149,6 +150,15 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
     assert any(item.endswith("_schedule") for item in unique_ids)
     zone_id = next(iter(entry.subentries))
     assert f"{entry.entry_id}_{zone_id}_zone_plan" in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_soil_water" in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_deficit" in unique_ids
+    assert f"{entry.entry_id}_et0" in unique_ids
+    by_uid = {item.unique_id: item for item in entities}
+    assert by_uid[f"{entry.entry_id}_et0"].entity_category is EntityCategory.DIAGNOSTIC
+    assert by_uid[f"{entry.entry_id}_{zone_id}_raw"].entity_category is EntityCategory.DIAGNOSTIC
+    assert by_uid[f"{entry.entry_id}_{zone_id}_soil_water"].entity_category is None
+    assert by_uid[f"{entry.entry_id}_{zone_id}_last_run"].entity_category is None
+    assert by_uid[f"{entry.entry_id}_water_use"].entity_category is None
     assert f"{entry.entry_id}_{zone_id}_flow" in unique_ids
     assert f"{entry.entry_id}_{zone_id}_moisture" in unique_ids
     assert f"{entry.entry_id}_{zone_id}_adjustment" in unique_ids
