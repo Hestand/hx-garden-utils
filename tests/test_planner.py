@@ -405,20 +405,49 @@ def test_a_short_run_starts_at_05_and_finishes_before_09() -> None:
     assert plan.zones[0].carried_min == 0
 
 
-def test_overflow_starts_at_04_and_carries_the_rest() -> None:
-    """A soak sequence longer than 05:00–09:00 starts at 04:00 and stops at 09:00."""
+def test_overflow_starts_at_05_and_carries_the_rest() -> None:
+    """A short valve runtime stays at 05:00. Soak gaps do not start it early.
+
+    Cycles that would run past 09:00 stay in the bucket.
+    """
     start = datetime(2026, 10, 25, 5, 0, tzinfo=timezone.utc)
     earliest = datetime(2026, 10, 25, 4, 0, tzinfo=timezone.utc)
     finish = datetime(2026, 10, 25, 9, 0, tzinfo=timezone.utc)
     plan = build_plan(
         _request(start_at=start, earliest_start=earliest, finish_by=finish)
     )
-    assert earliest <= plan.timeline[0].start < start
-    assert plan.timeline[-1].end == finish
+    assert plan.timeline[0].start == start
+    assert plan.timeline[-1].end <= finish
     assert plan.zones[0].carried_min > 0
     assert plan.zones[0].scheduled is True
     assert plan.warning is not None
     assert "next allowed day" in plan.warning.lower()
+    assert "starts at" not in plan.warning.lower()
+
+
+def test_a_runtime_longer_than_the_window_may_start_at_04() -> None:
+    """Valve time that cannot finish by 09:00 may open at 04:00, not earlier."""
+    start = datetime(2026, 11, 5, 5, 0, tzinfo=timezone.utc)
+    earliest = datetime(2026, 11, 5, 4, 0, tzinfo=timezone.utc)
+    finish = datetime(2026, 11, 5, 9, 0, tzinfo=timezone.utc)
+    zone = _zone(
+        name="Drip",
+        soil_type="loam",
+        slope_pct=0,
+        sprinkler_type="drip",
+        precipitation_rate_in_hr=0.4,
+        efficiency=1.0,
+        deficit_mm=80.0,
+        raw_mm=8.0,
+        soak_override_min=0,
+        max_cycle_override_min=60,
+    )
+    plan = build_plan(
+        _request(zone, start_at=start, finish_by=finish, earliest_start=earliest)
+    )
+    assert plan.timeline[0].start == earliest
+    assert plan.timeline[-1].end == finish
+    assert sum(event.duration_min for event in plan.timeline) > 240
 
 
 def test_priority_then_deficit_keeps_the_first_zone_when_the_window_is_short() -> None:

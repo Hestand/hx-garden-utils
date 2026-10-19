@@ -125,11 +125,14 @@ class SmartWaterCard extends HTMLElement {
     }
     const useState = use ? hass.states[use.entity_id] : null;
     const savedState = saved ? hass.states[saved.entity_id] : null;
+    const nextEntity = this._byKey(hubEntities, "schedule");
+    const nextState = nextEntity ? hass.states[nextEntity.entity_id] : null;
     return {
       name: (devices[hubId] && (devices[hubId].name_by_user || devices[hubId].name)) || "Smart Water",
       auto: auto && auto.entity_id,
       automatic: auto ? hass.states[auto.entity_id] && hass.states[auto.entity_id].state === "on" : false,
       watering: nowEntity && hass.states[nowEntity.entity_id] ? hass.states[nowEntity.entity_id].state : "Idle",
+      next: nextState ? nextState.state : null,
       week: useState && useState.attributes ? useState.attributes.week_gal : schedule.attributes.week_gal,
       saved: savedState ? savedState.state : schedule.attributes.saved_gal,
       alerts: schedule.attributes.alerts || [],
@@ -234,7 +237,13 @@ class SmartWaterCard extends HTMLElement {
       windowLine.textContent = String(schedule.attributes.window);
       box.append(windowLine);
     }
-    if (schedule.state) {
+    if (model.next && model.next !== "unknown" && model.next !== "unavailable") {
+      const next = document.createElement("div");
+      next.className = "sw-muted";
+      next.textContent = `Next watering ${this._exact(model.next)}`;
+      box.append(next);
+    }
+    if (schedule.state && schedule.state !== "unknown" && schedule.state !== "unavailable") {
       const summary = document.createElement("div");
       summary.className = "sw-muted";
       summary.textContent = schedule.state;
@@ -270,11 +279,15 @@ class SmartWaterCard extends HTMLElement {
     }
     const detail = document.createElement("div");
     detail.className = "sw-muted";
-    const next = zone.scheduled
-      ? `Next ${this._when(zone.next)} · ${zone.minutes} min`
-      : zone.reason || "Not scheduled";
+    const when = zone.next ? this._exact(zone.next) : "";
+    let next = zone.reason || "Not scheduled";
+    if (when && zone.scheduled) {
+      next = `Next ${when} · ${zone.minutes} min`;
+    } else if (when) {
+      next = `Next ${when}`;
+    }
     const last = zone.last && zone.last.at
-      ? `Last ${this._when(zone.last.at)} · ${zone.last.minutes} min`
+      ? `Last ${this._exact(zone.last.at)} · ${zone.last.minutes} min`
       : "No run yet";
     detail.textContent = `${next}. ${last}.`;
     box.append(row, bar, detail);
@@ -352,7 +365,7 @@ class SmartWaterCard extends HTMLElement {
     return `${Math.round(number)} gal`;
   }
 
-  _when(value) {
+  _exact(value) {
     if (!value) {
       return "—";
     }
@@ -360,13 +373,33 @@ class SmartWaterCard extends HTMLElement {
     if (Number.isNaN(date.getTime())) {
       return String(value);
     }
-    return date.toLocaleString(undefined, {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
+    const timeZone = this._hass && this._hass.config && this._hass.config.time_zone;
+    let parts;
+    try {
+      parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: timeZone || undefined,
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      }).formatToParts(date);
+    } catch (_err) {
+      parts = new Intl.DateTimeFormat("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      }).formatToParts(date);
+    }
+    const part = (type) => {
+      const found = parts.find((item) => item.type === type);
+      return found ? found.value : "";
+    };
+    return `${part("weekday")} ${part("month")} ${part("day")}, ${part("hour")}:${part("minute")} ${part("dayPeriod")}`;
   }
 
   _note(text) {

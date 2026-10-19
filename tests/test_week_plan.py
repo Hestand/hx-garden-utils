@@ -105,7 +105,7 @@ def test_allowed_day_is_the_morning_the_water_would_run() -> None:
 
 
 def test_overflow_is_dated_sunday_morning_and_stops_at_09() -> None:
-    """A long soak starts at 04:00 Sunday and does not run past 09:00.
+    """A short soak sequence starts at 05:00 Sunday and does not run past 09:00.
 
     The row stays on the morning the valves open. Minutes that do not fit
     stay in the bucket.
@@ -119,8 +119,8 @@ def test_overflow_is_dated_sunday_morning_and_stops_at_09() -> None:
     assert long_run.timeline
     first = long_run.timeline[0].start.astimezone(CHICAGO)
     last = long_run.timeline[-1].end.astimezone(CHICAGO)
-    assert earliest <= first < start
-    assert last == finish
+    assert first == start
+    assert last <= finish
     assert long_run.zones[0].carried_min > 0
     assert long_run.run_on.astimezone(CHICAGO).date().isoformat() == "2026-10-25"
 
@@ -128,7 +128,7 @@ def test_overflow_is_dated_sunday_morning_and_stops_at_09() -> None:
     row = week["days"][0]
     assert row["date"] == "2026-10-25"
     zone = row["zones"][0]
-    assert str(zone["starts"]).startswith("04:")
+    assert str(zone["starts"]).startswith("05:")
     assert zone["note"]
     assert "carries" in str(zone["note"])
 
@@ -146,10 +146,10 @@ def test_wind_moves_a_long_run_earlier_but_not_before_04() -> None:
     zone = week["days"][0]["zones"][0]
     assert week["days"][0]["date"] == "2026-10-25"
     starts = str(zone["starts"])
-    assert starts.startswith("04:")
+    assert starts.startswith("05:")
     for token in starts.split(", "):
         hour = int(token.split(":")[0])
-        assert hour < 8
+        assert 5 <= hour < 8
 
 
 def _live_entry(**options) -> MockConfigEntry:

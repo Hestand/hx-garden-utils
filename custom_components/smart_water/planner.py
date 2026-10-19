@@ -404,6 +404,11 @@ def _span_minutes(events: list[tuple[_Job, int, int, int]]) -> int:
     return events[-1][3]
 
 
+def _valve_minutes(events: list[tuple[_Job, int, int, int]]) -> float:
+    """Valve-on minutes. Soak gaps between cycles are not runtime."""
+    return float(sum(end - start for _job, _cycle, start, end in events))
+
+
 def _place(
     events: list[tuple[_Job, int, int, int]],
     anchor: datetime,
@@ -429,13 +434,20 @@ def _place(
 
 def _window_anchor(
     span_min: float,
+    valve_min: float,
     start_at: datetime,
     earliest: datetime,
     finish_by: datetime,
 ) -> datetime:
-    """Prefer ``start_at``. Slide earlier only so the sequence still finishes."""
+    """Prefer ``start_at``. Slide earlier only when valve time does not fit.
+
+    Soak gaps make the wall span longer than the valve runtime. A short run
+    stays on the configured start; cycles that would pass the finish time are
+    carried. A runtime longer than the start-to-finish window may open earlier,
+    and never before ``earliest``.
+    """
     preferred = elapsed_seconds(finish_by, start_at) / 60.0
-    if span_min <= preferred + 1e-6:
+    if span_min <= preferred + 1e-6 or valve_min <= preferred + 1e-6:
         return start_at
     anchor = shift_minutes(finish_by, -span_min)
     if anchor < earliest:
@@ -696,11 +708,15 @@ def build_plan(request: PlanRequest) -> NightPlan:
             f"{deferred:.0f} min waits for the next allowed day."
         )
     ids_after_caps = {item[0].zone.zone_id for item in events}
+    preferred_min = elapsed_seconds(request_finish, start_at) / 60.0
     full_min = elapsed_seconds(request_finish, request_earliest) / 60.0
+    # Soak gaps do not pull a short run off the configured start. Only a valve
+    # runtime that cannot finish by the finish time may use the early window.
+    limit = full_min if _valve_minutes(events) > preferred_min + 1e-6 else preferred_min
     window_deferred = 0.0
-    if events and full_min > 0 and _span_minutes(events) > full_min + 1e-6:
+    if events and limit > 0 and _span_minutes(events) > limit + 1e-6:
         events, window_deferred = _trim_to_window(
-            events, full_min, whole=request.whole_minutes
+            events, limit, whole=request.whole_minutes
         )
     if window_deferred > 0:
         warnings.append(
@@ -711,6 +727,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
     window_dropped = ids_after_caps - ids_after_window
     anchor = _window_anchor(
         float(_span_minutes(events)),
+        _valve_minutes(events),
         start_at,
         request_earliest,
         request_finish,
