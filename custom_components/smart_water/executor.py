@@ -19,6 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .flow import GALLONS_PER_INCH_SQFT
+from .schedule import elapsed_seconds
 from .units import MM_PER_INCH, rate_gpm, volume_gallons
 
 _LOGGER = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ class WateringExecutor:
                 minutes = job.minutes * scale
                 net_mm = job.net_mm * scale
                 if job.start is not None:
-                    delay = (job.start - self._now(job.start)).total_seconds()
+                    delay = elapsed_seconds(job.start, self._now(job.start))
                     if delay > 0:
                         await self._sleep(delay)
                 skip = None
@@ -137,7 +138,7 @@ class WateringExecutor:
                     await self._report(job, 0.0, 0.0, None, skip)
                     continue
                 if job.finish_by is not None:
-                    remaining = (job.finish_by - self._now(job.finish_by)).total_seconds() / 60.0
+                    remaining = elapsed_seconds(job.finish_by, self._now(job.finish_by)) / 60.0
                     if remaining <= 0:
                         await self._report(job, 0.0, 0.0, None, "The watering window is closed.")
                         continue

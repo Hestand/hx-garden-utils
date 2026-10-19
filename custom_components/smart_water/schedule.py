@@ -9,8 +9,9 @@ weekday list when the hub option says so; the blackout still applies.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .const import (
     DEFAULT_EARLIEST_START,
@@ -108,9 +109,68 @@ def parse_clock(value: object, default: str) -> tuple[int, int]:
     return hour, minute
 
 
+def named_zone(tz: tzinfo) -> tzinfo:
+    """Reuse a zoneinfo zone. A fixed offset has no name and stays as it is."""
+    key = getattr(tz, "key", None)
+    if isinstance(key, str) and key:
+        return ZoneInfo(key)
+    return tz
+
+
+def wall_clock(day: date, hour: int, minute: int, tz: tzinfo) -> datetime:
+    """This calendar day's wall time, in ``tz``.
+
+    The clock is built for that date. It is not produced by adding a day
+    count to another datetime, so a daylight-saving offset cannot stick.
+    A spring-forward time that does not exist moves forward to the first
+    real local minute. The repeated fall-back hour uses the first occurrence.
+    """
+    zone = named_zone(tz)
+    built = datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
+    if not isinstance(zone, ZoneInfo):
+        return built
+    back = built.astimezone(timezone.utc).astimezone(zone)
+    if back.date() != day or (back.hour, back.minute) != (hour, minute):
+        return back.replace(second=0, microsecond=0)
+    return built
+
+
+def elapsed_seconds(later: datetime, earlier: datetime) -> float:
+    """Real seconds from ``earlier`` to ``later``.
+
+    Two datetimes that share a zoneinfo object subtract as wall-clock times,
+    which ignores a daylight-saving gap. Convert through UTC first.
+    """
+    if later.tzinfo is None or earlier.tzinfo is None:
+        return (later - earlier).total_seconds()
+    return (
+        later.astimezone(timezone.utc) - earlier.astimezone(timezone.utc)
+    ).total_seconds()
+
+
+def shift_minutes(moment: datetime, minutes: float) -> datetime:
+    """Move by real elapsed minutes.
+
+    Adding a timedelta to a zoneinfo datetime follows the wall clock and can
+    land in the hour that spring-forward skips. Elapsed valve time is UTC
+    time, then converted back to the zone.
+    """
+    if minutes == 0:
+        return moment
+    if moment.tzinfo is None:
+        return moment + timedelta(minutes=minutes)
+    zone = named_zone(moment.tzinfo)
+    if not isinstance(zone, ZoneInfo):
+        return moment + timedelta(minutes=minutes)
+    moved = moment.astimezone(timezone.utc) + timedelta(minutes=minutes)
+    return moved.astimezone(zone)
+
+
 def clock_on(moment: datetime, hour: int, minute: int) -> datetime:
-    """The same local day as ``moment``, at this hour and minute."""
-    return moment.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    """The same local calendar day as ``moment``, at this hour and minute."""
+    if moment.tzinfo is None:
+        return moment.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return wall_clock(moment.date(), hour, minute, moment.tzinfo)
 
 
 def morning_window(
@@ -121,21 +181,25 @@ def morning_window(
 ) -> tuple[datetime, datetime, datetime]:
     """Earliest, target start, and finish on the morning this plan waters.
 
-    A clock at or after today's finish uses the next morning. Planning at
-    23:00 therefore opens the valves the next day. A clock before today's
-    finish, such as 03:00, still uses this morning.
+    A clock at or after today's finish uses the next calendar morning.
+    Planning at 23:00 therefore opens the valves the next day. A clock
+    before today's finish, such as 03:00, still uses this morning. Each
+    bound is that day's wall time in the zone, including across a daylight-
+    saving change.
     """
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
+    tz = named_zone(now.tzinfo)
+    local = now if now.tzinfo is tz else now.astimezone(tz)
     earliest_hm = parse_clock(earliest, DEFAULT_EARLIEST_START)
     start_hm = parse_clock(start, DEFAULT_START_TIME)
     finish_hm = parse_clock(finish, DEFAULT_FINISH_TIME)
-    finish_today = clock_on(now, *finish_hm)
-    day = now if now < finish_today else now + timedelta(days=1)
+    finish_today = wall_clock(local.date(), *finish_hm, tz)
+    day = local.date() if local < finish_today else local.date() + timedelta(days=1)
     return (
-        clock_on(day, *earliest_hm),
-        clock_on(day, *start_hm),
-        clock_on(day, *finish_hm),
+        wall_clock(day, *earliest_hm, tz),
+        wall_clock(day, *start_hm, tz),
+        wall_clock(day, *finish_hm, tz),
     )
 
 
@@ -177,8 +241,9 @@ def clip_blackout(
         raise ValueError("blackout hours must be 0–23")
     note = None
     finish = finish_by
+    zone = finish_by.tzinfo or timezone.utc
     if _in_blackout(finish, start_hour, end_hour):
-        finish = finish.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+        finish = wall_clock(finish_by.date(), start_hour, 0, zone)
         note = (
             f"The finish time was inside the {start_hour:02d}:00–"
             f"{end_hour:02d}:00 blackout and was moved to {start_hour:02d}:00."
@@ -186,9 +251,9 @@ def clip_blackout(
     if finish.hour < start_hour or (
         finish.hour == start_hour and finish.minute == 0 and finish.second == 0
     ):
-        barrier = finish.replace(hour=0, minute=0, second=0, microsecond=0)
+        barrier = wall_clock(finish.date(), 0, 0, zone)
     else:
-        barrier = finish.replace(hour=end_hour, minute=0, second=0, microsecond=0)
+        barrier = wall_clock(finish.date(), end_hour, 0, zone)
         note = (
             note
             or (

@@ -195,9 +195,9 @@ from .presets import (
     wind_skip_mph,
 )
 from .safety import would_execute
-from .schedule import morning_window, rules_for
+from .schedule import morning_window, rules_for, shift_minutes
 from .skips import SkipInputs, safety_reason
-from .week_plan import project_week, split_outlook
+from .week_plan import OUTLOOK_DAYS, project_week, split_outlook
 from .store import SmartWaterStore
 from .usage import (
     DEFAULT_BASELINE_DAYS,
@@ -1474,7 +1474,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 forecast_horizon_days=self._forecast_horizon_days(),
                 forecast_threshold_mm=skip,
                 defer_days=self._defer_days_before(now),
-                days=60,
+                days=OUTLOOK_DAYS,
                 et_factors=self._et_factors(observation, now.date(), et0),
             )
             self._week, self._outlook = split_outlook(
@@ -2216,7 +2216,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             now = dt_util.now(self._timezone())
             run_finished = True
             if scheduled and next_run is not None:
-                run_finished = now >= next_run + timedelta(minutes=float(runtime_min))
+                run_finished = now >= shift_minutes(next_run, float(runtime_min))
             status = classify_flow(
                 expected_gal=expected,
                 delivered_gal=delivered,
@@ -2412,11 +2412,17 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         )
 
     def _apply_outlook(self, by_zone: dict[str, ZoneSnapshot]) -> None:
-        """Fill a next-watering time from the 60-day projection when this morning has none."""
+        """Fill a next-watering time from the year-long projection when this morning has none."""
         found = (self._outlook or {}).get("by_zone") or {}
         for zone_id, snap in by_zone.items():
             info = found.get(zone_id) or {}
-            snap.next_note = str(info.get("note") or "")
+            note = str(info.get("note") or "")
+            if not snap.enabled:
+                snap.next_run = None
+                snap.next_estimated = False
+                snap.next_note = note or "Zone is disabled"
+                continue
+            snap.next_note = note
             if snap.next_run is None and info.get("at") is not None:
                 snap.next_run = info["at"]  # type: ignore[assignment]
                 snap.next_estimated = bool(info.get("estimated"))
@@ -2431,7 +2437,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         A forecast high and low use Hargreaves. Otherwise the recent average
         of stored daily water loss is used. With neither, later days repeat today.
         """
-        horizon = 60
+        horizon = OUTLOOK_DAYS
         factors = [1.0] * horizon
         if et0 is None or et0 <= 0:
             return factors

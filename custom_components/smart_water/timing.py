@@ -7,7 +7,9 @@ start of that windy stretch, and never earlier than the earliest start.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
+
+from .schedule import elapsed_seconds, shift_minutes
 
 
 def calm_finish(
@@ -27,16 +29,16 @@ def calm_finish(
     points = _points(hourly, finish_by)
     if not points:
         return finish_by, None
-    if not _windy(finish_by - timedelta(minutes=1), points, limit_mph):
+    if not _windy(shift_minutes(finish_by, -1), points, limit_mph):
         return finish_by, None
     shifted = finish_by
     probe = finish_by
     for _step in range(18):
-        if not _windy(probe - timedelta(minutes=1), points, limit_mph):
+        if not _windy(shift_minutes(probe, -1), points, limit_mph):
             break
         hour_start = probe.replace(minute=0, second=0, microsecond=0)
         if hour_start >= probe:
-            hour_start = hour_start - timedelta(hours=1)
+            hour_start = shift_minutes(hour_start, -60)
         if earliest is not None and hour_start <= earliest:
             return earliest, (
                 f"Forecast wind stays at or above {limit_mph:.0f} mph through "
@@ -92,11 +94,11 @@ def _wind_at(moment: datetime, points: list[tuple[datetime, float]]) -> float | 
         if stamp <= moment:
             best = (stamp, wind)
         else:
-            if best is None and (stamp - moment).total_seconds() <= 3600:
+            if best is None and elapsed_seconds(stamp, moment) <= 3600:
                 return wind
             break
     if best is None:
         return None
-    if (moment - best[0]).total_seconds() > 90 * 60:
+    if elapsed_seconds(moment, best[0]) > 90 * 60:
         return None
     return best[1]

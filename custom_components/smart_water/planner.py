@@ -16,7 +16,7 @@ for the next allowed day.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from .balance import root_zone, zone_is_due
 from .const import (
@@ -48,6 +48,7 @@ from .presets import (
     stored_float,
 )
 from .safety import block_reason, would_execute
+from .schedule import elapsed_seconds, shift_minutes
 from .schedule import clip_blackout, day_allowed, weekday_name
 from .skips import SkipInputs, skip_reason
 from .timing import calm_finish, strictest_limit
@@ -419,8 +420,8 @@ def _place(
                 cycle_index=cycle_index,
                 cycle_count=len(job.cycles),
                 duration_min=end_min - start_min,
-                start=anchor + timedelta(minutes=start_min),
-                end=anchor + timedelta(minutes=end_min),
+                start=shift_minutes(anchor, start_min),
+                end=shift_minutes(anchor, end_min),
             )
         )
     return tuple(placed)
@@ -433,10 +434,10 @@ def _window_anchor(
     finish_by: datetime,
 ) -> datetime:
     """Prefer ``start_at``. Slide earlier only so the sequence still finishes."""
-    preferred = (finish_by - start_at).total_seconds() / 60.0
+    preferred = elapsed_seconds(finish_by, start_at) / 60.0
     if span_min <= preferred + 1e-6:
         return start_at
-    anchor = finish_by - timedelta(minutes=span_min)
+    anchor = shift_minutes(finish_by, -span_min)
     if anchor < earliest:
         return earliest
     return anchor
@@ -695,7 +696,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
             f"{deferred:.0f} min waits for the next allowed day."
         )
     ids_after_caps = {item[0].zone.zone_id for item in events}
-    full_min = (request_finish - request_earliest).total_seconds() / 60.0
+    full_min = elapsed_seconds(request_finish, request_earliest) / 60.0
     window_deferred = 0.0
     if events and full_min > 0 and _span_minutes(events) > full_min + 1e-6:
         events, window_deferred = _trim_to_window(
@@ -717,7 +718,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
     timeline = _place(events, anchor)
     if (
         timeline
-        and timeline[0].start < start_at - timedelta(seconds=30)
+        and timeline[0].start < shift_minutes(start_at, -0.5)
     ):
         warnings.append(
             f"The run starts at {timeline[0].start.strftime('%H:%M')} "

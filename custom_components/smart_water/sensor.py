@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -416,6 +418,18 @@ class RainSensor(SmartWaterHubEntity, SensorEntity):
         }
 
 
+def earliest_enabled_run(zones) -> datetime | None:
+    """Earliest next watering among zones that are turned on."""
+    moments = [
+        zone.next_run
+        for zone in zones
+        if getattr(zone, "enabled", True) and zone.next_run is not None
+    ]
+    if not moments:
+        return None
+    return min(moments)
+
+
 class ScheduleSensor(SmartWaterHubEntity, SensorEntity):
     """Next planned start across zones, plus the watering-day rules."""
 
@@ -430,16 +444,11 @@ class ScheduleSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Return the earliest next watering, including a date past this week."""
+        """Return the earliest next watering among enabled zones."""
         data = self.coordinator.data
         if data is None or not data.zones:
             return None
-        moments = [
-            zone.next_run for zone in data.zones.values() if zone.next_run is not None
-        ]
-        if not moments:
-            return None
-        return min(moments)
+        return earliest_enabled_run(data.zones.values())
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
@@ -447,10 +456,7 @@ class ScheduleSensor(SmartWaterHubEntity, SensorEntity):
         data = self.coordinator.data
         if data is None:
             return {}
-        moments = [
-            zone.next_run for zone in data.zones.values() if zone.next_run is not None
-        ]
-        earliest = min(moments) if moments else None
+        earliest = earliest_enabled_run(data.zones.values())
         estimated = False
         note = data.outlook_summary
         if earliest is not None:
@@ -594,7 +600,7 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def native_value(self) -> str | None:
-        """Return this week's plan, or a later estimated date when nothing is due yet."""
+        """Return this week's plan, a later exact date, or why there is none."""
         data = self.coordinator.data
         if data is None or not data.zones:
             return None
@@ -611,6 +617,11 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
             return f"{len(planned)} waterings · next {day}{clock} {zone['name']}"[:255]
         if data.outlook_summary:
             return data.outlook_summary[:255]
+        for zone in data.zones.values():
+            if zone.enabled and zone.next_note:
+                return zone.next_note[:255]
+        if all(not zone.enabled for zone in data.zones.values()):
+            return "Zone is disabled"
         return None
 
     @property
@@ -624,7 +635,8 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
             "markdown": data.schedule_markdown,
             "window": data.schedule_window,
             "note": (
-                "Later days repeat today's plant water use and assume no rain."
+                "Later days use the forecast or the recent water-loss average "
+                "and assume no rain."
             ),
             "alerts": data.alerts,
             "week_gal": round(sum(zone.water_week_gal for zone in data.zones.values()), 1),

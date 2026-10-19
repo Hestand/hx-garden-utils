@@ -13,14 +13,14 @@ before midnight is dated that evening, and any later cycle shows its own date.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .balance import apply_daily_balance
 from .flow import expected_gallons
 from .forecast_rain import defer_reason
 from .planner import NightPlan, PlanRequest, ZoneRequest, build_plan
-from .schedule import morning_window
+from .schedule import morning_window, parse_clock, wall_clock
 from .units import mm_to_inches
 
 
@@ -61,6 +61,10 @@ def project_week(
     first_earliest, first_start, first_finish = morning_window(
         local_now, earliest_start, start_time, finish_time
     )
+    earliest_hm = parse_clock(earliest_start, "04:00:00")
+    start_hm = parse_clock(start_time, "05:00:00")
+    finish_hm = parse_clock(finish_time, "09:00:00")
+    first_day = first_start.date()
     deficits = {zone.zone_id: zone.deficit_mm for zone in zones}
     since = {zone.zone_id: zone.days_since_water for zone in zones}
     taw = {zone.zone_id: zone.taw_mm for zone in zones}
@@ -84,9 +88,10 @@ def project_week(
                 deficits[zone.zone_id] = updated.deficit_mm
                 if since[zone.zone_id] is not None:
                     since[zone.zone_id] = int(since[zone.zone_id]) + 1
-        earliest = first_earliest + timedelta(days=offset)
-        start_at = first_start + timedelta(days=offset)
-        finish_by = first_finish + timedelta(days=offset)
+        day = first_day + timedelta(days=offset)
+        earliest = wall_clock(day, *earliest_hm, tz)
+        start_at = wall_clock(day, *start_hm, tz)
+        finish_by = wall_clock(day, *finish_hm, tz)
         requests = []
         for zone in zones:
             current = replace(
@@ -168,15 +173,18 @@ def project_week(
         "markdown": render_markdown(rows, window),
         "window": window,
         "note": (
-            "Later days repeat today's plant water use and assume no rain. "
-            "A skip on a later day can change when the real morning arrives."
+            "Later days use the forecast or the recent water-loss average and "
+            "assume no rain. A skip on a later day can change when the real morning arrives."
         ),
     }
 
 
 def render_markdown(days: list[dict[str, object]], window: str = "") -> str:
     """A table a markdown card can show as-is."""
-    intro = "Next 7 days. Later days repeat today's plant water use and assume no rain."
+    intro = (
+        "Next 7 days. Later days use the forecast or the recent water-loss "
+        "average and assume no rain."
+    )
     if window:
         intro = f"{intro} {window}"
     lines = [
@@ -274,7 +282,7 @@ def _day_row(
 
 
 FIRM_DAYS = 7
-OUTLOOK_DAYS = 60
+OUTLOOK_DAYS = 365
 
 
 def split_outlook(
@@ -305,70 +313,101 @@ def describe_outlook(
     *,
     timezone: str,
     firm_days: int = 7,
-    horizon: int = 60,
+    horizon: int = OUTLOOK_DAYS,
 ) -> dict[str, object]:
-    """First morning each zone would water, and a sentence when that is not this week.
+    """First morning each zone would water.
 
-    A date inside ``firm_days`` is the plan. A later date is an estimate.
-    A dormant zone with no date inside ``horizon`` keeps its dormancy note.
+    A date inside ``firm_days`` is this week's plan. A later date still has
+    an exact local time; ``estimated`` is true only as an attribute. A zone
+    with no date inside ``horizon`` keeps a note that says why.
     """
     tz = ZoneInfo(timezone)
     found: dict[str, dict[str, object]] = {}
-    dormant: dict[str, str] = {}
+    pending: dict[str, str] = {}
+    names: dict[str, str] = {}
+    last_date = ""
     for index, day in enumerate(days):
-        for zone in list(day["zones"]):
+        last_date = str(day.get("date") or last_date)
+        for zone in list(day.get("zones") or []):
             if not isinstance(zone, dict):
                 continue
             zone_id = str(zone["zone_id"])
             reason = str(zone.get("reason") or "")
-            if zone_id not in dormant and (
-                reason.startswith("Dormant") or "Regular watering is off" in reason
-            ):
-                dormant[zone_id] = reason
-            if not zone.get("scheduled") or zone_id in found:
+            names[zone_id] = str(zone.get("name") or names.get(zone_id, ""))
+            if zone.get("scheduled") and zone_id not in found:
+                found[zone_id] = {
+                    "at": _at(str(day["date"]), str(zone.get("starts") or ""), tz),
+                    "estimated": index >= firm_days,
+                    "note": "",
+                    "name": names[zone_id],
+                }
                 continue
-            found[zone_id] = {
-                "at": _at(str(day["date"]), str(zone.get("starts") or ""), tz),
-                "estimated": index >= firm_days,
-                "note": "",
-                "name": str(zone["name"]),
-            }
-    for zone_id, note in dormant.items():
-        if zone_id not in found:
-            found[zone_id] = {"at": None, "estimated": False, "note": note, "name": ""}
+            if zone_id not in found:
+                pending[zone_id] = reason
+    before = date.fromisoformat(last_date) + timedelta(days=1) if last_date else None
+    for zone_id, reason in pending.items():
+        if zone_id in found:
+            continue
+        found[zone_id] = {
+            "at": None,
+            "estimated": False,
+            "note": _no_date_note(reason, before, horizon),
+            "name": names.get(zone_id, ""),
+        }
     dated = [item for item in found.values() if item.get("at") is not None]
     if dated:
         earliest = min(dated, key=lambda item: item["at"])  # type: ignore[arg-type, return-value]
-        when = _friendly(earliest["at"])  # type: ignore[arg-type]
         if earliest["estimated"]:
-            summary = f"Next watering ~{when} (estimated)"
+            summary = exact_next_text(earliest["at"])  # type: ignore[arg-type]
         else:
             summary = ""
-    elif dormant:
-        summary = next(iter(dormant.values()))
-    elif days:
-        summary = f"No watering projected in the next {horizon} days."
+    elif found:
+        summary = next(
+            (str(item["note"]) for item in found.values() if item.get("note")),
+            "",
+        )
     else:
         summary = ""
     return {"by_zone": found, "summary": summary}
 
 
-def _at(date_text: str, starts: str, tz: ZoneInfo) -> datetime:
-    clock = (starts or "05:00").split(",")[0].strip() or "05:00"
-    hour_text, minute_text = clock.split(":")[:2]
-    year_text, month_text, day_text = date_text.split("-")
-    return datetime(
-        int(year_text),
-        int(month_text),
-        int(day_text),
-        int(hour_text),
-        int(minute_text),
-        tzinfo=tz,
+def exact_next_text(moment: datetime) -> str:
+    """Exact local weekday, month, day, and clock. No estimate wording."""
+    hour = moment.hour % 12 or 12
+    suffix = "AM" if moment.hour < 12 else "PM"
+    return (
+        f"Next watering {moment.strftime('%a')} {moment.strftime('%b')} {moment.day}, "
+        f"{hour}:{moment.minute:02d} {suffix}"
     )
 
 
-def _friendly(moment: datetime) -> str:
-    return f"{moment.strftime('%b')} {moment.day}"
+def _no_date_note(reason: str, before: date | None, horizon: int) -> str:
+    """Why a zone has no next watering inside the projection."""
+    if reason.startswith("Zone is disabled"):
+        return "Zone is disabled"
+    if reason.startswith("Dormant") or "Regular watering is off" in reason:
+        if before is None:
+            return "Dormant. Regular watering is off."
+        return f"Dormant, no watering expected before {_long_date(before)}"
+    return f"No watering projected in the next {horizon} days."
+
+
+def _long_date(day: date) -> str:
+    return f"{day.strftime('%b')} {day.day}, {day.year}"
+
+
+def _at(date_text: str, starts: str, tz: ZoneInfo) -> datetime:
+    clock = (starts or "05:00").split(",")[0].strip() or "05:00"
+    if " " in clock:
+        date_text, clock = clock.split()[:2]
+    hour_text, minute_text = clock.split(":")[:2]
+    year_text, month_text, day_text = date_text.split("-")
+    return wall_clock(
+        date(int(year_text), int(month_text), int(day_text)),
+        int(hour_text),
+        int(minute_text),
+        tz,
+    )
 
 
 def _summary(days: list[dict[str, object]]) -> str:

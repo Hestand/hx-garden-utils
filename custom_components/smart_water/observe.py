@@ -9,7 +9,9 @@ it. A sensor that already reports daily MJ is not integrated.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
+
+from .schedule import elapsed_seconds, shift_minutes
 
 from .const import (
     RAIN_KIND_CUMULATIVE,
@@ -98,7 +100,7 @@ def note_rain(
         previous = datetime.fromisoformat(str(last))
         if previous.tzinfo is None:
             previous = previous.replace(tzinfo=at.tzinfo)
-        hours = (at - previous).total_seconds() / 3600.0
+        hours = elapsed_seconds(at, previous) / 3600.0
         if 0 < hours <= _MAX_GAP_HOURS:
             average = (float(cursor) + value_mm) / 2.0
             added = max(0.0, average) * hours
@@ -146,7 +148,7 @@ def _reduce_rain_events(
 
 
 def _prune_events(events: list[dict[str, object]], at: datetime) -> list[dict[str, object]]:
-    cutoff = at - timedelta(hours=48)
+    cutoff = shift_minutes(at, -48 * 60)
     kept = []
     for event in events:
         if _event_time(event, at) >= cutoff:
@@ -168,7 +170,7 @@ def rain_between(
 
 def rain_in_hours(track: dict[str, object], hours: float, at: datetime) -> float:
     """Sum recorded rain in the last ``hours`` ending at ``at``."""
-    return rain_between(track, at - timedelta(hours=hours), at)
+    return rain_between(track, shift_minutes(at, -hours * 60), at)
 
 
 def note_solar_w(track: dict[str, object], watts_m2: float, at: datetime) -> None:
@@ -179,7 +181,7 @@ def note_solar_w(track: dict[str, object], watts_m2: float, at: datetime) -> Non
         previous = datetime.fromisoformat(str(last))
         if previous.tzinfo is None:
             previous = previous.replace(tzinfo=at.tzinfo)
-        hours = (at - previous).total_seconds() / 3600.0
+        hours = elapsed_seconds(at, previous) / 3600.0
         if 0 < hours <= _MAX_GAP_HOURS:
             average = (float(previous_w) + watts_m2) / 2.0
             # W/m² × hours × 3600 J/Wh / 1e6 = MJ/m².

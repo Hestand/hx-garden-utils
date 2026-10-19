@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from .const import FLOW_KIND_RATE, FLOW_KIND_TOTAL
+from .schedule import elapsed_seconds
 
 # US gallons in one inch of water over one square foot.
 GALLONS_PER_INCH_SQFT = 0.623
@@ -69,7 +70,7 @@ def note_flow(
         previous = datetime.fromisoformat(str(last))
         if previous.tzinfo is None:
             previous = previous.replace(tzinfo=at.tzinfo)
-        hours = (at - previous).total_seconds() / 3600.0
+        hours = elapsed_seconds(at, previous) / 3600.0
         if 0 < hours <= _MAX_GAP_HOURS:
             average_gpm = (float(cursor) + gallons) / 2.0
             state["flow_delivered_gal"] = float(state["flow_delivered_gal"]) + max(
