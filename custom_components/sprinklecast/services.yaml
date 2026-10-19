@@ -7,7 +7,7 @@ calculate_plan:
   fields:
     hub:
       name: Hub
-      description: Hub name. Needed only when more than one Smart Water hub is loaded.
+      description: Hub name. Needed only when more than one Sprinklecast hub is loaded.
       selector:
         text:
     notify:
@@ -65,6 +65,63 @@ set_bucket:
           max: 20
           step: 0.01
           unit_of_measurement: in
+
+set_soil_water_level:
+  name: Set soil water level
+  description: >-
+    Set how full a zone is, from 0 to 100 percent, or set the water it still
+    needs. Percent writes that share of the water the soil can hold. Leave the
+    zone empty to set every zone on the hub. Updates the plan, the next
+    watering, the schedule, and the calendar. Does not open a valve.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name, if you have more than one.
+      selector:
+        text:
+    zone:
+      name: Zone
+      description: Zone name, or a list of zone names. Empty sets every zone on the hub.
+      selector:
+        text:
+    entity_id:
+      name: Zone entity
+      description: A Sprinklecast entity on the zone, if you would rather pick the entity than the name.
+      selector:
+        entity:
+    percent:
+      name: Soil water level
+      description: How full the soil is, from 0 to 100. Leave this empty when you set a deficit instead.
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+    deficit_mm:
+      name: Water needed (mm)
+      selector:
+        number:
+          min: 0
+          max: 500
+          step: 0.1
+          unit_of_measurement: mm
+    deficit_in:
+      name: Water needed (in)
+      selector:
+        number:
+          min: 0
+          max: 20
+          step: 0.01
+          unit_of_measurement: in
+    deficit:
+      name: Water needed
+      description: Water the soil still needs, in Home Assistant's precipitation unit (inches or millimeters).
+      selector:
+        number:
+          min: 0
+          max: 500
+          step: 0.01
 
 mark_watered:
   name: Mark watered
@@ -196,7 +253,7 @@ simulate:
   fields:
     hub:
       name: Hub
-      description: Hub name. Needed only when more than one Smart Water hub is loaded.
+      description: Hub name. Needed only when more than one Sprinklecast hub is loaded.
       selector:
         text:
     scenario:
@@ -235,11 +292,11 @@ simulate:
 
 stop_all:
   name: Stop all watering
-  description: Turn off any zone Smart Water currently has on.
+  description: Turn off any zone Sprinklecast currently has on.
   fields:
     hub:
       name: Hub
-      description: Hub name. Needed only when more than one Smart Water hub is loaded.
+      description: Hub name. Needed only when more than one Sprinklecast hub is loaded.
       selector:
         text:
 

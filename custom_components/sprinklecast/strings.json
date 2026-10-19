@@ -4,11 +4,16 @@
     "step": {
       "user": {
         "title": "Sprinklecast",
-        "description": "A live hub uses your weather and stores on/off entities. A simulation hub uses example zones and a weather week you describe. Neither one opens a valve.",
+        "description": "A live hub uses your weather and stores on/off entities. A simulation hub uses example zones and a weather week you describe. Neither one opens a valve. If Smart Water is still installed, choose Import my Smart Water setup. No YAML is required.",
         "menu_options": {
           "live": "Live hub",
-          "simulation": "Simulation hub"
+          "simulation": "Simulation hub",
+          "import_legacy": "Import my Smart Water setup"
         }
+      },
+      "import_legacy": {
+        "title": "Import my Smart Water setup",
+        "description": "Smart Water is still loaded, so Sprinklecast cannot copy the hub yet. This removes config/custom_components/smart_water. Restart Home Assistant, then open Settings, Add integration, Sprinklecast, and choose Import my Smart Water setup again."
       },
       "live": {
         "title": "Sprinklecast hub",
@@ -321,7 +326,10 @@
       "name_exists": "A zone with this name already exists."
     },
     "abort": {
-      "reconfigure_successful": "Hub updated."
+      "reconfigure_successful": "Hub updated.",
+      "imported": "Smart Water was imported. Your hubs, zones, soil water, and entity IDs are now Sprinklecast. You can remove sprinklecast: from configuration.yaml if you added it.",
+      "import_failed": "Sprinklecast could not import Smart Water. Leave the old config entry in place. If the repair cannot delete config/custom_components/smart_water, delete that folder by hand and restart.",
+      "restart_to_import": "The old Smart Water folder was removed. Restart Home Assistant, then open Settings, Add integration, Sprinklecast, and choose Import my Smart Water setup."
     }
   },
   "options": {
@@ -805,6 +813,9 @@
     "number": {
       "adjustment": {
         "name": "Watering amount"
+      },
+      "soil_water_level": {
+        "name": "Soil water level"
       }
     },
     "button": {
@@ -833,6 +844,10 @@
     "set_bucket": {
       "name": "Set water needed",
       "description": "Set how much water a zone still needs, in millimeters or inches. Does not open a valve."
+    },
+    "set_soil_water_level": {
+      "name": "Set soil water level",
+      "description": "Set how full a zone's soil is, from 0 to 100 percent, or set the water it still needs. Updates the plan, the next watering, the schedule, and the calendar. Does not open a valve."
     },
     "mark_watered": {
       "name": "Mark watered",
@@ -894,11 +909,35 @@
     },
     "remove_smart_water_folder": {
       "title": "Delete the old Smart Water folder",
-      "description": "Sprinklecast replaced Smart Water and kept this hub, its zones, and the entity IDs. Delete config/custom_components/smart_water if that folder is still there, then restart Home Assistant."
+      "description": "Sprinklecast replaced Smart Water. config/custom_components/smart_water is still on disk, so Home Assistant can keep loading it. Submit this repair to delete that folder, then restart. Do not remove Sprinklecast in HACS. That deletes the new folder.",
+      "fix_flow": {
+        "abort": {
+          "delete_failed": "Sprinklecast could not delete config/custom_components/smart_water. Delete that folder with the File editor or Samba, then restart.",
+          "restart_required": "The old folder was removed. Restart Home Assistant. If the hub has not moved yet, open Settings, Add integration, Sprinklecast, and choose Import my Smart Water setup."
+        },
+        "step": {
+          "confirm": {
+            "title": "Delete the old Smart Water folder",
+            "description": "This deletes config/custom_components/smart_water and leaves Sprinklecast in place. Restart Home Assistant when it finishes."
+          }
+        }
+      }
     },
     "smart_water_still_loaded": {
       "title": "Smart Water is still installed",
-      "description": "Delete config/custom_components/smart_water and restart Home Assistant. Sprinklecast will then keep your hub, zones, stored history, and entity IDs. Do not delete the Smart Water config entry yourself."
+      "description": "Delete config/custom_components/smart_water and restart Home Assistant. Sprinklecast will then keep your hub, zones, stored history, and entity IDs. Do not delete the Smart Water config entry yourself. Do not remove Sprinklecast in HACS.",
+      "fix_flow": {
+        "abort": {
+          "delete_failed": "Sprinklecast could not delete config/custom_components/smart_water. Delete that folder with the File editor or Samba, then restart.",
+          "restart_required": "The old folder was removed. Restart Home Assistant, then open Settings, Add integration, Sprinklecast, and choose Import my Smart Water setup."
+        },
+        "step": {
+          "confirm": {
+            "title": "Delete the old Smart Water folder",
+            "description": "Smart Water is still loaded. This deletes config/custom_components/smart_water. Restart Home Assistant, then import the hub from Add integration if it has not moved yet."
+          }
+        }
+      }
     },
     "smart_water_import_failed": {
       "title": "Smart Water could not be moved",

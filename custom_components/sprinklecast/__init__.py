@@ -11,6 +11,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
+
+import probatio
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event
@@ -42,6 +45,21 @@ __all__ = ["DOMAIN"]
 
 _LOGGER = logging.getLogger(__name__)
 _FRONTEND_KEY = f"{DOMAIN}_frontend"
+
+
+def _empty_yaml(value: Any) -> dict:
+    """Accept a bare ``sprinklecast:`` key and nothing under it."""
+    if value in (None, {}):
+        return {}
+    raise probatio.Invalid(
+        "sprinklecast has no YAML settings. Remove everything under sprinklecast:."
+    )
+
+
+CONFIG_SCHEMA = probatio.Schema(
+    {probatio.Optional(DOMAIN): _empty_yaml},
+    extra=probatio.ALLOW_EXTRA,
+)
 
 
 def _migrate_run_cap(options: dict) -> dict:
@@ -186,7 +204,10 @@ async def async_setup(hass, config) -> bool:
     """Register the Lovelace card and import a leftover Smart Water hub.
 
     The import loads the new config entry. That has to wait until this
-    component setup returns, or the two wait on each other.
+    component setup returns, or the two wait on each other. Home Assistant
+    calls this when ``sprinklecast:`` is in YAML or a config entry already
+    exists. With neither, Settings → Add integration → Sprinklecast offers
+    the same import.
     """
     await async_register_card(hass)
 

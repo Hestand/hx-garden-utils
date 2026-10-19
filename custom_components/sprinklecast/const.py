@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "sprinklecast"
 NAME = "Sprinklecast"
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 
 # Retired option key. v0.5 stores the automatic-watering switch in the hub
 # store (default off) and drops this option on migration.
@@ -197,6 +197,7 @@ FLOW_SCOPES = (FLOW_SCOPE_WHOLE, FLOW_SCOPE_IRRIGATION)
 SERVICE_CALCULATE_PLAN = "calculate_plan"
 SERVICE_RESET_BUCKET = "reset_bucket"
 SERVICE_SET_BUCKET = "set_bucket"
+SERVICE_SET_SOIL_WATER = "set_soil_water_level"
 SERVICE_MARK_WATERED = "mark_watered"
 SERVICE_SKIP_ZONE = "skip_zone"
 SERVICE_PAUSE_ZONE = "pause_zone"
@@ -213,6 +214,7 @@ SERVICES = (
     SERVICE_CALCULATE_PLAN,
     SERVICE_RESET_BUCKET,
     SERVICE_SET_BUCKET,
+    SERVICE_SET_SOIL_WATER,
     SERVICE_MARK_WATERED,
     SERVICE_SKIP_ZONE,
     SERVICE_PAUSE_ZONE,

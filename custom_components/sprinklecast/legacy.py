@@ -10,8 +10,9 @@ IDs stay the same. The old entry is then removed.
 
 from __future__ import annotations
 
-import copy
+import asyncio
 import logging
+import shutil
 from pathlib import Path
 from types import MappingProxyType
 
@@ -25,6 +26,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
+from homeassistant.util.json import json_loads
 
 from .const import (
     CONF_MODE,
@@ -122,12 +124,12 @@ async def apply_version_10(hass: HomeAssistant, entry: ConfigEntry) -> None:
     drop_mode_entity(hass, entry.entry_id)
 
 
-def _issue(hass: HomeAssistant, key: str) -> None:
+def _issue(hass: HomeAssistant, key: str, *, fixable: bool = False) -> None:
     ir.async_create_issue(
         hass,
         DOMAIN,
         key,
-        is_fixable=False,
+        is_fixable=fixable,
         severity=ir.IssueSeverity.WARNING,
         translation_key=key,
     )
@@ -135,8 +137,14 @@ def _issue(hass: HomeAssistant, key: str) -> None:
 
 async def async_import_smart_water(hass: HomeAssistant) -> None:
     """Copy leftover Smart Water hubs, then ask the user to delete the old folder."""
+    lock: asyncio.Lock = hass.data.setdefault(f"{DOMAIN}_import_lock", asyncio.Lock())
+    async with lock:
+        await _async_import_locked(hass)
+
+
+async def _async_import_locked(hass: HomeAssistant) -> None:
     if LEGACY_DOMAIN in hass.config.components:
-        _issue(hass, ISSUE_LOADED)
+        _issue(hass, ISSUE_LOADED, fixable=True)
         _LOGGER.warning(
             "Smart Water is still loaded. Delete config/custom_components/smart_water "
             "and restart so Sprinklecast can keep your hub, zones, and entity IDs."
@@ -151,14 +159,46 @@ async def async_import_smart_water(hass: HomeAssistant) -> None:
         _issue(hass, ISSUE_FAILED)
     else:
         ir.async_delete_issue(hass, DOMAIN, ISSUE_FAILED)
-    if legacy_folder(hass).is_dir():
-        _issue(hass, ISSUE_FOLDER)
+    if legacy_folder(hass).exists():
+        _issue(hass, ISSUE_FOLDER, fixable=True)
         _LOGGER.warning(
             "Delete config/custom_components/smart_water and restart. "
             "Sprinklecast is the integration now."
         )
     else:
         ir.async_delete_issue(hass, DOMAIN, ISSUE_FOLDER)
+
+
+def remove_legacy_folder(hass: HomeAssistant) -> bool:
+    """Delete ``config/custom_components/smart_water`` and nothing else.
+
+    A symlink is unlinked. The directory is removed only when its name is
+    ``smart_water`` inside ``custom_components``.
+    """
+    path = legacy_folder(hass)
+    if not path.exists() and not path.is_symlink():
+        return False
+    if path.name != LEGACY_DOMAIN:
+        return False
+    parent = path.parent
+    if parent.name != "custom_components":
+        return False
+    sprinklecast = Path(hass.config.path("custom_components", DOMAIN)).resolve()
+    if path.is_symlink():
+        if path.resolve() == sprinklecast:
+            _LOGGER.error(
+                "Refusing to delete %s because it points at Sprinklecast", path
+            )
+            return False
+        path.unlink()
+        return True
+    if not path.is_dir():
+        return False
+    if path.resolve() == sprinklecast:
+        _LOGGER.error("Refusing to delete the Sprinklecast folder")
+        return False
+    shutil.rmtree(path)
+    return True
 
 
 async def _import_one(hass: HomeAssistant, old: ConfigEntry) -> bool:
@@ -206,16 +246,80 @@ async def _import_one(hass: HomeAssistant, old: ConfigEntry) -> bool:
     return True
 
 
+def _storage_path(hass: HomeAssistant, key: str) -> Path:
+    return Path(hass.config.path(".storage", key))
+
+
+async def _read_store(hass: HomeAssistant, key: str) -> dict | None:
+    """Load a store, including a file the startup cache thinks is missing.
+
+    After Home Assistant has listed ``.storage``, a key that was not in that
+    list is reported as absent and the file is never opened. Read the file
+    directly when it is there so a stale listing cannot look like an empty hub.
+    """
+    path = _storage_path(hass, key)
+    if path.is_file():
+
+        def _read() -> dict | None:
+            raw = json_loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and isinstance(raw.get("data"), dict):
+                return raw["data"]
+            return None
+
+        try:
+            return await hass.async_add_executor_job(_read)
+        except (OSError, TypeError, ValueError) as err:
+            _LOGGER.error("Could not read %s: %s", path, err)
+            return None
+    store = Store(hass, STORAGE_VERSION, key)
+    store._manager.async_invalidate(key)  # noqa: SLF001
+    loaded = await store.async_load()
+    return loaded if isinstance(loaded, dict) else None
+
+
 async def _move_store(
     hass: HomeAssistant, old_id: str, new_id: str, *, force_off: bool
 ) -> None:
-    old_store = Store(hass, STORAGE_VERSION, f"{LEGACY_DOMAIN}.{old_id}")
-    data = copy.deepcopy(await old_store.async_load() or {})
+    """Copy bucket, history, and the automatic switch. Leave the old file if it fails."""
+    old_key = f"{LEGACY_DOMAIN}.{old_id}"
+    new_key = f"{DOMAIN}.{new_id}"
+    loaded = await _read_store(hass, old_key)
+    old_path = _storage_path(hass, old_key)
+    if loaded is None and old_path.is_file():
+        raise RuntimeError(f"Smart Water storage {old_key} could not be read")
+    data = dict(loaded or {})
+    # Mode off is the only case that turns the switch off. auto and
+    # notify_only keep the stored flag, including when it is on.
+    if "automatic" not in data:
+        data["automatic"] = False
     if force_off:
         data["automatic"] = False
-    new_store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{new_id}")
+    zones = data.get("zones") if isinstance(data.get("zones"), dict) else {}
+    _LOGGER.info(
+        "Copying Smart Water storage %s: automatic=%s, zones=%s",
+        old_key,
+        data.get("automatic"),
+        {
+            zone_id: zone.get("deficit_mm")
+            for zone_id, zone in zones.items()
+            if isinstance(zone, dict)
+        },
+    )
+    new_store = Store(hass, STORAGE_VERSION, new_key)
     await new_store.async_save(data)
-    await old_store.async_remove()
+    read_back = await _read_store(hass, new_key) or {}
+    if bool(read_back.get("automatic")) != bool(data.get("automatic")):
+        raise RuntimeError("Sprinklecast storage lost the automatic watering flag")
+    copied = read_back.get("zones") if isinstance(read_back.get("zones"), dict) else {}
+    for zone_id, zone in zones.items():
+        if not isinstance(zone, dict):
+            continue
+        got = copied.get(zone_id)
+        if not isinstance(got, dict) or got.get("deficit_mm") != zone.get("deficit_mm"):
+            raise RuntimeError(f"Sprinklecast storage lost the bucket for {zone_id}")
+    if old_path.is_file():
+        old_store = Store(hass, STORAGE_VERSION, old_key)
+        await old_store.async_remove()
 
 
 def _move_devices(hass: HomeAssistant, old_id: str, new_id: str) -> None:

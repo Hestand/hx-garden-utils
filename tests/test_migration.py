@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+from homeassistant.components.repairs import repairs_flow_manager
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 from homeassistant.setup import async_setup_component
+import probatio
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -25,9 +31,12 @@ from custom_components.sprinklecast.const import (
     LEGACY_DOMAIN,
 )
 from custom_components.sprinklecast.legacy import (
+    ISSUE_FOLDER,
     ISSUE_LOADED,
+    async_import_smart_water,
     clean_options,
     plan_notifications_enabled,
+    remove_legacy_folder,
 )
 from custom_components.sprinklecast.store import RUN_HISTORY_LIMIT, SmartWaterStore, remember_run
 
@@ -340,3 +349,219 @@ async def test_import_waits_while_smart_water_is_still_loaded(
     assert hass.config_entries.async_entries(DOMAIN) == []
     issue = ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_LOADED)
     assert issue is not None
+    assert issue.is_fixable is True
+
+
+def _storage_file(hass: HomeAssistant, key: str, data: dict) -> Path:
+    path = Path(hass.config.path(".storage", key))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {"version": 1, "minor_version": 1, "key": key, "data": data}
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+async def _stale_storage(hass: HomeAssistant) -> None:
+    """List .storage before the legacy file exists, which is the live miss."""
+    manager = Store(hass, 1, f"{DOMAIN}.probe")._manager
+    await manager.async_initialize()
+
+
+async def test_import_keeps_the_switch_and_buckets_when_the_cache_misses_the_file(
+    hass: HomeAssistant,
+) -> None:
+    """Notify only and Auto keep the switch. The bucket and history are copied."""
+    _weather(hass)
+    old = MockConfigEntry(
+        domain=LEGACY_DOMAIN,
+        title="Water Test",
+        version=9,
+        data={CONF_WEATHER_ENTITY: "weather.home"},
+        options={"mode": "notify_only", "dynamic_start": False, CONF_ELEVATION_M: 219.0},
+        subentries_data=[_zone("front", "Front Yard"), _zone("bed", "Bed")],
+    )
+    old.add_to_hass(hass)
+    await _stale_storage(hass)
+    key = f"{LEGACY_DOMAIN}.{old.entry_id}"
+    history = [{"date": "2026-10-18", "full_pct": 41.0}]
+    runs = [{"at": "2026-10-17T05:00:00-05:00", "minutes": 8, "result": "ok"}]
+    _storage_file(
+        hass,
+        key,
+        {
+            "automatic": True,
+            "zones": {
+                "front": {
+                    "deficit_mm": 18.5,
+                    "bucket_history": history,
+                    "run_history": runs,
+                },
+                "bed": {"deficit_mm": 4.25, "bucket_history": [], "run_history": []},
+            },
+        },
+    )
+    manager = Store(hass, 1, f"{DOMAIN}.probe")._manager
+    assert key not in (manager._files or set())
+
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+
+    assert hass.config_entries.async_entries(LEGACY_DOMAIN) == []
+    new = hass.config_entries.async_entries(DOMAIN)[0]
+    store = SmartWaterStore(hass, new.entry_id)
+    await store.async_load()
+    assert store.automatic is True
+    assert store.zone("front")["deficit_mm"] == 18.5
+    assert store.zone("bed")["deficit_mm"] == 4.25
+    assert store.zone("front")["bucket_history"] == history
+    assert store.zone("front")["run_history"] == runs
+    assert not Path(hass.config.path(".storage", key)).is_file()
+
+
+async def test_import_leaves_an_unreadable_store_in_place(hass: HomeAssistant) -> None:
+    """A file that cannot be read is not deleted, and the old hub stays."""
+    old = MockConfigEntry(domain=LEGACY_DOMAIN, title="Water Test", version=9)
+    old.add_to_hass(hass)
+    path = Path(hass.config.path(".storage", f"{LEGACY_DOMAIN}.{old.entry_id}"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{", encoding="utf-8")
+
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+
+    assert hass.config_entries.async_entries(LEGACY_DOMAIN) == [old]
+    assert hass.config_entries.async_entries(DOMAIN) == []
+    assert path.is_file()
+    assert path.read_text(encoding="utf-8") == "{"
+
+
+async def test_user_flow_imports_smart_water_without_yaml(hass: HomeAssistant) -> None:
+    """Add integration offers the import when a Smart Water hub is still there."""
+    _weather(hass)
+    old = MockConfigEntry(
+        domain=LEGACY_DOMAIN,
+        title="Water Test",
+        version=9,
+        data={CONF_WEATHER_ENTITY: "weather.home"},
+        options={"mode": "auto"},
+        subentries_data=[_zone("front", "Front Yard")],
+    )
+    old.add_to_hass(hass)
+    await Store(hass, 1, f"{LEGACY_DOMAIN}.{old.entry_id}").async_save(
+        {"automatic": True, "zones": {"front": {"deficit_mm": 9.0}}}
+    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    assert result["type"] is FlowResultType.MENU
+    assert list(result["menu_options"]) == ["live", "simulation", "import_legacy"]
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "import_legacy"}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "imported"
+    assert hass.config_entries.async_entries(LEGACY_DOMAIN) == []
+    new = hass.config_entries.async_entries(DOMAIN)[0]
+    assert new.title == "Water Test"
+    store = SmartWaterStore(hass, new.entry_id)
+    await store.async_load()
+    assert store.automatic is True
+    assert store.zone("front")["deficit_mm"] == 9.0
+
+
+async def test_user_flow_removes_a_loaded_smart_water_folder(hass: HomeAssistant) -> None:
+    """A loaded old component is not copied until the folder is gone and HA restarts."""
+    old = MockConfigEntry(domain=LEGACY_DOMAIN, title="Water Test", version=9)
+    old.add_to_hass(hass)
+    hass.config.components.add(LEGACY_DOMAIN)
+    folder = Path(hass.config.path("custom_components", LEGACY_DOMAIN))
+    folder.mkdir(parents=True)
+    (folder / "manifest.json").write_text("{}", encoding="utf-8")
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"next_step_id": "import_legacy"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "import_legacy"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "restart_to_import"
+    assert not folder.exists()
+    assert hass.config_entries.async_entries(LEGACY_DOMAIN) == [old]
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+def test_empty_yaml_key_is_accepted() -> None:
+    """``sprinklecast:`` is valid and does not reject the rest of the config."""
+    from custom_components.sprinklecast import CONFIG_SCHEMA
+
+    assert CONFIG_SCHEMA({DOMAIN: None, "http": {}})[DOMAIN] == {}
+    assert CONFIG_SCHEMA({DOMAIN: {}, "frontend": {}})[DOMAIN] == {}
+    assert "http" in CONFIG_SCHEMA({"http": {}})
+    with pytest.raises(probatio.Invalid):
+        CONFIG_SCHEMA({DOMAIN: {"mode": "off"}})
+
+
+async def test_yaml_key_starts_the_integration(hass: HomeAssistant) -> None:
+    """The empty key the 0.12.0 workaround used still loads, and can be removed later."""
+    assert await async_setup_component(hass, DOMAIN, {DOMAIN: None})
+    await hass.async_block_till_done()
+    assert DOMAIN in hass.config.components
+
+
+def test_remove_legacy_folder_deletes_only_smart_water(hass: HomeAssistant) -> None:
+    """The repair must not follow a symlink into Sprinklecast."""
+    root = Path(hass.config.path("custom_components"))
+    sprinkle = root / DOMAIN
+    sprinkle.mkdir(parents=True)
+    (sprinkle / "manifest.json").write_text("{}", encoding="utf-8")
+    legacy = root / LEGACY_DOMAIN
+    legacy.symlink_to(sprinkle, target_is_directory=True)
+    assert remove_legacy_folder(hass) is False
+    assert legacy.is_symlink()
+    assert (sprinkle / "manifest.json").is_file()
+
+    legacy.unlink()
+    legacy.mkdir()
+    (legacy / "manifest.json").write_text("{}", encoding="utf-8")
+    assert remove_legacy_folder(hass) is True
+    assert not legacy.exists()
+    assert (sprinkle / "manifest.json").is_file()
+
+
+async def test_repair_deletes_the_leftover_folder(hass: HomeAssistant) -> None:
+    """The fix flow removes the folder and asks for a restart when it is loaded."""
+    assert await async_setup_component(hass, "repairs", {})
+    folder = Path(hass.config.path("custom_components", LEGACY_DOMAIN))
+    folder.mkdir(parents=True)
+    (folder / "manifest.json").write_text("{}", encoding="utf-8")
+    await async_import_smart_water(hass)
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_FOLDER)
+    assert issue is not None
+    assert issue.is_fixable is True
+
+    manager = repairs_flow_manager(hass)
+    assert manager is not None
+    result = await manager.async_init(DOMAIN, data={"issue_id": ISSUE_FOLDER})
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "confirm"
+    result = await manager.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert not folder.exists()
+
+    folder.mkdir()
+    (folder / "manifest.json").write_text("{}", encoding="utf-8")
+    hass.config.components.add(LEGACY_DOMAIN)
+    await async_import_smart_water(hass)
+    loaded = ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_LOADED)
+    assert loaded is not None
+    assert loaded.is_fixable is True
+    result = await manager.async_init(DOMAIN, data={"issue_id": ISSUE_LOADED})
+    result = await manager.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "restart_required"
+    assert not folder.exists()
+    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_LOADED) is not None

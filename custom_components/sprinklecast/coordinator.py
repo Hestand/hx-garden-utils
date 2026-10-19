@@ -442,6 +442,106 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         state["deficit_mm"] = max(0.0, deficit_mm)
         await self._save_and_refresh_snapshot()
 
+    def _zone_capacity(self, zone_id: str) -> float:
+        """Soil water this zone can hold, including the learned factor."""
+        subentry = self.config_entry.subentries.get(zone_id)
+        if subentry is None or subentry.subentry_type != SUBENTRY_ZONE:
+            raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
+        try:
+            limits = self._limits(dict(subentry.data), self.store.et0_mm)
+        except (KeyError, ValueError) as err:
+            raise HomeAssistantError(f"{subentry.title}: {err}") from err
+        factor = float(self.store.zone(zone_id).get("learn_factor") or 1.0)
+        return max(0.0, limits.taw_mm * factor)
+
+    def _write_soil_water(
+        self,
+        zone_id: str,
+        *,
+        percent: float | None = None,
+        deficit_mm: float | None = None,
+    ) -> None:
+        """Store a soil-water level. The caller saves and rebuilds the plan."""
+        if (percent is None) == (deficit_mm is None):
+            raise HomeAssistantError(
+                "Provide a soil water percent or a deficit, not both."
+            )
+        capacity = self._zone_capacity(zone_id)
+        if percent is not None:
+            pct = min(100.0, max(0.0, float(percent)))
+            deficit = 0.0 if capacity <= 0 else capacity * (1.0 - pct / 100.0)
+        else:
+            assert deficit_mm is not None
+            deficit = clamp_deficit(max(0.0, float(deficit_mm)), capacity)
+            pct = (
+                100.0
+                if capacity <= 0
+                else max(0.0, min(100.0, (1.0 - deficit / capacity) * 100.0))
+            )
+        state = self.store.zone(zone_id)
+        state["deficit_mm"] = deficit
+        # The value the user entered is today's soil water. Do not add
+        # today's water loss on top of it.
+        state["balance_date"] = dt_util.now(self._timezone()).date().isoformat()
+        self._mark_bucket_set(state, pct, deficit)
+        title = self.config_entry.subentries[zone_id].title
+        _LOGGER.info(
+            "Set soil water for %s to %.0f%% (%.2f mm still needed)",
+            title,
+            pct,
+            deficit,
+        )
+
+    async def async_set_soil_water(
+        self,
+        zone_id: str,
+        *,
+        percent: float | None = None,
+        deficit_mm: float | None = None,
+    ) -> None:
+        """Set one zone's soil water, save it, and rebuild the plan."""
+        self._write_soil_water(zone_id, percent=percent, deficit_mm=deficit_mm)
+        await self._save_and_refresh_snapshot()
+
+    async def async_set_soil_water_zones(
+        self,
+        zone_ids: list[str],
+        *,
+        percent: float | None = None,
+        deficit_mm: float | None = None,
+    ) -> None:
+        """Set several zones, then rebuild the plan once."""
+        for zone_id in zone_ids:
+            self._write_soil_water(zone_id, percent=percent, deficit_mm=deficit_mm)
+        await self._save_and_refresh_snapshot()
+
+    def _mark_bucket_set(
+        self, state: dict[str, Any], percent: float, deficit_mm: float
+    ) -> None:
+        """Remember a manual soil-water change in the week chart and the log."""
+        today = dt_util.now(self._timezone()).date().isoformat()
+        history = [dict(item) for item in list(state.get("bucket_history") or [])]
+        sample = {"date": today, "full_pct": round(percent, 1), "set": True}
+        if history and history[-1].get("date") == today:
+            history[-1] = sample
+        else:
+            history.append(sample)
+        state["bucket_history"] = history[-14:]
+        adjustments = [
+            dict(item)
+            for item in list(state.get("bucket_adjustments") or [])
+            if isinstance(item, dict)
+        ]
+        adjustments.append(
+            {
+                "date": today,
+                "kind": "set",
+                "full_pct": round(percent, 1),
+                "deficit_mm": round(deficit_mm, 3),
+            }
+        )
+        state["bucket_adjustments"] = adjustments[-30:]
+
     async def async_mark_watered(self, zone_id: str, depth_mm: float | None) -> None:
         """Subtract a net depth, or refill to field capacity when depth is omitted."""
         state = self.store.zone(zone_id)
@@ -1636,6 +1736,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         history = [dict(item) for item in list(state.get("bucket_history") or [])]
         sample = {"date": today, "full_pct": round(full, 1)}
         if history and history[-1].get("date") == today:
+            if history[-1].get("set"):
+                sample["set"] = True
             history[-1] = sample
         else:
             history.append(sample)

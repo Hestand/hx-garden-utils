@@ -164,6 +164,7 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
     assert f"{entry.entry_id}_{zone_id}_learned_gpm" not in unique_ids
     assert f"{entry.entry_id}_{zone_id}_last_run_gpm" not in unique_ids
     assert f"{entry.entry_id}_{zone_id}_adjustment" in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_soil_water_level" in unique_ids
     assert f"{entry.entry_id}_{zone_id}_run_now" in unique_ids
 
     await hass.services.async_call(

@@ -144,6 +144,7 @@ from .const import (
     DEFAULT_START_TIME,
     DEFAULT_WIND_HEIGHT_M,
     DOMAIN,
+    LEGACY_DOMAIN,
     FLOW_ACTION_NOTIFY,
     FLOW_ACTIONS,
     FLOW_KINDS,
@@ -821,11 +822,39 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Choose a live hub or a simulation that needs no real devices."""
-        return self.async_show_menu(
-            step_id="user",
-            menu_options=["live", "simulation"],
-        )
+        """Choose a live hub, a simulation, or a Smart Water import."""
+        menu = ["live", "simulation"]
+        if self.hass.config_entries.async_entries(LEGACY_DOMAIN):
+            menu.append("import_legacy")
+        return self.async_show_menu(step_id="user", menu_options=menu)
+
+    async def async_step_import_legacy(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Copy leftover Smart Water hubs. No YAML key is required.
+
+        A still-loaded Smart Water component owns the entities, so this step
+        only removes the old folder and asks for a restart.
+        """
+        from .legacy import async_import_smart_water, legacy_folder, remove_legacy_folder
+
+        if LEGACY_DOMAIN in self.hass.config.components:
+            if user_input is None:
+                return self.async_show_form(
+                    step_id="import_legacy",
+                    data_schema=vol.Schema({}),
+                )
+            await self.hass.async_add_executor_job(remove_legacy_folder, self.hass)
+            folder = legacy_folder(self.hass)
+            if folder.exists() or folder.is_symlink():
+                return self.async_abort(reason="import_failed")
+            return self.async_abort(reason="restart_to_import")
+        await async_import_smart_water(self.hass)
+        if self.hass.config_entries.async_entries(LEGACY_DOMAIN):
+            return self.async_abort(reason="import_failed")
+        if not self.hass.config_entries.async_entries(DOMAIN):
+            return self.async_abort(reason="import_failed")
+        return self.async_abort(reason="imported")
 
     async def async_step_live(
         self, user_input: dict[str, Any] | None = None

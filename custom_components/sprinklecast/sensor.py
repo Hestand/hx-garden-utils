@@ -257,6 +257,10 @@ class DeficitSensor(_ZoneSensor):
             "enabled": zone.enabled,
             "full_pct": zone.full_pct,
             "history": zone.bucket_history,
+            "adjustments": list(
+                self.coordinator.store.zone(self._zone_id).get("bucket_adjustments")
+                or []
+            ),
             "precip_source": zone.precip_source,
             "preset_precip_in_hr": zone.preset_precip_in_hr,
             "preset_efficiency": zone.preset_efficiency,

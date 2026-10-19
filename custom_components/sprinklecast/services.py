@@ -14,8 +14,10 @@ import voluptuous as vol
 import yaml
 
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import UnitOfPrecipitationDepth
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .balance import clamp_deficit, root_zone
@@ -36,6 +38,8 @@ from .const import (
     SERVICE_RUN_NOW,
     SERVICE_SET_ADJUSTMENT,
     SERVICE_SET_BUCKET,
+    SERVICE_SET_SOIL_WATER,
+    SUBENTRY_ZONE,
     SERVICE_RESET_FLOW,
     SERVICE_RESET_LEARNING,
     SERVICE_SIMULATE,
@@ -105,6 +109,111 @@ def _depth_mm(data: dict[str, Any], required: bool) -> float | None:
     return None
 
 
+def _as_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value]
+
+
+def _zones_for_call(
+    hass: HomeAssistant, data: dict[str, Any]
+) -> list[tuple[Any, SmartWaterCoordinator, str]]:
+    """Resolve zone names, zone entities, or every zone on one hub."""
+    hub = data.get("hub")
+    found: list[tuple[Any, SmartWaterCoordinator, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(entry: Any, coordinator: SmartWaterCoordinator, zone_id: str) -> None:
+        key = (entry.entry_id, zone_id)
+        if key in seen:
+            return
+        seen.add(key)
+        found.append((entry, coordinator, zone_id))
+
+    for name in _as_list(data.get("zone")):
+        entry, coordinator, zone_id = _find_zone(hass, name, hub)
+        _add(entry, coordinator, zone_id)
+    entity_ids = _as_list(data.get("entity_id"))
+    if entity_ids:
+        registry = er.async_get(hass)
+        for entity_id in entity_ids:
+            entity = registry.async_get(entity_id)
+            if entity is None or entity.platform not in (DOMAIN, LEGACY_DOMAIN):
+                raise ServiceValidationError(f"{entity_id} is not a Sprinklecast entity.")
+            if not entity.config_subentry_id:
+                raise ServiceValidationError(
+                    f"{entity_id} is a hub entity. Pick a zone, or leave the zone empty to set every zone."
+                )
+            match = next(
+                (
+                    (entry, coordinator)
+                    for entry, coordinator in _coordinators(hass)
+                    if entry.entry_id == entity.config_entry_id
+                ),
+                None,
+            )
+            if match is None:
+                raise ServiceValidationError(f"{entity_id} belongs to a hub that is not loaded.")
+            if hub and not _hub_matches(match[0], hub):
+                raise ServiceValidationError(
+                    f"{entity_id} is not on the hub named {hub!r}."
+                )
+            _add(match[0], match[1], entity.config_subentry_id)
+    if found:
+        return found
+    hubs = [
+        (entry, coordinator)
+        for entry, coordinator in _coordinators(hass)
+        if _hub_matches(entry, hub)
+    ]
+    if not hubs:
+        raise ServiceValidationError("No Sprinklecast hub is loaded.")
+    if len(hubs) > 1:
+        raise ServiceValidationError(
+            "More than one Sprinklecast hub is loaded. Pass the hub name or a zone."
+        )
+    entry, coordinator = hubs[0]
+    for subentry in entry.subentries.values():
+        if subentry.subentry_type == SUBENTRY_ZONE:
+            _add(entry, coordinator, subentry.subentry_id)
+    if not found:
+        raise ServiceValidationError("This hub has no zones.")
+    return found
+
+
+def _soil_deficit_mm(hass: HomeAssistant, data: dict[str, Any]) -> tuple[float | None, float | None]:
+    """Return ``(percent, deficit_mm)``. Exactly one of the two is set."""
+    percent = data.get("percent")
+    kinds = [
+        name
+        for name in ("deficit_mm", "deficit_in", "deficit")
+        if data.get(name) is not None
+    ]
+    if percent is not None and kinds:
+        raise ServiceValidationError(
+            "Provide a percent or a deficit, not both."
+        )
+    if percent is None and len(kinds) != 1:
+        raise ServiceValidationError(
+            "Provide a percent from 0 to 100, or the water the soil still needs."
+        )
+    if percent is not None:
+        return float(percent), None
+    if "deficit_mm" in kinds:
+        return None, float(data["deficit_mm"])
+    if "deficit_in" in kinds:
+        return None, inches_to_mm(float(data["deficit_in"]))
+    value = float(data["deficit"])
+    unit = hass.config.units.accumulated_precipitation_unit
+    if unit == UnitOfPrecipitationDepth.INCHES:
+        return None, inches_to_mm(value)
+    if unit == UnitOfPrecipitationDepth.CENTIMETERS:
+        return None, value * 10.0
+    return None, value
+
+
 def _taw(entry_data: dict[str, Any]) -> float:
     limits = root_zone(
         soil_type=entry_data[CONF_SOIL_TYPE],
@@ -160,6 +269,20 @@ def async_setup_services(hass: HomeAssistant) -> None:
         assert deficit is not None
         taw = _taw(dict(entry.subentries[zone_id].data))
         await coordinator.async_set_bucket(zone_id, clamp_deficit(deficit, taw))
+
+    async def set_soil_water(call: ServiceCall) -> None:
+        """Set how full the soil is, or the water it still needs."""
+        percent, deficit = _soil_deficit_mm(hass, call.data)
+        grouped: dict[SmartWaterCoordinator, list[str]] = {}
+        for _entry, coordinator, zone_id in _zones_for_call(hass, call.data):
+            grouped.setdefault(coordinator, []).append(zone_id)
+        for coordinator, zone_ids in grouped.items():
+            try:
+                await coordinator.async_set_soil_water_zones(
+                    zone_ids, percent=percent, deficit_mm=deficit
+                )
+            except HomeAssistantError as err:
+                raise ServiceValidationError(str(err)) from err
 
     async def mark_watered(call: ServiceCall) -> None:
         """Credit net irrigation. Omit the depth to refill the bucket."""
@@ -250,6 +373,8 @@ def async_setup_services(hass: HomeAssistant) -> None:
     number = vol.All(vol.Coerce(float), vol.Range(min=0, max=500))
     days = vol.All(vol.Coerce(int), vol.Range(min=0, max=365))
     percent = vol.All(vol.Coerce(float), vol.Range(min=0, max=300))
+    soil_percent = vol.All(vol.Coerce(float), vol.Range(min=0, max=100))
+    zone_names = vol.Any(str, [str])
     _register(
         DOMAIN,
         SERVICE_CALCULATE_PLAN,
@@ -282,6 +407,22 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 vol.Required("zone"): str,
                 vol.Optional("deficit_mm"): number,
                 vol.Optional("deficit_in"): number,
+            }
+        ),
+    )
+    _register(
+        DOMAIN,
+        SERVICE_SET_SOIL_WATER,
+        set_soil_water,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Optional("zone"): zone_names,
+                vol.Optional("entity_id"): zone_names,
+                vol.Optional("percent"): soil_percent,
+                vol.Optional("deficit_mm"): number,
+                vol.Optional("deficit_in"): number,
+                vol.Optional("deficit"): number,
             }
         ),
     )
