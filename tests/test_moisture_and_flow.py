@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from smart_water.flow import classify_flow, expected_gallons, note_flow
-from smart_water.moisture import apply_moisture, deficit_from_reading, reading_percent
+from sprinklecast.flow import classify_flow, expected_gallons, note_flow
+from sprinklecast.moisture import apply_moisture, deficit_from_reading, reading_percent
 
 
 def test_relative_moisture_and_a_fraction() -> None:

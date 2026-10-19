@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from smart_water.schedule import (
+from sprinklecast.schedule import (
     clip_blackout,
     day_allowed,
     migrate_options,

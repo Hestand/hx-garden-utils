@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from smart_water.timing import calm_finish
+from sprinklecast.timing import calm_finish
 
 TZ = ZoneInfo("America/Chicago")
 

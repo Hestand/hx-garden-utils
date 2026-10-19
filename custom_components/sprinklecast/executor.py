@@ -330,7 +330,7 @@ class WateringExecutor:
         spec = _CONTROL.get(domain)
         if spec is None:
             _LOGGER.error(
-                "Smart Water will not call %s; only switch, valve, and input_boolean",
+                "Sprinklecast will not call %s; only switch, valve, and input_boolean",
                 entity_id,
             )
             return False
@@ -346,13 +346,13 @@ class WateringExecutor:
                 )
             except Exception as err:  # noqa: BLE001 - a failed command is logged and retried
                 _LOGGER.error(
-                    "Smart Water %s.%s failed for %s: %s", domain, service, entity_id, err
+                    "Sprinklecast %s.%s failed for %s: %s", domain, service, entity_id, err
                 )
             state = self.hass.states.get(entity_id)
             if state is not None and state.state in wanted:
                 return True
             _LOGGER.warning(
-                "Smart Water expected %s to be %s after %s (attempt %s of %s, state %s)",
+                "Sprinklecast expected %s to be %s after %s (attempt %s of %s, state %s)",
                 entity_id,
                 "on" if on else "off",
                 service,
@@ -362,5 +362,5 @@ class WateringExecutor:
             )
             if attempt < _ATTEMPTS:
                 await self._sleep(1)
-        _LOGGER.error("Smart Water could not confirm %s changed", entity_id)
+        _LOGGER.error("Sprinklecast could not confirm %s changed", entity_id)
         return False

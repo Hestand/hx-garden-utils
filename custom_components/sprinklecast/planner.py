@@ -590,7 +590,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
     if request.earliest_start is not None and request.earliest_start.tzinfo is None:
         raise ValueError("earliest_start must be timezone-aware")
 
-    blocked = block_reason(automatic=request.automatic, mode=request.mode)
+    blocked = block_reason(automatic=request.automatic)
     warnings: list[str] = []
     finish_by, earliest, blackout_note = clip_blackout(
         request.finish_by,
@@ -936,7 +936,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
         )
 
     warning = " ".join(warnings) if warnings else None
-    executing = would_execute(automatic=request.automatic, mode=request.mode)
+    executing = would_execute(automatic=request.automatic)
     summary = _summary(
         final_zones, timeline, warning, blocked, automatic=executing
     )

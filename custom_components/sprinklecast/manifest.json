@@ -1,6 +1,6 @@
 {
-  "domain": "smart_water",
-  "name": "Smart Water",
+  "domain": "sprinklecast",
+  "name": "Sprinklecast",
   "codeowners": ["@Hestand"],
   "config_flow": true,
   "documentation": "https://github.com/Hestand/hx-garden-utils",
@@ -8,5 +8,5 @@
   "integration_type": "service",
   "iot_class": "calculated",
   "requirements": [],
-  "version": "0.11.1"
+  "version": "0.12.0"
 }

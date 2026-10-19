@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from smart_water.observe import (
+from sprinklecast.observe import (
     fresh_day,
     note_rain,
     note_solar_w,
@@ -15,7 +15,7 @@ from smart_water.observe import (
     rain_in_hours,
     uv_index_to_w_m2,
 )
-from smart_water.store import SmartWaterStore
+from sprinklecast.store import SmartWaterStore
 
 
 def _at(hour: int, minute: int = 0) -> datetime:

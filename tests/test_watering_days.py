@@ -6,10 +6,10 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from smart_water.planner import build_plan
-from smart_water.schedule import wall_clock
-from smart_water.solar import local_sunrise
-from smart_water.week_plan import split_outlook, watering_day_limit
+from sprinklecast.planner import build_plan
+from sprinklecast.schedule import wall_clock
+from sprinklecast.solar import local_sunrise
+from sprinklecast.week_plan import split_outlook, watering_day_limit
 from tests.test_planner import _request, _zone
 from tests.test_week_plan import _project
 
@@ -17,7 +17,7 @@ CHICAGO = ZoneInfo("America/Chicago")
 LAT = 31.5493
 LON = -97.1467
 ELEV = 219.0
-CARD = Path("custom_components/smart_water/frontend/smart-water-card.js")
+CARD = Path("custom_components/sprinklecast/frontend/sprinklecast-card.js")
 
 
 def _due(**overrides: object):

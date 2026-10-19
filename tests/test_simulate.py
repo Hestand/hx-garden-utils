@@ -7,12 +7,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from smart_water.balance import apply_daily_balance
-from smart_water.et import ETInputs, daily_et0, extraterrestrial_radiation_mj
-from smart_water.et import radiation_from_sunshine_mj
-from smart_water.planner import PlanRequest, build_plan, build_zone_request
-from smart_water.schedule import morning_window, rules_for
-from smart_water.simulate import (
+from sprinklecast.balance import apply_daily_balance
+from sprinklecast.et import ETInputs, daily_et0, extraterrestrial_radiation_mj
+from sprinklecast.et import radiation_from_sunshine_mj
+from sprinklecast.planner import PlanRequest, build_plan, build_zone_request
+from sprinklecast.schedule import morning_window, rules_for
+from sprinklecast.simulate import (
     SCENARIOS,
     SimSettings,
     SimZone,

@@ -1,9 +1,19 @@
-// Smart Water dashboard card. Loaded as a module from /smart_water_static/.
-const CARD_TYPE = "smart-water-card";
+// Sprinklecast dashboard card. Loaded as a module from /sprinklecast_static/.
+const CARD_TYPE = "sprinklecast-card";
+const COLORS = [
+  "#3FA34D",
+  "#0E7FB8",
+  "#E07A5F",
+  "#7B6CC7",
+  "#E3A008",
+  "#2A9D8F",
+  "#C44569",
+  "#4C6EF5",
+];
 
 class SmartWaterCard extends HTMLElement {
   static getConfigElement() {
-    return document.createElement("smart-water-card-editor");
+    return document.createElement("sprinklecast-card-editor");
   }
 
   static getStubConfig() {
@@ -45,18 +55,13 @@ class SmartWaterCard extends HTMLElement {
       return;
     }
     const model = this._model(state);
-    if (!model) {
-      body.append(this._scheduleBody(state));
-      card.append(body);
-      root.append(card);
-      return;
+    if (model) {
+      body.append(this._hub(model, state));
     }
-    body.append(this._hub(model, state));
-    const days = this._days(state);
-    if (days.childElementCount) {
-      body.append(days);
+    body.append(this._scheduleBody(state));
+    if (model) {
+      model.zones.forEach((zone) => body.append(this._zone(zone)));
     }
-    model.zones.forEach((zone) => body.append(this._zone(zone)));
     card.append(body);
     root.append(card);
   }
@@ -91,20 +96,44 @@ class SmartWaterCard extends HTMLElement {
         button.sw-quiet { background: var(--secondary-background-color, #f0f0f0); color: var(--primary-text-color, #212121); }
         .sw-alert { color: var(--error-color, #db4437); font-size: 0.9rem; }
         .sw-md { white-space: pre-wrap; font-size: 0.85rem; overflow-x: auto; }
-        .sw-days { display: flex; flex-direction: column; gap: 12px; }
-        .sw-day {
-          border: 1px solid var(--divider-color, #e0e0e0);
-          border-radius: 12px;
-          padding: 12px;
+        .sw-days { display: flex; flex-direction: column; gap: 8px; }
+        .sw-strip {
+          display: flex; gap: 4px; overflow-x: auto; padding: 2px 2px 8px;
+          scrollbar-width: thin;
         }
-        .sw-zone-line { margin-top: 6px; font-size: 0.95rem; }
-        .sw-burst {
-          color: var(--secondary-text-color, #727272);
-          font-size: 0.85rem;
-          margin-left: 12px;
+        .sw-chip {
+          flex: 1 0 48px; border: 0; background: transparent; color: inherit;
+          display: flex; flex-direction: column; align-items: center; gap: 2px;
+          padding: 4px 0; border-radius: 12px; min-width: 44px;
         }
+        .sw-chip-name { font-size: 0.72rem; color: var(--secondary-text-color, #727272); text-transform: capitalize; }
+        .sw-chip-num {
+          width: 36px; height: 36px; border-radius: 999px;
+          display: grid; place-items: center; font-weight: 650;
+        }
+        .sw-chip.sw-water .sw-chip-num { box-shadow: inset 0 0 0 2px var(--primary-color, #0E7FB8); }
+        .sw-chip.sw-on { background: transparent; }
+        .sw-chip.sw-on .sw-chip-num {
+          background: var(--primary-color, #0E7FB8); color: var(--text-primary-color, #fff);
+          box-shadow: none;
+        }
+        .sw-dot { width: 5px; height: 5px; border-radius: 999px; background: var(--primary-color, #0E7FB8); }
+        .sw-chip.sw-on .sw-dot { background: var(--primary-color, #0E7FB8); }
+        .sw-run {
+          display: grid; grid-template-columns: 28px 1fr; gap: 8px; align-items: center;
+          background: var(--card-background-color, #fff);
+          border: 1px solid var(--divider-color, #e8e8e8);
+          border-left-width: 5px; border-radius: 12px; padding: 10px 12px;
+        }
+        .sw-when { font-weight: 650; font-size: 1rem; line-height: 1.2; }
+        .sw-zone-line { margin-top: 2px; font-size: 0.95rem; }
+        .sw-burst { color: var(--secondary-text-color, #727272); font-size: 0.82rem; margin-top: 2px; }
+        ha-icon, .sw-glyph { width: 22px; height: 22px; }
         svg { width: 100%; height: 36px; display: block; margin-top: 6px; }
         @media (max-width: 500px) {
+          .sw-body { padding: 8px; }
+          .sw-chip { flex-basis: 40px; min-width: 40px; }
+          .sw-when { font-size: 0.95rem; }
           .sw-actions button { flex: 1 1 auto; }
         }
       `;
@@ -144,7 +173,7 @@ class SmartWaterCard extends HTMLElement {
     const nextEntity = this._byKey(hubEntities, "schedule");
     const nextState = nextEntity ? hass.states[nextEntity.entity_id] : null;
     return {
-      name: (devices[hubId] && (devices[hubId].name_by_user || devices[hubId].name)) || "Smart Water",
+      name: (devices[hubId] && (devices[hubId].name_by_user || devices[hubId].name)) || "Sprinklecast",
       auto: auto && auto.entity_id,
       automatic: auto ? hass.states[auto.entity_id] && hass.states[auto.entity_id].state === "on" : false,
       watering: nowEntity && hass.states[nowEntity.entity_id] ? hass.states[nowEntity.entity_id].state : "Idle",
@@ -172,6 +201,7 @@ class SmartWaterCard extends HTMLElement {
     const planAttrs = (planState && planState.attributes) || {};
     const name = device.name_by_user || device.name || deficit.name || "Zone";
     return {
+      id: device.id,
       name,
       full: Number(attrs.full_pct ?? this._full(attrs)),
       rawTick: this._rawTick(attrs),
@@ -247,23 +277,9 @@ class SmartWaterCard extends HTMLElement {
       line.textContent = String(alert);
       box.append(line);
     });
-    if (schedule.attributes && schedule.attributes.window) {
-      const windowLine = document.createElement("div");
-      windowLine.className = "sw-muted";
-      windowLine.textContent = String(schedule.attributes.window);
-      box.append(windowLine);
-    }
     const stateText = this._stateText(schedule);
     if (stateText) {
-      const summary = document.createElement("div");
-      summary.className = "sw-muted";
-      summary.textContent = stateText;
-      box.append(summary);
-    } else if (model.next && model.next !== "unknown" && model.next !== "unavailable") {
-      const next = document.createElement("div");
-      next.className = "sw-muted";
-      next.textContent = `Next watering ${this._exact(model.next)}`;
-      box.append(next);
+      box.append(this._note(stateText));
     }
     return box;
   }
@@ -279,93 +295,162 @@ class SmartWaterCard extends HTMLElement {
   _scheduleBody(state) {
     const wrap = document.createElement("div");
     wrap.className = "sw-days";
-    const text = this._stateText(state);
-    if (text) {
-      wrap.append(this._note(text));
-    }
-    const days = this._days(state);
-    if (days.childElementCount) {
-      wrap.append(days);
+    const days = (state.attributes && state.attributes.days) || [];
+    if (!days.length) {
+      wrap.append(this._markdown((state.attributes && state.attributes.markdown) || "No schedule yet."));
       return wrap;
     }
-    wrap.append(this._markdown((state.attributes && state.attributes.markdown) || "No schedule yet."));
+    if (this._dayIndex == null || this._dayIndex >= days.length) {
+      this._dayIndex = 0;
+    }
+    wrap.append(this._strip(days));
+    this._appendDay(wrap, days[this._dayIndex]);
     return wrap;
   }
 
-  _days(schedule) {
-    const wrap = document.createElement("div");
-    wrap.className = "sw-days";
-    const days = (schedule.attributes && schedule.attributes.days) || [];
-    days.forEach((day) => this._appendDay(wrap, day));
-    return wrap;
+  _strip(days) {
+    const strip = document.createElement("div");
+    strip.className = "sw-strip";
+    days.forEach((day, index) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "sw-chip sw-water" + (index === this._dayIndex ? " sw-on" : "");
+      const name = document.createElement("div");
+      name.className = "sw-chip-name";
+      name.textContent = this._weekday(day);
+      const num = document.createElement("div");
+      num.className = "sw-chip-num";
+      num.textContent = this._monthDay(day);
+      const dot = document.createElement("div");
+      dot.className = "sw-dot";
+      chip.append(name, num, dot);
+      chip.addEventListener("click", () => {
+        this._dayIndex = index;
+        this._render();
+      });
+      strip.append(chip);
+    });
+    return strip;
   }
 
   _appendDay(wrap, day) {
-    const box = document.createElement("div");
-    box.className = "sw-day";
-    const title = document.createElement("div");
-    title.className = "sw-title";
-    title.textContent = this._dayTitle(day);
-    box.append(title);
+    if (day.finish_at || day.start_at) {
+      const heading = document.createElement("div");
+      heading.className = "sw-muted";
+      const start = day.start_at ? this._exact(day.start_at) : "";
+      const finish = day.finish_at ? this._clock(day.finish_at) : "";
+      heading.textContent = finish ? `${start} – ${finish}` : start;
+      wrap.append(heading);
+    }
+    const rows = [];
     (day.zones || []).forEach((zone) => {
       if (zone.scheduled === false) {
         return;
       }
-      const line = document.createElement("div");
-      line.className = "sw-zone-line";
-      line.textContent = this._zonePlan(zone);
-      box.append(line);
       (zone.bursts || []).forEach((burst) => {
-        const burstLine = document.createElement("div");
-        burstLine.className = "sw-burst";
-        burstLine.textContent = this._burst(burst);
-        box.append(burstLine);
+        rows.push({ zone, burst });
       });
-      if (zone.note) {
-        const note = document.createElement("div");
-        note.className = "sw-burst";
-        note.textContent = String(zone.note);
-        box.append(note);
-      }
     });
-    wrap.append(box);
-  }
-
-  _dayTitle(day) {
-    const start = day.start_at ? this._exact(day.start_at) : String(day.date || "");
-    if (!day.finish_at) {
-      return start;
+    rows.sort((left, right) => String(left.burst.start_at || left.burst.start).localeCompare(
+      String(right.burst.start_at || right.burst.start),
+    ));
+    if (!rows.length) {
+      wrap.append(this._note("Nothing scheduled this morning."));
+      return;
     }
-    const sameDay = day.start_at && this._part(day.start_at, "day") === this._part(day.finish_at, "day")
-      && this._part(day.start_at, "month") === this._part(day.finish_at, "month");
-    const finish = sameDay ? this._clock(day.finish_at) : this._exact(day.finish_at);
-    return `${start} – ${finish}`;
+    rows.forEach(({ zone, burst }) => wrap.append(this._run(zone, burst)));
   }
 
-  _zonePlan(zone) {
-    const parts = [`${zone.name}: ${this._minutes(zone.minutes)} min`];
-    if (zone.inches != null && zone.mm != null) {
-      parts.push(`${Number(zone.inches).toFixed(2)} in (${zone.mm} mm)`);
+  _run(zone, burst) {
+    const row = document.createElement("div");
+    row.className = "sw-run";
+    row.style.borderLeftColor = this._color(zone.zone_id || zone.name);
+    row.append(this._weather(zone));
+    const text = document.createElement("div");
+    const when = document.createElement("div");
+    when.className = "sw-when";
+    when.textContent = this._span(burst);
+    const line = document.createElement("div");
+    line.className = "sw-zone-line";
+    line.textContent = zone.name || "Zone";
+    const meta = document.createElement("div");
+    meta.className = "sw-burst";
+    meta.textContent = this._meta(zone, burst);
+    text.append(when, line, meta);
+    row.append(text);
+    return row;
+  }
+
+  _meta(zone, burst) {
+    const parts = [`${this._minutes(burst.minutes)} min`];
+    const inches = burst.inches != null ? burst.inches : zone.inches;
+    if (inches != null && inches !== "") {
+      parts.push(`${Number(inches).toFixed(2)} in`);
     }
     if (zone.gallons != null && zone.gallons !== "") {
       parts.push(`${Math.round(Number(zone.gallons))} gal`);
     }
-    parts.push(`soak ${Number(zone.soak_min || 0)} min`);
-    return parts.join(", ");
-  }
-
-  _burst(burst) {
-    const soak = Number(burst.soak_min || 0);
-    const soakText = soak ? `, soak ${soak} min` : "";
-    return `${burst.cycle}/${burst.of} ${burst.start}–${burst.end} (${this._minutes(burst.minutes)} min${soakText})`;
-  }
-
-  _minutes(value) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) {
-      return String(value ?? "");
+    const soak = Number(burst.soak_min || zone.soak_min || 0);
+    if (soak) {
+      parts.push(`soak ${soak} min`);
     }
-    return Number.isInteger(number) ? String(number) : String(Math.round(number * 10) / 10);
+    const cycle = burst.cycle && burst.of ? `cycle ${burst.cycle} of ${burst.of}` : "";
+    if (cycle) {
+      parts.push(cycle);
+    }
+    return parts.join(" · ");
+  }
+
+  _span(burst) {
+    const start = burst.start_at ? this._ampm(burst.start_at) : String(burst.start || "");
+    const end = burst.end_at ? this._ampm(burst.end_at) : String(burst.end || "");
+    if (start && end) {
+      return `${start} - ${end}`;
+    }
+    return start || end;
+  }
+
+  _weather(zone) {
+    const reason = String(zone.reason || "").toLowerCase();
+    let icon = "mdi:weather-partly-cloudy";
+    if (reason.includes("rain")) {
+      icon = "mdi:weather-rainy";
+    } else if (reason.includes("wind")) {
+      icon = "mdi:weather-windy";
+    } else if (reason.includes("freeze") || reason.includes("°f")) {
+      icon = "mdi:snowflake";
+    } else if (reason.includes("moisture")) {
+      icon = "mdi:water-percent";
+    }
+    const holder = document.createElement("div");
+    if (customElements.get("ha-icon")) {
+      const graphic = document.createElement("ha-icon");
+      graphic.icon = icon;
+      holder.append(graphic);
+      return holder;
+    }
+    holder.className = "sw-glyph";
+    holder.textContent = reason.includes("rain") ? "🌧" : "⛅";
+    return holder;
+  }
+
+  _color(key) {
+    const text = String(key || "");
+    let hash = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      hash = (hash * 33 + text.charCodeAt(index)) >>> 0;
+    }
+    return COLORS[hash % COLORS.length];
+  }
+
+  _weekday(day) {
+    const value = day.start_at || (day.date ? `${day.date}T12:00:00` : "");
+    return this._part(value, "weekday") || String(day.date || "");
+  }
+
+  _monthDay(day) {
+    const value = day.start_at || (day.date ? `${day.date}T12:00:00` : "");
+    return this._part(value, "day") || "";
   }
 
   _zone(zone) {
@@ -461,7 +546,7 @@ class SmartWaterCard extends HTMLElement {
   }
 
   _call(service, data) {
-    this._hass.callService("smart_water", service, data);
+    this._hass.callService("sprinklecast", service, data);
   }
 
   _stat(label, value) {
@@ -534,6 +619,10 @@ class SmartWaterCard extends HTMLElement {
   }
 
   _clock(value) {
+    return this._ampm(value);
+  }
+
+  _ampm(value) {
     const parts = this._parts(value, true);
     if (!parts) {
       return value ? String(value) : "";
@@ -542,7 +631,8 @@ class SmartWaterCard extends HTMLElement {
       const found = parts.find((item) => item.type === type);
       return found ? found.value : "";
     };
-    return `${part("hour")}:${part("minute")} ${part("dayPeriod")}`;
+    const period = part("dayPeriod").toLowerCase().replace(/\s/g, "");
+    return `${part("hour")}:${part("minute")} ${period}`;
   }
 
   _note(text) {
@@ -627,13 +717,29 @@ class SmartWaterCardEditor extends HTMLElement {
   }
 }
 
-customElements.define(CARD_TYPE, SmartWaterCard);
-customElements.define("smart-water-card-editor", SmartWaterCardEditor);
+if (!customElements.get(CARD_TYPE)) {
+  customElements.define(CARD_TYPE, SmartWaterCard);
+}
+if (!customElements.get("smart-water-card")) {
+  customElements.define("smart-water-card", SmartWaterCard);
+}
+if (!customElements.get("sprinklecast-card-editor")) {
+  customElements.define("sprinklecast-card-editor", SmartWaterCardEditor);
+}
+if (!customElements.get("smart-water-card-editor")) {
+  customElements.define("smart-water-card-editor", SmartWaterCardEditor);
+}
 
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: CARD_TYPE,
-  name: "Smart Water",
-  description: "Soil level, the next watering days, and watering controls for each zone.",
+  name: "Sprinklecast",
+  description: "Upcoming watering days and each zone run, with soil level and controls.",
   preview: true,
+});
+window.customCards.push({
+  type: "smart-water-card",
+  name: "Sprinklecast",
+  description: "Upcoming watering days and each zone run, with soil level and controls.",
+  preview: false,
 });

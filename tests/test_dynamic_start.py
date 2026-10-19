@@ -7,12 +7,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from smart_water.cycle_soak import plan_cycles
-from smart_water.planner import build_plan
-from smart_water.schedule import elapsed_seconds, wall_clock
-from smart_water.soil import default_soak_minutes
-from smart_water.solar import local_sunrise
-from smart_water.week_plan import project_week
+from sprinklecast.cycle_soak import plan_cycles
+from sprinklecast.planner import build_plan
+from sprinklecast.schedule import elapsed_seconds, wall_clock
+from sprinklecast.soil import default_soak_minutes
+from sprinklecast.solar import local_sunrise
+from sprinklecast.week_plan import project_week
 from tests.test_planner import _request, _zone
 
 CHICAGO = ZoneInfo("America/Chicago")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from smart_water.dormancy import classify, maintenance_due
+from sprinklecast.dormancy import classify, maintenance_due
 
 
 def _history(*temps: float) -> list[dict[str, object]]:
@@ -32,8 +32,6 @@ def test_cool_season_slows_in_heat_and_maintenance_is_optional() -> None:
         days_since=30,
         deficit_mm=20,
         raw_mm=12,
-        recent_rain_mm=0,
-        recent_rain_skip_mm=2.5,
     ) is False
     assert maintenance_due(
         enabled=True,
@@ -41,8 +39,6 @@ def test_cool_season_slows_in_heat_and_maintenance_is_optional() -> None:
         days_since=21,
         deficit_mm=20,
         raw_mm=12,
-        recent_rain_mm=0,
-        recent_rain_skip_mm=2.5,
     ) is True
     assert maintenance_due(
         enabled=True,
@@ -50,6 +46,4 @@ def test_cool_season_slows_in_heat_and_maintenance_is_optional() -> None:
         days_since=10,
         deficit_mm=20,
         raw_mm=12,
-        recent_rain_mm=0,
-        recent_rain_skip_mm=2.5,
     ) is False

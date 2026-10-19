@@ -11,10 +11,10 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from smart_water.planner import build_plan
-from smart_water.schedule import morning_window, shift_minutes, wall_clock
-from smart_water.sensor import earliest_enabled_run
-from smart_water.week_plan import describe_outlook
+from sprinklecast.planner import build_plan
+from sprinklecast.schedule import morning_window, shift_minutes, wall_clock
+from sprinklecast.sensor import earliest_enabled_run
+from sprinklecast.week_plan import describe_outlook
 from tests.test_planner import _request, _zone
 from tests.test_week_plan import _project
 

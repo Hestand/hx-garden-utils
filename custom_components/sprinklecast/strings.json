@@ -1,9 +1,9 @@
 {
-  "title": "Smart Water",
+  "title": "Sprinklecast",
   "config": {
     "step": {
       "user": {
-        "title": "Smart Water",
+        "title": "Sprinklecast",
         "description": "A live hub uses your weather and stores on/off entities. A simulation hub uses example zones and a weather week you describe. Neither one opens a valve.",
         "menu_options": {
           "live": "Live hub",
@@ -11,15 +11,17 @@
         }
       },
       "live": {
-        "title": "Smart Water hub",
+        "title": "Sprinklecast hub",
         "description": "Name the hub, then pick a weather entity or open Sensors and pick a temperature sensor. A Tempest station is filled in when one is found. Location and schedule already have defaults. Automatic watering stays off until you turn the switch on.",
         "data": {
           "name": "Name",
-          "weather_entity": "Weather entity"
+          "weather_entity": "Weather entity",
+          "send_plan_notifications": "Send plan notifications"
         },
         "data_description": {
           "weather_entity": "Optional when a temperature sensor is set. Used for the forecast and for any sensor you leave empty.",
-          "name": "The name shown for this hub or zone."
+          "name": "The name shown for this hub or zone.",
+          "send_plan_notifications": "On when a notify service is set. Sends the evening plan even when automatic watering is off, so you can see what it would do. Freeze, flow, and budget notices are separate."
         },
         "sections": {
           "sensors": {
@@ -73,7 +75,6 @@
               "elevation_m": "Elevation",
               "latitude": "Latitude override",
               "longitude": "Longitude override",
-              "mode": "Mode",
               "notify_target": "Notify service",
               "rain_sensor": "Rain sensor",
               "plan_hour": "Evening plan hour",
@@ -85,8 +86,6 @@
               "blackout_end_hour": "Blackout end hour",
               "drip_ignores_schedule": "Drip ignores weekday limits",
               "freeze_skip_f": "Skip when temperature is at or below",
-              "recent_rain_hours": "Recent rain window",
-              "recent_rain_mm": "Skip when recent rain is at least",
               "zone_max_run_min": "Maximum valve-on minutes per zone",
               "hub_nightly_cap_min": "Optional cap for all zones together",
               "forecast_probability_pct": "Forecast rain confidence",
@@ -118,8 +117,6 @@
               "blackout_end_hour": "First local hour when watering is allowed again.",
               "drip_ignores_schedule": "Drip may skip the weekday check. The blackout still applies. Off by default.",
               "freeze_skip_f": "Default 40°F (Oklahoma State HLA-6610). Uses the current temperature or the forecast low.",
-              "recent_rain_hours": "Default 12 hours. A practical window, not a published cutoff.",
-              "recent_rain_mm": "Default 2.5 mm (0.1 in) inside that window.",
               "zone_max_run_min": "Default 60. Valve-on minutes for one zone this morning, not all zones together. Soak time does not count. Anything left waits for the next allowed day.",
               "hub_nightly_cap_min": "Leave empty. Set this only to cap every zone's valve-on time together.",
               "forecast_probability_pct": "Default 60%. Only forecast slots at or above this chance count. Expected rain is that chance times the amount.",
@@ -138,7 +135,6 @@
               "cost_per_1000_gal": "Optional. Adds a cost sensor in dollars for the water dashboard.",
               "weekly_budget_gal": "Optional. Fires one alert per week when use goes over this.",
               "weekly_summary": "Off by default. On Monday, at or after the plan hour, sends one summary.",
-              "mode": "Auto can open valves when automatic watering is on. Notify only still runs. Off never opens a valve.",
               "rain_sensor": "Optional on/off sensor. On means it is raining and watering waits.",
               "plan_hour": "The evening hour when today's water loss is saved and the morning plan is built. Default 23.",
               "max_daily_runtime_min": "Optional limit on valve-on minutes for every zone together this morning."
@@ -168,12 +164,14 @@
         "data": {
           "name": "Name",
           "scenario": "Weather week",
-          "bucket": "Starting soil"
+          "bucket": "Starting soil",
+          "send_plan_notifications": "Send plan notifications"
         },
         "data_description": {
           "scenario": "An example week, not a forecast and not a climate normal. Change it later in options or with the simulate service.",
           "bucket": "Full means the soil is holding all the water it can. Half means half of that is already used. Dry enough to water means it is time to irrigate.",
-          "name": "The name shown for this hub or zone."
+          "name": "The name shown for this hub or zone.",
+          "send_plan_notifications": "On when a notify service is set. Sends the evening plan even when automatic watering is off, so you can see what it would do. Freeze, flow, and budget notices are separate."
         },
         "sections": {
           "location": {
@@ -183,7 +181,6 @@
               "elevation_m": "Elevation",
               "latitude": "Latitude override",
               "longitude": "Longitude override",
-              "mode": "Mode",
               "notify_target": "Notify service",
               "rain_sensor": "Rain sensor",
               "plan_hour": "Evening plan hour",
@@ -195,8 +192,6 @@
               "blackout_end_hour": "Blackout end hour",
               "drip_ignores_schedule": "Drip ignores weekday limits",
               "freeze_skip_f": "Skip when temperature is at or below",
-              "recent_rain_hours": "Recent rain window",
-              "recent_rain_mm": "Skip when recent rain is at least",
               "zone_max_run_min": "Maximum valve-on minutes per zone",
               "hub_nightly_cap_min": "Optional cap for all zones together",
               "forecast_probability_pct": "Forecast rain confidence",
@@ -225,8 +220,6 @@
               "blackout_end_hour": "First local hour when watering is allowed again.",
               "drip_ignores_schedule": "Drip may skip the weekday check. The blackout still applies. Off by default.",
               "freeze_skip_f": "Default 40°F (Oklahoma State HLA-6610). Uses the current temperature or the forecast low.",
-              "recent_rain_hours": "Default 12 hours. A practical window, not a published cutoff.",
-              "recent_rain_mm": "Default 2.5 mm (0.1 in) inside that window.",
               "zone_max_run_min": "Default 60. Valve-on minutes for one zone this morning, not all zones together. Soak time does not count. Anything left waits for the next allowed day.",
               "hub_nightly_cap_min": "Leave empty. Set this only to cap every zone's valve-on time together.",
               "forecast_probability_pct": "Default 60%. Only forecast slots at or above this chance count. Expected rain is that chance times the amount.",
@@ -245,7 +238,6 @@
               "cost_per_1000_gal": "Optional. Adds a cost sensor in dollars for the water dashboard.",
               "weekly_budget_gal": "Optional. Fires one alert per week when use goes over this.",
               "weekly_summary": "Off by default. On Monday, at or after the plan hour, sends one summary.",
-              "mode": "Auto can open valves when automatic watering is on. Notify only still runs. Off never opens a valve.",
               "rain_sensor": "Optional on/off sensor. On means it is raining and watering waits.",
               "plan_hour": "The evening hour when today's water loss is saved and the morning plan is built. Default 23.",
               "max_daily_runtime_min": "Optional limit on valve-on minutes for every zone together this morning.",
@@ -335,15 +327,17 @@
   "options": {
     "step": {
       "init": {
-        "title": "Smart Water options",
+        "title": "Sprinklecast options",
         "description": "Sensors and the schedule. A simulation hub also keeps the weather week and the starting soil here. Automatic watering stays off until you turn the switch on.",
         "data": {
           "scenario": "Weather week",
-          "bucket": "Starting soil"
+          "bucket": "Starting soil",
+          "send_plan_notifications": "Send plan notifications"
         },
         "data_description": {
           "scenario": "Used the next time the simulation runs. A custom days list replaces it for that one run.",
-          "bucket": "Full means the soil is holding all the water it can. Half means half of that is already used. Dry enough to water means it is time to irrigate."
+          "bucket": "Full means the soil is holding all the water it can. Half means half of that is already used. Dry enough to water means it is time to irrigate.",
+          "send_plan_notifications": "On when a notify service is set. Sends the evening plan even when automatic watering is off, so you can see what it would do. Freeze, flow, and budget notices are separate."
         },
         "sections": {
           "sensors": {
@@ -396,7 +390,6 @@
               "elevation_m": "Elevation",
               "latitude": "Latitude override",
               "longitude": "Longitude override",
-              "mode": "Mode",
               "notify_target": "Notify service",
               "rain_sensor": "Rain sensor",
               "plan_hour": "Evening plan hour",
@@ -408,8 +401,6 @@
               "blackout_end_hour": "Blackout end hour",
               "drip_ignores_schedule": "Drip ignores weekday limits",
               "freeze_skip_f": "Skip when temperature is at or below",
-              "recent_rain_hours": "Recent rain window",
-              "recent_rain_mm": "Skip when recent rain is at least",
               "zone_max_run_min": "Maximum valve-on minutes per zone",
               "hub_nightly_cap_min": "Optional cap for all zones together",
               "forecast_probability_pct": "Forecast rain confidence",
@@ -437,8 +428,6 @@
               "blackout_start_hour": "First local hour when watering is not allowed. Leave empty for no blackout.",
               "blackout_end_hour": "First local hour when watering is allowed again.",
               "freeze_skip_f": "Default 40°F (Oklahoma State HLA-6610). Uses the current temperature or the forecast low.",
-              "recent_rain_hours": "Default 12 hours. A practical window, not a published cutoff.",
-              "recent_rain_mm": "Default 2.5 mm (0.1 in) inside that window.",
               "zone_max_run_min": "Default 60. Valve-on minutes for one zone this morning, not all zones together. Soak time does not count. Anything left waits for the next allowed day.",
               "hub_nightly_cap_min": "Leave empty. Set this only to cap every zone's valve-on time together.",
               "forecast_probability_pct": "Default 60%. Only forecast slots at or above this chance count. Expected rain is that chance times the amount.",
@@ -457,7 +446,6 @@
               "cost_per_1000_gal": "Optional. Adds a cost sensor in dollars for the water dashboard.",
               "weekly_budget_gal": "Optional. Fires one alert per week when use goes over this.",
               "weekly_summary": "Off by default. On Monday, at or after the plan hour, sends one summary.",
-              "mode": "Auto can open valves when automatic watering is on. Notify only still runs. Off never opens a valve.",
               "rain_sensor": "Optional on/off sensor. On means it is raining and watering waits.",
               "plan_hour": "The evening hour when today's water loss is saved and the morning plan is built. Default 23.",
               "max_daily_runtime_min": "Optional limit on valve-on minutes for every zone together this morning.",
@@ -628,13 +616,6 @@
     }
   },
   "selector": {
-    "mode": {
-      "options": {
-        "auto": "Auto",
-        "notify_only": "Notify only",
-        "off": "Off"
-      }
-    },
     "weekday": {
       "options": {
         "mon": "Monday",
@@ -746,9 +727,6 @@
   },
   "entity": {
     "sensor": {
-      "mode": {
-        "name": "Mode"
-      },
       "tonight_plan": {
         "name": "Today's plan"
       },
@@ -836,6 +814,11 @@
       "simulate": {
         "name": "Run simulation"
       }
+    },
+    "calendar": {
+      "watering": {
+        "name": "Watering"
+      }
     }
   },
   "services": {
@@ -877,7 +860,7 @@
     },
     "stop_all": {
       "name": "Stop all watering",
-      "description": "Turn off any zone Smart Water currently has on."
+      "description": "Turn off any zone Sprinklecast currently has on."
     },
     "reset_learning": {
       "name": "Reset moisture learning",
@@ -908,6 +891,18 @@
     "hard_freeze_alert": {
       "title": "Hard freeze in the forecast",
       "description": "{detail}"
+    },
+    "remove_smart_water_folder": {
+      "title": "Delete the old Smart Water folder",
+      "description": "Sprinklecast replaced Smart Water and kept this hub, its zones, and the entity IDs. Delete config/custom_components/smart_water if that folder is still there, then restart Home Assistant."
+    },
+    "smart_water_still_loaded": {
+      "title": "Smart Water is still installed",
+      "description": "Delete config/custom_components/smart_water and restart Home Assistant. Sprinklecast will then keep your hub, zones, stored history, and entity IDs. Do not delete the Smart Water config entry yourself."
+    },
+    "smart_water_import_failed": {
+      "title": "Smart Water could not be moved",
+      "description": "Sprinklecast could not copy the old hub. Leave the Smart Water config entry in place, delete config/custom_components/smart_water, and restart. If this stays, report the log line that starts with Sprinklecast could not import."
     }
   }
 }

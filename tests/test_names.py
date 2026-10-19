@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1] / "custom_components" / "smart_water"
+ROOT = Path(__file__).resolve().parents[1] / "custom_components" / "sprinklecast"
 
 # Shown as a whole word in a label. Parentheses may still carry the term.
 _BARE = ("ET0", "ETc", "MAD", "RAW", "AWC", "DU_lq", "Deficit", "Bucket")

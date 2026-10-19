@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from smart_water.discover import EntityHint, discover
+from sprinklecast.discover import EntityHint, discover
 
 
 def _hint(entity_id: str, **kwargs: object) -> EntityHint:

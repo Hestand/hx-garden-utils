@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from smart_water.week_plan import describe_outlook, split_outlook
+from sprinklecast.week_plan import describe_outlook, split_outlook
 from tests.test_planner import _zone
 from tests.test_week_plan import _project
 

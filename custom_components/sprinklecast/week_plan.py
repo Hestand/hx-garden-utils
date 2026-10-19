@@ -296,6 +296,9 @@ def _day_row(
         bursts = []
         for event in events:
             last_cycle = event.cycle_index >= event.cycle_count
+            share = 0.0
+            if zone.runtime_min:
+                share = zone.net_mm * (float(event.duration_min) / float(zone.runtime_min))
             bursts.append(
                 {
                     "cycle": event.cycle_index,
@@ -303,6 +306,10 @@ def _day_row(
                     "minutes": event.duration_min,
                     "start": _format_start(event.start, day, tz),
                     "end": _format_start(event.end, day, tz),
+                    "start_at": event.start.astimezone(tz).isoformat(),
+                    "end_at": event.end.astimezone(tz).isoformat(),
+                    "mm": round(share, 2),
+                    "inches": round(mm_to_inches(share), 3),
                     "soak_min": 0 if last_cycle else zone.soak_min,
                 }
             )

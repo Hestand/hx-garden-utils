@@ -13,10 +13,10 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from smart_water.planner import build_plan, build_zone_request
-from smart_water.presets import PLANTS
-from smart_water.schedule import wall_clock
-from smart_water.week_plan import describe_outlook, project_week
+from sprinklecast.planner import build_plan, build_zone_request
+from sprinklecast.presets import PLANTS
+from sprinklecast.schedule import wall_clock
+from sprinklecast.week_plan import describe_outlook, project_week
 from tests.test_planner import _request
 
 CHICAGO = ZoneInfo("America/Chicago")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from smart_water.forecast_rain import (
+from sprinklecast.forecast_rain import (
     defer_days_before_today,
     defer_reason,
     expected_rain,
@@ -119,7 +119,7 @@ def test_week_projection_defers_without_crediting_forecast() -> None:
     """Expected rain can postpone a morning. It never shrinks the soil deficit."""
     from zoneinfo import ZoneInfo
 
-    from smart_water.week_plan import project_week
+    from sprinklecast.week_plan import project_week
     from tests.test_planner import _zone
 
     zone = _zone(deficit_mm=10.0, raw_mm=8.0, taw_mm=24.0, etc_mm=5.0)

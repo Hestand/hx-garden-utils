@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from smart_water.skips import SkipInputs, safety_reason, skip_reason
+from sprinklecast.skips import SkipInputs, safety_reason, skip_reason
 
 
 def _inputs(**overrides: object) -> SkipInputs:
@@ -13,8 +13,12 @@ def _inputs(**overrides: object) -> SkipInputs:
 
 def test_freeze_wind_rain_and_moisture_skip_before_the_schedule() -> None:
     assert "rain sensor" in safety_reason(_inputs(hub_rain_wet=True))
-    assert "2.5 mm" in safety_reason(
-        _inputs(recent_rain_mm=2.5, recent_rain_skip_mm=2.5, recent_rain_hours=12)
+    assert "raining" in safety_reason(_inputs(currently_raining=True))
+    assert (
+        safety_reason(
+            _inputs(recent_rain_mm=20, recent_rain_skip_mm=2.5, recent_rain_hours=12)
+        )
+        is None
     )
     assert "40°F" in safety_reason(_inputs(temp_f=39, freeze_f=40))
     assert safety_reason(_inputs(temp_f=41, forecast_low_f=45, freeze_f=40)) is None

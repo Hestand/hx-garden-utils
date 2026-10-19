@@ -32,7 +32,7 @@ class MasterAutoSwitch(SmartWaterHubEntity, SwitchEntity):
     """Automatic watering for this hub. Off on a new install and after an upgrade.
 
     Turning it on does not by itself call a valve. The executor runs the plan
-    on the next refresh when the switch is on and the mode is not off.
+    on the next refresh when the switch is on.
     Turning it off stops a run that is already going.
     """
 
@@ -51,12 +51,11 @@ class MasterAutoSwitch(SmartWaterHubEntity, SwitchEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Show the mode and whether a plan would actually run."""
+        """Show whether a plan would actually run."""
         data = self.coordinator.data
         if data is None:
             return {"automatic": self.is_on}
         return {
-            "mode": data.mode,
             "automatic": data.automatic,
             "would_execute": data.would_execute,
             "block_reason": data.block_reason,

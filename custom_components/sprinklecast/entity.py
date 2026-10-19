@@ -21,7 +21,7 @@ class SmartWaterHubEntity(CoordinatorEntity[SmartWaterCoordinator]):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.title,
-            manufacturer="Smart Water",
+            manufacturer="Sprinklecast",
             model="Water-balance planner",
             sw_version=VERSION,
         )
@@ -41,7 +41,7 @@ class SmartWaterZoneEntity(CoordinatorEntity[SmartWaterCoordinator]):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{entry.entry_id}_{zone_id}")},
             name=subentry.title,
-            manufacturer="Smart Water",
+            manufacturer="Sprinklecast",
             model="Zone",
             via_device=(DOMAIN, entry.entry_id),
         )

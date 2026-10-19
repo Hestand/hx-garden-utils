@@ -7,7 +7,7 @@ from homeassistant.helpers import entity_registry as er
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.smart_water.const import (
+from custom_components.sprinklecast.const import (
     CONF_ELEVATION_M,
     CONF_FLOW_KIND,
     CONF_FLOW_LEAK_RATIO,
@@ -102,7 +102,7 @@ async def test_six_zones_move_the_first_flow_meter_onto_the_hub(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert entry.version == 9
+    assert entry.version == 10
     assert entry.options["dynamic_start"] is False
     assert entry.options[CONF_FLOW_SENSOR] == "sensor.main_flow"
     assert entry.options[CONF_FLOW_KIND] == "rate"

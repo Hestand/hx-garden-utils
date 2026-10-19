@@ -11,7 +11,7 @@ from homeassistant.helpers import entity_registry as er
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.smart_water.const import (
+from custom_components.sprinklecast.const import (
     CONF_DEPLETION,
     CONF_DRY_RUN,
     CONF_EFFICIENCY,
@@ -32,7 +32,7 @@ from custom_components.smart_water.const import (
     DOMAIN,
     MODE_AUTO,
 )
-from custom_components.smart_water.store import SmartWaterStore
+from custom_components.sprinklecast.store import SmartWaterStore
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -303,7 +303,7 @@ async def test_v1_entry_migrates_without_changing_stored_overrides(
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 9
+    assert entry.version == 10
     assert entry.minor_version == 1
     zone = next(iter(entry.subentries.values()))
     assert zone.data[CONF_EFFICIENCY] == 1.0
@@ -355,7 +355,7 @@ async def test_minimal_zone_plans_from_presets(hass: HomeAssistant) -> None:
 
 async def test_v4_custom_days_survive_the_v5_bump(hass: HomeAssistant) -> None:
     """Version 5 must not run the schedule migration over days the user already chose."""
-    from custom_components.smart_water.const import CONF_ALLOWED_WEEKDAYS
+    from custom_components.sprinklecast.const import CONF_ALLOWED_WEEKDAYS
 
     entry = _loaded_garden(
         hass,
@@ -365,7 +365,7 @@ async def test_v4_custom_days_survive_the_v5_bump(hass: HomeAssistant) -> None:
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 9
+    assert entry.version == 10
     assert entry.options[CONF_ALLOWED_WEEKDAYS] == ["mon", "thu"]
     assert entry.options["start_time"] == "05:00:00"
     assert entry.options["finish_time"] == "09:00:00"
@@ -376,7 +376,7 @@ async def test_v4_custom_days_survive_the_v5_bump(hass: HomeAssistant) -> None:
 
 async def test_v5_hub_cap_becomes_a_per_zone_default(hass: HomeAssistant) -> None:
     """An old all-zones cap becomes the per-zone default. The hub total stays off."""
-    from custom_components.smart_water.const import (
+    from custom_components.sprinklecast.const import (
         CONF_ALLOWED_WEEKDAYS,
         CONF_HUB_NIGHTLY_CAP_MIN,
         CONF_MAX_RUN_MIN,
@@ -394,7 +394,7 @@ async def test_v5_hub_cap_becomes_a_per_zone_default(hass: HomeAssistant) -> Non
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 9
+    assert entry.version == 10
     assert entry.options[CONF_ZONE_MAX_RUN_MIN] == 45
     assert CONF_MAX_RUN_MIN not in entry.options
     assert CONF_HUB_NIGHTLY_CAP_MIN not in entry.options
@@ -426,7 +426,7 @@ async def test_v2_entry_migrates_without_rewriting_zones(hass: HomeAssistant) ->
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 9
+    assert entry.version == 10
     zone = next(iter(entry.subentries.values()))
     assert zone.data[CONF_EFFICIENCY] == 1.0
     assert zone.data[CONF_PRECIPITATION_RATE] == 1.5
@@ -436,7 +436,7 @@ async def test_simulation_service_returns_a_week_and_does_not_actuate(
     hass: HomeAssistant,
 ) -> None:
     """The sensor, the button, and the service share one in-memory week."""
-    from custom_components.smart_water.const import (
+    from custom_components.sprinklecast.const import (
         CONF_AREA_SQFT,
         CONF_BUCKET,
         CONF_LATITUDE,

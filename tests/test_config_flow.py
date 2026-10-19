@@ -22,7 +22,7 @@ import probatio
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.smart_water.const import (
+from custom_components.sprinklecast.const import (
     CONF_AREA_SQFT,
     CONF_BUCKET,
     CONF_DEPLETION,
@@ -55,7 +55,7 @@ from custom_components.smart_water.const import (
     MODE_NOTIFY_ONLY,
     SUBENTRY_ZONE,
 )
-from custom_components.smart_water.presets import plant_kc
+from custom_components.sprinklecast.presets import plant_kc
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -205,9 +205,11 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert result["title"] == "Garden"
     assert result["result"].data == {CONF_WEATHER_ENTITY: "weather.home"}
     assert result["result"].options[CONF_ELEVATION_M] == 219
-    assert result["result"].options[CONF_MODE] == MODE_NOTIFY_ONLY
+    assert "mode" not in result["result"].options
+    assert "recent_rain_mm" not in result["result"].options
+    assert result["result"].options["send_plan_notifications"] is True
     assert CONF_TEMPERATURE_SENSOR not in result["result"].options
-    assert result["result"].version == 9
+    assert result["result"].version == 10
     assert result["result"].options["dynamic_start"] is True
     assert result["result"].options["start_time"] == "05:00:00"
     assert result["result"].options["earliest_start"] == "04:00:00"
@@ -319,7 +321,8 @@ async def test_options_flow_forms_serialize(hass: HomeAssistant) -> None:
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_ELEVATION_M] == 219
-    assert result["data"][CONF_MODE] == MODE_NOTIFY_ONLY
+    assert "mode" not in result["data"]
+    assert result["data"]["send_plan_notifications"] is True
 
 
 async def test_zone_quick_setup_leaves_presets_blank(hass: HomeAssistant) -> None:
@@ -567,7 +570,7 @@ async def test_simulation_hub_uses_dropdowns_and_a_virtual_valve(
     result = await _finish_with_no_zones(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
-    assert entry.version == 9
+    assert entry.version == 10
     assert entry.data == {CONF_SIMULATION: True}
     assert entry.options[CONF_SCENARIO] == "hot_dry"
     assert entry.options[CONF_BUCKET] == "full"
@@ -675,7 +678,7 @@ async def test_hub_flow_adds_zones_and_keeps_later_picks(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
-    assert entry.version == 9
+    assert entry.version == 10
     zones = {zone.title: zone for zone in entry.subentries.values()}
     assert set(zones) == {"Front", "Back"}
     assert zones["Front"].data[CONF_VALVE_ENTITY] == "switch.front"

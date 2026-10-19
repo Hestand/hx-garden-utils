@@ -11,6 +11,16 @@ from .const import DEFAULT_ADJUSTMENT_PCT, DOMAIN
 from .observe import fresh_day
 
 STORAGE_VERSION = 1
+RUN_HISTORY_LIMIT = 60
+
+
+def remember_run(state: dict[str, Any], run: dict[str, Any]) -> None:
+    """Append one finished run. The list is capped so storage stays small."""
+    history = [
+        item for item in list(state.get("run_history") or []) if isinstance(item, dict)
+    ]
+    history.append(run)
+    state["run_history"] = history[-RUN_HISTORY_LIMIT:]
 
 
 def fresh_zone() -> dict[str, Any]:
@@ -47,6 +57,7 @@ def fresh_zone() -> dict[str, Any]:
         "forecast_defer_last": None,
         "bucket_history": [],
         "audit_history": [],
+        "run_history": [],
         "audit_pending": None,
         "measured_precipitation_rate_in_hr": None,
         "measured_efficiency": None,

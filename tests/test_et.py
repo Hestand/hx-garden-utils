@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from smart_water.et import (
+from sprinklecast.et import (
     ETInputs,
     atmospheric_pressure_kpa,
     daily_et0,

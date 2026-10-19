@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from smart_water.usage import (
+from sprinklecast.usage import (
     add_use,
     baseline_week_gallons,
     cost_of,

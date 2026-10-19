@@ -64,7 +64,6 @@ from .const import (
     CONF_MAX_DAILY_RUNTIME_MIN,
     CONF_MAX_RUN_MIN,
     CONF_MIN_INTERVAL_DAYS,
-    CONF_MODE,
     CONF_MOISTURE_KIND,
     CONF_MOISTURE_LEARN,
     CONF_MOISTURE_MODE,
@@ -79,8 +78,6 @@ from .const import (
     CONF_RAIN_AMOUNT_SENSOR,
     CONF_RAIN_KIND,
     CONF_RAIN_SENSOR,
-    CONF_RECENT_RAIN_HOURS,
-    CONF_RECENT_RAIN_MM,
     CONF_ROUND_MINUTES,
     CONF_SCENARIO,
     CONF_SIMULATION,
@@ -130,8 +127,6 @@ from .const import (
     DEFAULT_MOISTURE_WEIGHT,
     DEFAULT_PLAN_HOUR,
     DEFAULT_RAIN_KIND,
-    DEFAULT_RECENT_RAIN_HOURS,
-    DEFAULT_RECENT_RAIN_MM,
     DEFAULT_ROUND_MINUTES,
     DEFAULT_SPRINKLER_TYPE,
     DEFAULT_EARLIEST_START,
@@ -139,9 +134,6 @@ from .const import (
     DEFAULT_START_TIME,
     DEFAULT_WIND_HEIGHT_M,
     DOMAIN,
-    MODE_AUTO,
-    MODE_NOTIFY_ONLY,
-    MODE_OFF,
     MOISTURE_CORRECT,
     MOISTURE_OVERRIDE,
     SUBENTRY_ZONE,
@@ -183,7 +175,6 @@ from .observe import (
     note_temperature,
     observed_temperature_range,
     rain_between,
-    rain_in_hours,
     uv_index_to_w_m2,
 )
 from .planner import NightPlan, PlanRequest, ZoneRequest, build_plan, build_zone_request, short_status
@@ -195,12 +186,13 @@ from .presets import (
     sprinkler_precip,
     wind_skip_mph,
 )
+from .legacy import plan_notifications_enabled
 from .safety import would_execute
 from .schedule import morning_window, rules_for, shift_minutes
 from .solar import local_sunrise
 from .skips import SkipInputs, safety_reason
 from .week_plan import OUTLOOK_DAYS, project_week, split_outlook
-from .store import SmartWaterStore
+from .store import SmartWaterStore, remember_run
 from .usage import (
     DEFAULT_BASELINE_DAYS,
     DEFAULT_BASELINE_MINUTES,
@@ -487,7 +479,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         """Run one zone now. This ignores the automatic switch. It still skips unsafe weather."""
         snapshot = await self._publish(force_balance=False, force_notify=False)
         if zone_id not in snapshot.zones:
-            raise HomeAssistantError(f"Unknown Smart Water zone {zone_id}")
+            raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
         jobs, reason = self._manual_jobs(zone_id)
         if reason or not jobs:
             await self._write_run(
@@ -498,7 +490,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             )
             return
         if self.executor is None:
-            raise HomeAssistantError("Smart Water executor is not ready.")
+            raise HomeAssistantError("Sprinklecast executor is not ready.")
         await self.executor.start(jobs)
 
     async def async_start_audit(self, zone_id: str, minutes: float) -> None:
@@ -507,7 +499,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             raise HomeAssistantError("Audit minutes must be greater than 0.")
         subentry = self.config_entry.subentries.get(zone_id)
         if subentry is None:
-            raise HomeAssistantError(f"Unknown Smart Water zone {zone_id}")
+            raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
         reason = self.live_skip(zone_id, True)
         if reason:
             raise HomeAssistantError(reason)
@@ -528,7 +520,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         state["audit_pending"] = {"minutes": actual, "started": now.isoformat()}
         await self.store.async_save()
         if self.executor is None:
-            raise HomeAssistantError("Smart Water executor is not ready.")
+            raise HomeAssistantError("Sprinklecast executor is not ready.")
         job = self._cycle_job(
             zone_id=zone_id,
             name=subentry.title,
@@ -557,7 +549,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         """Store the measured rate and DU_lq. Save the store before the reload."""
         subentry = self.config_entry.subentries.get(zone_id)
         if subentry is None:
-            raise HomeAssistantError(f"Unknown Smart Water zone {zone_id}")
+            raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
         state = self.store.zone(zone_id)
         pending = state.get("audit_pending") or {}
         used = minutes if minutes is not None else pending.get("minutes")
@@ -612,22 +604,13 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
     async def async_set_automatic(self, enabled: bool) -> None:
         """Turn automatic watering on or off without writing config options.
 
-        Off stops a run that is already going. On, when the hub mode is off,
-        sets the mode to auto, which reloads the entry. The stored flag is
-        saved first so the reloaded hub comes back on.
+        Off stops a run that is already going. The evening plan notification
+        is a separate option and does not follow this switch.
         """
         self.store.automatic = bool(enabled)
         await self.store.async_save()
-        if not enabled:
-            if self.executor is not None:
-                await self.executor.stop()
-            self.async_set_updated_data(
-                await self._publish(force_balance=False, force_notify=False)
-            )
-            return
-        if str(self._options().get(CONF_MODE, MODE_NOTIFY_ONLY)) == MODE_OFF:
-            await self.async_set_mode(MODE_AUTO)
-            return
+        if not enabled and self.executor is not None:
+            await self.executor.stop()
         self.async_set_updated_data(
             await self._publish(force_balance=False, force_notify=False)
         )
@@ -685,12 +668,6 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         if self.data is not None:
             self.async_set_updated_data(self.data)
 
-    async def async_set_mode(self, mode: str) -> None:
-        """Change hub mode. This does not change the dry-run flag."""
-        options = self._options()
-        options[CONF_MODE] = mode
-        self.hass.config_entries.async_update_entry(self.config_entry, options=options)
-
     async def _save_and_refresh_snapshot(self) -> None:
         self.async_set_updated_data(
             await self._publish(force_balance=False, force_notify=False)
@@ -718,7 +695,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         today = now.date().isoformat()
         plan_hour = int(options.get(CONF_PLAN_HOUR, DEFAULT_PLAN_HOUR))
         automatic = bool(self.store.automatic)
-        mode = str(options.get(CONF_MODE, MODE_NOTIFY_ONLY))
+        mode = "auto" if automatic else "off"
         elevation = float(options.get(CONF_ELEVATION_M, DEFAULT_ELEVATION_M))
         latitude = options.get(CONF_LATITUDE, self.hass.config.latitude)
         longitude = options.get(CONF_LONGITUDE, self.hass.config.longitude)
@@ -837,7 +814,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             )
         except (KeyError, ValueError) as err:
             error = str(err)
-            _LOGGER.warning("Smart Water could not build a plan: %s", err)
+            _LOGGER.warning("Sprinklecast could not build a plan: %s", err)
 
         for zone_id, new_factor, confidence, samples in pending_learn:
             learned_state = self.store.zone(zone_id)
@@ -852,7 +829,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             and plan is not None
             and (now.hour >= plan_hour or force_balance)
             and self.store.armed_date != today
-            and would_execute(automatic=True, mode=mode)
+            and would_execute(automatic=True)
         ):
             self.store.armed_date = today
             self.store.plan_marked_at = now.isoformat()
@@ -863,7 +840,6 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             await self._maybe_notify(
                 plan,
                 today=today,
-                mode=mode,
                 force_notify=force_notify,
             )
         if (
@@ -875,7 +851,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 self.store.simulation = self.simulate_week()
             except (KeyError, TypeError, ValueError) as err:
                 error = error or f"Simulation: {err}"
-                _LOGGER.warning("Smart Water could not simulate a week: %s", err)
+                _LOGGER.warning("Sprinklecast could not simulate a week: %s", err)
         if plan is not None:
             self._note_forecast_state(plan, today)
         self._consider_freeze(observation, now)
@@ -1196,12 +1172,12 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             severity=ir.IssueSeverity.WARNING,
             translation_key="flow_alert",
             translation_placeholders={
-                "name": str(alert.get("name") or "Smart Water"),
+                "name": str(alert.get("name") or "Sprinklecast"),
                 "detail": str(alert["detail"]),
             },
         )
         title = str(alert["kind"]).replace("_", " ")
-        self.hass.async_create_task(self._notify(f"Smart Water {title}", str(alert["detail"])))
+        self.hass.async_create_task(self._notify(f"Sprinklecast {title}", str(alert["detail"])))
         if alert.get("kind") == "main_leak" and alert.get("action") == FLOW_ACTION_STOP:
             # Stopping from inside the build lock deadlocks with cycle credit.
             if self._lock.locked():
@@ -1225,7 +1201,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 blocking=False,
             )
         except HomeAssistantError as err:
-            _LOGGER.warning("Smart Water could not notify %s: %s", target, err)
+            _LOGGER.warning("Sprinklecast could not notify %s: %s", target, err)
 
     def _maybe_budget_alert(self) -> None:
         options = self._options()
@@ -1254,7 +1230,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 "detail": detail,
             },
         )
-        self.hass.async_create_task(self._notify("Smart Water weekly budget", detail))
+        self.hass.async_create_task(self._notify("Sprinklecast weekly budget", detail))
 
     def _consider_reports(self, now: datetime) -> None:
         """Weekly summary, once, on Monday at or after the plan hour."""
@@ -1301,7 +1277,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 "detail": text,
             },
         )
-        self.hass.async_create_task(self._notify("Smart Water week", text))
+        self.hass.async_create_task(self._notify("Sprinklecast week", text))
 
     def _baseline_for(self, data: dict[str, Any], state: dict[str, Any]) -> float | None:
         minutes = _optional_float(data, CONF_BASELINE_MINUTES)
@@ -1416,9 +1392,6 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         areas: dict[str, float | None] = {}
         drip_ignores = bool(options.get(CONF_DRIP_IGNORES_SCHEDULE, False))
         temp_f, forecast_low_f, wind = self._weather_facts(observation)
-        recent_hours = int(options.get(CONF_RECENT_RAIN_HOURS, DEFAULT_RECENT_RAIN_HOURS))
-        recent_mm = rain_in_hours(self.store.weather, recent_hours, now)
-        recent_limit = float(options.get(CONF_RECENT_RAIN_MM, DEFAULT_RECENT_RAIN_MM))
         freeze_default = float(options.get(CONF_FREEZE_SKIP_F, DEFAULT_FREEZE_SKIP_F))
         for subentry in self.config_entry.subentries.values():
             if subentry.subentry_type != SUBENTRY_ZONE:
@@ -1438,9 +1411,6 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                     temp_f=temp_f,
                     forecast_low_f=forecast_low_f,
                     wind_mph=wind,
-                    recent_mm=recent_mm,
-                    recent_hours=recent_hours,
-                    recent_limit=recent_limit,
                     freeze_default=freeze_default,
                     drip_ignores=drip_ignores,
                     hub_wet=hub_wet,
@@ -1526,7 +1496,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 forecast_horizon_days=self._forecast_horizon_days(),
             )
         except (KeyError, TypeError, ValueError) as err:
-            _LOGGER.debug("Smart Water could not project a week: %s", err)
+            _LOGGER.debug("Sprinklecast could not project a week: %s", err)
         return plan
 
     def lifetime_cost(self) -> float | None:
@@ -1763,7 +1733,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             translation_key=issue_key,
             translation_placeholders={"detail": message},
         )
-        self.hass.async_create_task(self._notify("Smart Water freeze", message))
+        self.hass.async_create_task(self._notify("Sprinklecast freeze", message))
 
     def max_run_minutes(self) -> float:
         """Per-zone default. Kept so older callers still see a number."""
@@ -1788,7 +1758,6 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             return "Skipped because a flow alert is waiting for reset."
         options = self._options()
         now = dt_util.now(self._timezone())
-        hours = int(options.get(CONF_RECENT_RAIN_HOURS, DEFAULT_RECENT_RAIN_HOURS))
         temp_f, forecast_low_f, wind = self._weather_facts(self._last_observation)
         freeze = _optional_float(data, CONF_FREEZE_SKIP_F)
         if freeze is None:
@@ -1803,11 +1772,6 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 hub_rain_wet=_is_wet(self.hass, options.get(CONF_RAIN_SENSOR) or None),
                 rain_sensor_wet=_is_wet(self.hass, data.get(CONF_RAIN_SENSOR) or None),
                 currently_raining=_is_wet(self.hass, options.get(CONF_RAIN_SENSOR) or None),
-                recent_rain_mm=rain_in_hours(self.store.weather, hours, now),
-                recent_rain_skip_mm=float(
-                    options.get(CONF_RECENT_RAIN_MM, DEFAULT_RECENT_RAIN_MM)
-                ),
-                recent_rain_hours=hours,
                 temp_f=temp_f,
                 forecast_low_f=forecast_low_f,
                 freeze_f=freeze,
@@ -2029,6 +1993,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             "gpm": None if gpm is None else round(gpm, 3),
             "result": result,
         }
+        if result == "ok":
+            remember_run(state, dict(state["last_run"]))
         state["last_run_now"] = f"{result}: {minutes:.0f} min, {net_mm:.1f} mm"
         return alert
 
@@ -2151,9 +2117,6 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         temp_f: float | None,
         forecast_low_f: float | None,
         wind_mph: float | None,
-        recent_mm: float,
-        recent_hours: int,
-        recent_limit: float,
         freeze_default: float,
         drip_ignores: bool,
         hub_wet: bool,
@@ -2185,8 +2148,6 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             days_since=days,
             deficit_mm=float(state["deficit_mm"]),
             raw_mm=raw,
-            recent_rain_mm=recent_mm,
-            recent_rain_skip_mm=recent_limit,
         )
         built = build_zone_request(
             zone_id=zone_id,
@@ -2207,9 +2168,6 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             freeze_f=freeze,
             wind_mph=wind_mph,
             wind_limit_mph=wind_limit,
-            recent_rain_mm=recent_mm,
-            recent_rain_skip_mm=recent_limit,
-            recent_rain_hours=recent_hours,
             moisture_full=self._moisture_full(data),
             moisture_skip_full=self._moisture_skip_full(data, month),
             days_since_water=days,
@@ -2430,7 +2388,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             mode=mode,
             automatic=automatic,
             block_reason=blocked,
-            would_execute=would_execute(automatic=automatic, mode=mode),
+            would_execute=would_execute(automatic=automatic),
             plan=plan,
             zones=by_zone,
             last_error=error,
@@ -2529,17 +2487,18 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         plan: NightPlan,
         *,
         today: str,
-        mode: str,
         force_notify: bool,
     ) -> None:
-        target = str(self._options().get(CONF_NOTIFY_TARGET) or "").strip()
+        options = self._options()
+        target = str(options.get(CONF_NOTIFY_TARGET) or "").strip()
         if not target:
             return
+        if not force_notify and not plan_notifications_enabled(options):
+            return
         now = dt_util.now(self._timezone())
-        plan_hour = int(self._options().get(CONF_PLAN_HOUR, DEFAULT_PLAN_HOUR))
+        plan_hour = int(options.get(CONF_PLAN_HOUR, DEFAULT_PLAN_HOUR))
         automatic = (
             not force_notify
-            and mode != MODE_OFF
             and now.hour >= plan_hour
             and self._notified_date != today
         )
@@ -2554,13 +2513,13 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 domain,
                 service,
                 {
-                    "title": "Smart Water",
+                    "title": "Sprinklecast",
                     "message": plan.summary,
                 },
                 blocking=False,
             )
         except HomeAssistantError as err:
-            _LOGGER.warning("Smart Water could not notify %s: %s", target, err)
+            _LOGGER.warning("Sprinklecast could not notify %s: %s", target, err)
             return
         if automatic:
             self._notified_date = today
@@ -2646,7 +2605,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 drip_ignores_schedule=bool(options.get(CONF_DRIP_IGNORES_SCHEDULE, False)),
                 whole_minutes=bool(options.get(CONF_ROUND_MINUTES, DEFAULT_ROUND_MINUTES)),
                 wind_height_m=float(options.get(CONF_WIND_HEIGHT_M, DEFAULT_WIND_HEIGHT_M)),
-                mode=str(options.get(CONF_MODE, MODE_NOTIFY_ONLY)),
+                mode="auto" if self.store.automatic else "off",
                 dry_run=False,
                 dynamic_start=bool(options.get(CONF_DYNAMIC_START, False)),
             ),

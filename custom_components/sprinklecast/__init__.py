@@ -1,4 +1,4 @@
-"""Smart Water custom integration.
+"""Sprinklecast custom integration.
 
 v0.8 waters in the morning: start at 05:00, finish by 09:00, and start no
 earlier than 04:00. When the Automatic watering switch is on, it runs each
@@ -8,6 +8,7 @@ and input_boolean services. It does not call Hydrawise.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -93,8 +94,12 @@ async def async_migrate_entry(hass, entry) -> bool:
 
     Version 9 writes dynamic start time off. An existing hub keeps the
     0.10.1 fixed start. Zone data is not rewritten.
+
+    Version 10 removes the hub mode and the recent-rain skip. Mode off
+    stores automatic watering off. A notify target turns plan notifications
+    on. Zone data is not rewritten.
     """
-    if entry.version > 9:
+    if entry.version > 10:
         return False
     if entry.version < 4:
         hass.config_entries.async_update_entry(
@@ -133,6 +138,10 @@ async def async_migrate_entry(hass, entry) -> bool:
             version=9,
             minor_version=1,
         )
+    if entry.version < 10:
+        from .legacy import apply_version_10
+
+        await apply_version_10(hass, entry)
     return True
 
 
@@ -174,8 +183,20 @@ def _migrate_hub_flow(hass, entry) -> dict:
 
 
 async def async_setup(hass, config) -> bool:
-    """Register the Lovelace card when the frontend is already loaded."""
+    """Register the Lovelace card and import a leftover Smart Water hub.
+
+    The import loads the new config entry. That has to wait until this
+    component setup returns, or the two wait on each other.
+    """
     await async_register_card(hass)
+
+    async def _import_after_setup() -> None:
+        await asyncio.sleep(0)
+        from .legacy import async_import_smart_water
+
+        await async_import_smart_water(hass)
+
+    hass.async_create_task(_import_after_setup())
     return True
 
 
@@ -184,7 +205,7 @@ async def async_register_card(hass) -> None:
 
     Tests and a core that has not loaded the frontend skip this. The card
     can still be added by hand as a JavaScript module at
-    ``/smart_water_static/smart-water-card.js``.
+    ``/sprinklecast_static/sprinklecast-card.js``.
     """
     if hass.data.get(_FRONTEND_KEY):
         return
@@ -200,15 +221,21 @@ async def async_register_card(hass) -> None:
         await hass.http.async_register_static_paths(
             [
                 StaticPathConfig(
+                    url_path="/sprinklecast_static",
+                    path=str(frontend),
+                    cache_headers=False,
+                ),
+                StaticPathConfig(
                     url_path="/smart_water_static",
                     path=str(frontend),
                     cache_headers=False,
-                )
+                ),
             ]
         )
+        add_extra_js_url(hass, "/sprinklecast_static/sprinklecast-card.js")
         add_extra_js_url(hass, "/smart_water_static/smart-water-card.js")
     except (RuntimeError, ValueError) as err:
-        _LOGGER.debug("Smart Water card was not registered: %s", err)
+        _LOGGER.debug("Sprinklecast card was not registered: %s", err)
         return
     hass.data[_FRONTEND_KEY] = True
 

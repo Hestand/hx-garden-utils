@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from smart_water.cycle_soak import (
+from sprinklecast.cycle_soak import (
     max_cycle_minutes,
     plan_cycles,
     precipitation_rate_in_per_hr,
     resolve_precipitation_rate,
     split_runtime,
 )
-from smart_water.soil import intake_rate_in_per_hr, slope_band
+from sprinklecast.soil import intake_rate_in_per_hr, slope_band
 
 
 @pytest.mark.parametrize(

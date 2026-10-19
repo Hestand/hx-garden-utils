@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from smart_water.learn import should_learn, update_awc_factor
+from sprinklecast.learn import should_learn, update_awc_factor
 
 
 def test_a_wetter_sensor_raises_the_factor_slowly() -> None:

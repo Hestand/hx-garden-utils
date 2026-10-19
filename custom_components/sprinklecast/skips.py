@@ -54,14 +54,6 @@ def safety_reason(inputs: SkipInputs) -> str | None:
         return "Skipped because the rain sensor is wet."
     if inputs.currently_raining:
         return "Skipped because it is raining."
-    if (
-        inputs.recent_rain_skip_mm is not None
-        and inputs.recent_rain_mm >= inputs.recent_rain_skip_mm
-    ):
-        return (
-            f"Skipped because {inputs.recent_rain_mm:.1f} mm of rain fell "
-            f"in the last {inputs.recent_rain_hours} hours."
-        )
     readings = [value for value in (inputs.temp_f, inputs.forecast_low_f) if value is not None]
     if inputs.freeze_f is not None and readings and min(readings) <= inputs.freeze_f:
         coldest = min(readings)

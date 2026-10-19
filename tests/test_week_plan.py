@@ -11,7 +11,7 @@ from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.smart_water.const import (
+from custom_components.sprinklecast.const import (
     CONF_ALLOWED_WEEKDAYS,
     CONF_ELEVATION_M,
     CONF_MODE,
@@ -26,8 +26,8 @@ from custom_components.smart_water.const import (
     DOMAIN,
     MODE_NOTIFY_ONLY,
 )
-from custom_components.smart_water.planner import build_plan
-from custom_components.smart_water.week_plan import project_week
+from custom_components.sprinklecast.planner import build_plan
+from custom_components.sprinklecast.week_plan import project_week
 from tests.test_planner import _request, _zone
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")

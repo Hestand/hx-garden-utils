@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from smart_water.presets import (
+from sprinklecast.presets import (
     PLANTS,
     SOILS,
     SPRINKLERS,
@@ -19,7 +19,7 @@ from smart_water.presets import (
     sprinkler_efficiency,
     sprinkler_precip,
 )
-from smart_water.soil import crop_coefficient
+from sprinklecast.soil import crop_coefficient
 
 
 def test_every_row_names_a_source() -> None:

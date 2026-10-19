@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from smart_water.balance import (
+from sprinklecast.balance import (
     adjusted_depletion_fraction,
     apply_daily_balance,
     root_zone,

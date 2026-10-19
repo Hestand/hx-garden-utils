@@ -28,6 +28,7 @@ from .const import (
     CONF_SOIL_TYPE,
     CONF_SUN_EXPOSURE,
     DOMAIN,
+    LEGACY_DOMAIN,
     SERVICE_CALCULATE_PLAN,
     SERVICE_MARK_WATERED,
     SERVICE_PAUSE_ZONE,
@@ -82,7 +83,7 @@ def _find_zone(
             }:
                 matches.append((entry, coordinator, subentry.subentry_id))
     if not matches:
-        raise ServiceValidationError(f"No Smart Water zone named {zone_name!r}.")
+        raise ServiceValidationError(f"No Sprinklecast zone named {zone_name!r}.")
     if len(matches) > 1:
         raise ServiceValidationError(
             f"More than one zone is named {zone_name!r}. Pass the hub name too."
@@ -123,6 +124,12 @@ def async_setup_services(hass: HomeAssistant) -> None:
     if hass.services.has_service(DOMAIN, SERVICE_CALCULATE_PLAN):
         return
 
+    def _register(*args, **kwargs):
+        """Register on sprinklecast and keep the old smart_water service name."""
+        hass.services.async_register(*args, **kwargs)
+        if args and args[0] == DOMAIN:
+            hass.services.async_register(LEGACY_DOMAIN, *args[1:], **kwargs)
+
     async def calculate_plan(call: ServiceCall) -> None:
         """Rebuild the plan. An automatic hub can arm tonight's run."""
         notify = bool(call.data.get("notify", True))
@@ -133,7 +140,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             if _hub_matches(entry, hub)
         ]
         if not targets:
-            raise ServiceValidationError("No Smart Water hub is loaded.")
+            raise ServiceValidationError("No Sprinklecast hub is loaded.")
         for coordinator in targets:
             await coordinator.async_calculate_plan(notify=notify)
 
@@ -201,7 +208,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             if _hub_matches(entry, hub)
         ]
         if not targets:
-            raise ServiceValidationError("No Smart Water hub is loaded.")
+            raise ServiceValidationError("No Sprinklecast hub is loaded.")
         for coordinator in targets:
             await coordinator.async_stop_all()
 
@@ -220,10 +227,10 @@ def async_setup_services(hass: HomeAssistant) -> None:
             if _hub_matches(entry, call.data.get("hub"))
         ]
         if not matches:
-            raise ServiceValidationError("No Smart Water hub is loaded.")
+            raise ServiceValidationError("No Sprinklecast hub is loaded.")
         if len(matches) > 1:
             raise ServiceValidationError(
-                "More than one Smart Water hub is loaded. Pass the hub name."
+                "More than one Sprinklecast hub is loaded. Pass the hub name."
             )
         _entry, coordinator = matches[0]
         try:
@@ -243,7 +250,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
     number = vol.All(vol.Coerce(float), vol.Range(min=0, max=500))
     days = vol.All(vol.Coerce(int), vol.Range(min=0, max=365))
     percent = vol.All(vol.Coerce(float), vol.Range(min=0, max=300))
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_CALCULATE_PLAN,
         calculate_plan,
@@ -254,7 +261,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_RESET_BUCKET,
         reset_bucket,
@@ -265,7 +272,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_SET_BUCKET,
         set_bucket,
@@ -278,7 +285,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_MARK_WATERED,
         mark_watered,
@@ -291,7 +298,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_SKIP_ZONE,
         skip_zone,
@@ -303,7 +310,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_PAUSE_ZONE,
         pause_zone,
@@ -315,7 +322,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_SET_ADJUSTMENT,
         set_adjustment,
@@ -327,7 +334,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_RUN_NOW,
         run_now,
@@ -338,7 +345,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_SIMULATE,
         simulate,
@@ -353,13 +360,13 @@ def async_setup_services(hass: HomeAssistant) -> None:
         ),
         supports_response=SupportsResponse.OPTIONAL,
     )
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_STOP_ALL,
         stop_all,
         schema=vol.Schema({vol.Optional("hub"): str}),
     )
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_RESET_LEARNING,
         reset_learning,
@@ -385,11 +392,11 @@ def async_setup_services(hass: HomeAssistant) -> None:
             if _hub_matches(entry, hub)
         ]
         if not targets:
-            raise ServiceValidationError("No Smart Water hub is loaded.")
+            raise ServiceValidationError("No Sprinklecast hub is loaded.")
         for coordinator in targets:
             await coordinator.async_reset_flow(None)
 
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_RESET_FLOW,
         reset_flow,
@@ -432,7 +439,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError(str(err)) from err
 
     minutes = vol.All(vol.Coerce(float), vol.Range(min=1, max=180))
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_START_AUDIT,
         start_audit,
@@ -444,7 +451,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
     )
-    hass.services.async_register(
+    _register(
         DOMAIN,
         SERVICE_SUBMIT_AUDIT,
         submit_audit,
@@ -464,7 +471,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         ),
         supports_response=SupportsResponse.OPTIONAL,
     )
-    _LOGGER.debug("Registered Smart Water services")
+    _LOGGER.debug("Registered Sprinklecast services")
 
 
 def _cup_readings(value: Any) -> list[float]:
@@ -501,6 +508,7 @@ def _parse_days(value: Any) -> list[dict[str, Any]] | None:
 
 def async_unload_services(hass: HomeAssistant) -> None:
     """Remove services when the last hub unloads."""
-    for service in SERVICES:
-        if hass.services.has_service(DOMAIN, service):
-            hass.services.async_remove(DOMAIN, service)
+    for domain in (DOMAIN, LEGACY_DOMAIN):
+        for service in SERVICES:
+            if hass.services.has_service(domain, service):
+                hass.services.async_remove(domain, service)

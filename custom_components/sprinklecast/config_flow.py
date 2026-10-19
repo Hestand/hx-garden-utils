@@ -1,4 +1,4 @@
-"""Config and options flows for Smart Water.
+"""Config and options flows for Sprinklecast.
 
 The first step chooses a live hub or a simulation hub. A live hub asks for
 a name and either a weather entity or a temperature sensor. A simulation
@@ -84,7 +84,6 @@ from .const import (
     CONF_MAX_DAILY_RUNTIME_MIN,
     CONF_MAX_RUN_MIN,
     CONF_MIN_INTERVAL_DAYS,
-    CONF_MODE,
     CONF_MOISTURE_KIND,
     CONF_MOISTURE_LEARN,
     CONF_MOISTURE_MODE,
@@ -93,6 +92,7 @@ from .const import (
     CONF_MOISTURE_WEIGHT,
     CONF_NOTIFY_TARGET,
     CONF_PLAN_HOUR,
+    CONF_SEND_PLAN_NOTIFICATIONS,
     CONF_PLANT_TYPE,
     CONF_PRECIPITATION_RATE,
     CONF_PRESSURE_SENSOR,
@@ -100,8 +100,6 @@ from .const import (
     CONF_RAIN_AMOUNT_SENSOR,
     CONF_RAIN_KIND,
     CONF_RAIN_SENSOR,
-    CONF_RECENT_RAIN_HOURS,
-    CONF_RECENT_RAIN_MM,
     CONF_ROUND_MINUTES,
     CONF_ROOT_DEPTH_IN,
     CONF_SCENARIO,
@@ -129,8 +127,6 @@ from .const import (
     DEFAULT_ELEVATION_M,
     DEFAULT_FREEZE_SKIP_F,
     DEFAULT_MAX_RUN_MIN,
-    DEFAULT_RECENT_RAIN_HOURS,
-    DEFAULT_RECENT_RAIN_MM,
     DEFAULT_FLOW_KIND,
     DEFAULT_FLOW_LEAK_RATIO,
     DEFAULT_FLOW_LOW_RATIO,
@@ -153,8 +149,6 @@ from .const import (
     FLOW_KINDS,
     FLOW_SCOPE_IRRIGATION,
     FLOW_SCOPES,
-    MODE_NOTIFY_ONLY,
-    MODES,
     MOISTURE_KINDS,
     MOISTURE_MODES,
     RAIN_KINDS,
@@ -249,7 +243,6 @@ _LOCATION_KEYS = (
     CONF_ELEVATION_M,
     CONF_LATITUDE,
     CONF_LONGITUDE,
-    CONF_MODE,
     CONF_NOTIFY_TARGET,
     CONF_RAIN_SENSOR,
     CONF_PLAN_HOUR,
@@ -258,8 +251,6 @@ _LOCATION_KEYS = (
     CONF_ROUND_MINUTES,
     CONF_ALLOWED_WEEKDAYS,
     CONF_FREEZE_SKIP_F,
-    CONF_RECENT_RAIN_HOURS,
-    CONF_RECENT_RAIN_MM,
     CONF_ZONE_MAX_RUN_MIN,
     CONF_HUB_NIGHTLY_CAP_MIN,
     CONF_FORECAST_PROBABILITY_PCT,
@@ -430,7 +421,6 @@ def _location_fields() -> dict[Any, Any]:
         # coordinate precision on Home Assistant 2026.10.
         vol.Optional(CONF_LATITUDE): _number(-90, 90, "any"),
         vol.Optional(CONF_LONGITUDE): _number(-180, 180, "any"),
-        vol.Required(CONF_MODE, default=MODE_NOTIFY_ONLY): _select(MODES, "mode"),
         vol.Optional(CONF_NOTIFY_TARGET): _TEXT,
         vol.Optional(CONF_RAIN_SENSOR): _BINARY,
         vol.Required(CONF_PLAN_HOUR, default=DEFAULT_PLAN_HOUR): _number(0, 23, 1),
@@ -442,12 +432,6 @@ def _location_fields() -> dict[Any, Any]:
         ),
         vol.Required(CONF_FREEZE_SKIP_F, default=DEFAULT_FREEZE_SKIP_F): _number(
             20, 50, 1, "°F"
-        ),
-        vol.Required(CONF_RECENT_RAIN_HOURS, default=DEFAULT_RECENT_RAIN_HOURS): _number(
-            0, 72, 1, "h"
-        ),
-        vol.Required(CONF_RECENT_RAIN_MM, default=DEFAULT_RECENT_RAIN_MM): _number(
-            0, 50, 0.1, "mm"
         ),
         vol.Required(CONF_ZONE_MAX_RUN_MIN, default=DEFAULT_MAX_RUN_MIN): _number(
             1, 240, 1, "min"
@@ -587,6 +571,7 @@ def _hub_schema(
         {
             vol.Required("name"): _TEXT,
             vol.Optional(CONF_WEATHER_ENTITY): _WEATHER,
+            vol.Required(CONF_SEND_PLAN_NOTIFICATIONS, default=True): _BOOL,
             vol.Required(_SECTION_MORNING): section(
                 vol.Schema(_morning_fields(show_start=show_start)),
                 {"collapsed": False},
@@ -614,7 +599,9 @@ def _options_schema(
     show_idle: bool = False,
     show_start: bool = True,
 ) -> vol.Schema:
-    fields: dict[Any, Any] = {}
+    fields: dict[Any, Any] = {
+        vol.Required(CONF_SEND_PLAN_NOTIFICATIONS, default=True): _BOOL,
+    }
     if simulation:
         fields[vol.Required(CONF_SCENARIO, default=DEFAULT_SCENARIO)] = _select(
             SCENARIOS, "scenario"
@@ -649,6 +636,7 @@ def _simulation_schema(*, show_start: bool = False) -> vol.Schema:
                 SCENARIOS, "scenario"
             ),
             vol.Required(CONF_BUCKET, default=DEFAULT_BUCKET): _select(BUCKETS, "bucket"),
+            vol.Required(CONF_SEND_PLAN_NOTIFICATIONS, default=True): _BOOL,
             vol.Required(_SECTION_MORNING): section(
                 vol.Schema(_morning_fields(show_start=show_start)),
                 {"collapsed": False},
@@ -802,9 +790,9 @@ def _has_climate(weather: Any, temperature: Any) -> bool:
 
 
 class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Set up a Smart Water hub."""
+    """Set up a Sprinklecast hub."""
 
-    VERSION = 9
+    VERSION = 10
     MINOR_VERSION = 1
 
     def __init__(self) -> None:
@@ -933,7 +921,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         bucket = str(draft.pop(CONF_BUCKET, DEFAULT_BUCKET))
         draft.pop("dry_run", None)
         draft.pop("schedule_preset", None)
-        draft.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
+        draft.setdefault(CONF_SEND_PLAN_NOTIFICATIONS, True)
         draft.setdefault(CONF_DYNAMIC_START, DEFAULT_DYNAMIC_START)
         _keep_start_time(draft, None)
         draft[CONF_SCENARIO] = scenario
@@ -951,7 +939,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         weather = draft.pop(CONF_WEATHER_ENTITY, None)
         draft.pop("dry_run", None)
         draft.pop("schedule_preset", None)
-        draft.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
+        draft.setdefault(CONF_SEND_PLAN_NOTIFICATIONS, True)
         draft.setdefault(CONF_DYNAMIC_START, DEFAULT_DYNAMIC_START)
         _keep_start_time(draft, None)
         _apply_flow_options(draft)
@@ -1138,7 +1126,7 @@ class SmartWaterOptionsFlow(OptionsFlow):
                 data = _drop_blanks(flat)
                 data.pop("dry_run", None)
                 data.pop("schedule_preset", None)
-                data.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
+                data.setdefault(CONF_SEND_PLAN_NOTIFICATIONS, True)
                 data.setdefault(CONF_DYNAMIC_START, DEFAULT_DYNAMIC_START)
                 _keep_start_time(data, current)
                 _apply_flow_options(data)
@@ -1149,6 +1137,10 @@ class SmartWaterOptionsFlow(OptionsFlow):
         )
         flow_keys = _FLOW_KEYS + (_FLOW_IDLE_KEYS if show_idle else ())
         suggested = user_input or {
+            CONF_SEND_PLAN_NOTIFICATIONS: current.get(
+                CONF_SEND_PLAN_NOTIFICATIONS,
+                bool(str(current.get(CONF_NOTIFY_TARGET) or "").strip()),
+            ),
             CONF_SCENARIO: current.get(CONF_SCENARIO, DEFAULT_SCENARIO),
             CONF_BUCKET: current.get(CONF_BUCKET, DEFAULT_BUCKET),
             _SECTION_SENSORS: _present(current, _SENSOR_KEYS),

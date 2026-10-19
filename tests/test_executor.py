@@ -9,7 +9,7 @@ from homeassistant.helpers.storage import Store
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.smart_water.const import (
+from custom_components.sprinklecast.const import (
     CONF_ELEVATION_M,
     CONF_MODE,
     CONF_PLAN_HOUR,
@@ -175,7 +175,7 @@ async def test_startup_turns_off_a_zone_left_on(
     hass.states.async_set("switch.front_valve", "on")
     entry = _entry()
     entry.add_to_hass(hass)
-    store = Store(hass, 1, f"smart_water.{entry.entry_id}")
+    store = Store(hass, 1, f"sprinklecast.{entry.entry_id}")
     await store.async_save({"watering_entity": "switch.front_valve", "zones": {}})
     calls = _patch(monkeypatch, hass, {"switch.front_valve", "switch.back_valve"})
     assert await hass.config_entries.async_setup(entry.entry_id)

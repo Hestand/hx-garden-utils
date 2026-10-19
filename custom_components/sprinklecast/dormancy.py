@@ -223,15 +223,15 @@ def maintenance_due(
     days_since: int | None,
     deficit_mm: float,
     raw_mm: float,
-    recent_rain_mm: float,
-    recent_rain_skip_mm: float | None,
 ) -> bool:
-    """True when a dormant zone may take a small survival watering."""
+    """True when a dormant zone may take a small survival watering.
+
+    Measured rain is already in the bucket, so a recent-rain depth is not a
+    second gate.
+    """
     if not enabled or status != "dormant":
         return False
     if deficit_mm < raw_mm:
-        return False
-    if recent_rain_skip_mm is not None and recent_rain_mm >= recent_rain_skip_mm:
         return False
     if days_since is not None and days_since < MAINTENANCE_INTERVAL_DAYS:
         return False

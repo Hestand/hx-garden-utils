@@ -1,5 +1,5 @@
 {
-  "name": "Smart Water",
+  "name": "Sprinklecast",
   "content_in_root": false,
   "render_readme": true,
   "homeassistant": "2025.3.0"

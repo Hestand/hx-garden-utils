@@ -6,9 +6,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from smart_water.balance import root_zone
-from smart_water.planner import PlanRequest, ZoneRequest, build_plan
-from smart_water.safety import EXECUTION_IMPLEMENTED, block_reason, would_execute
+from sprinklecast.balance import root_zone
+from sprinklecast.planner import PlanRequest, ZoneRequest, build_plan
+from sprinklecast.safety import EXECUTION_IMPLEMENTED, block_reason, would_execute
 
 
 def _zone(**overrides: object) -> ZoneRequest:
@@ -62,10 +62,9 @@ def _request(*zones: ZoneRequest, **overrides: object) -> PlanRequest:
 
 def test_automatic_off_does_not_report_that_it_would_water() -> None:
     assert EXECUTION_IMPLEMENTED is True
-    assert "automatic watering is off" in block_reason(automatic=False, mode="auto")
-    assert would_execute(automatic=False, mode="auto") is False
-    assert would_execute(automatic=True, mode="auto") is True
-    assert would_execute(automatic=True, mode="off") is False
+    assert "automatic watering is off" in block_reason(automatic=False)
+    assert would_execute(automatic=False) is False
+    assert would_execute(automatic=True) is True
     plan = build_plan(_request())
     assert plan.would_execute is False
     assert plan.automatic is False

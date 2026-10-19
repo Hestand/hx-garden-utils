@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0E7FB8"/>
+      <stop offset="1" stop-color="#0A5C8F"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFC531"/>
+      <stop offset="1" stop-color="#FF8A1F"/>
+    </linearGradient>
+    <clipPath id="drop">
+      <path d="M128 10 C128 10 42 100 42 160 A86 86 0 0 0 214 160 C214 100 128 10 128 10 Z"/>
+    </clipPath>
+  </defs>
+  <path d="M128 10 C128 10 42 100 42 160 A86 86 0 0 0 214 160 C214 100 128 10 128 10 Z" fill="url(#water)"/>
+  <g clip-path="url(#drop)">
+    <circle cx="128" cy="190" r="50" fill="url(#sun)"/>
+    <path d="M92 214 Q88 176 70 150 Q104 172 108 212 Z" fill="#5CC461"/>
+    <path d="M118 210 Q122 160 146 128 Q138 170 136 210 Z" fill="#5CC461"/>
+    <path d="M150 214 Q160 178 188 160 Q170 186 166 214 Z" fill="#5CC461"/>
+    <path d="M30 206 Q128 186 226 206 L226 260 L30 260 Z" fill="#3FA34D"/>
+  </g>
+  <path d="M96 74 Q78 98 72 122" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="10" stroke-linecap="round" fill="none"/>
+</svg>

@@ -50,8 +50,14 @@ async def async_setup_entry(
 ) -> None:
     """Create hub sensors and one set of sensors per zone."""
     coordinator = entry.runtime_data
+    registry = er.async_get(hass)
+    for platform in (DOMAIN, "smart_water"):
+        mode_entity = registry.async_get_entity_id(
+            "sensor", platform, f"{entry.entry_id}_mode"
+        )
+        if mode_entity is not None:
+            registry.async_remove(mode_entity)
     hub_sensors: list[SensorEntity] = [
-        ModeSensor(coordinator),
         TonightPlanSensor(coordinator),
         ET0Sensor(coordinator),
         RainSensor(coordinator),
@@ -99,38 +105,6 @@ async def async_setup_entry(
             for suffix in ("flow", "learned_gpm", "last_run_gpm"):
                 _drop_sensor(hass, f"{prefix}_{suffix}")
         async_add_entities(zone_sensors, config_subentry_id=zone_id)
-
-
-class ModeSensor(SmartWaterHubEntity, SensorEntity):
-    """Hub mode: auto, notify_only, or off. Dry-run is an attribute."""
-
-    _attr_translation_key = "mode"
-    _attr_icon = "mdi:tune"
-
-    def __init__(self, coordinator) -> None:
-        """Set the unique id."""
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_mode"
-
-    @property
-    def native_value(self) -> str | None:
-        """Return the configured mode."""
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.mode
-
-    @property
-    def extra_state_attributes(self) -> dict[str, object]:
-        """Expose the execution guard next to the mode."""
-        data = self.coordinator.data
-        if data is None:
-            return {}
-        return {
-            "automatic": data.automatic,
-            "would_execute": data.would_execute,
-            "block_reason": data.block_reason,
-            "last_error": data.last_error,
-        }
 
 
 class TonightPlanSensor(SmartWaterHubEntity, SensorEntity):

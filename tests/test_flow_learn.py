@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from smart_water.flow_learn import accept_sample, robust_gpm, run_status
+from sprinklecast.flow_learn import accept_sample, robust_gpm, run_status
 
 
 def _learn(values: list[float]) -> list[float]:

@@ -6,8 +6,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from smart_water.solar import next_sunrise, sunrise_utc
-from smart_water.units import (
+from sprinklecast.solar import next_sunrise, sunrise_utc
+from sprinklecast.units import (
     depth_mm,
     pressure_kpa,
     solar_parts,

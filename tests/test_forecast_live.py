@@ -15,7 +15,7 @@ from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.smart_water.const import (
+from custom_components.sprinklecast.const import (
     CONF_ELEVATION_M,
     CONF_MODE,
     CONF_PLANT_TYPE,

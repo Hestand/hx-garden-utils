@@ -1,15 +1,19 @@
-"""Constants for the Smart Water integration."""
+"""Constants for the Sprinklecast integration."""
 
 from __future__ import annotations
 
-DOMAIN = "smart_water"
-NAME = "Smart Water"
-VERSION = "0.11.1"
+DOMAIN = "sprinklecast"
+NAME = "Sprinklecast"
+VERSION = "0.12.0"
 
 # Retired option key. v0.5 stores the automatic-watering switch in the hub
 # store (default off) and drops this option on migration.
 CONF_DRY_RUN = "dry_run"
 CONF_MODE = "mode"
+# Evening plan notification. Independent of the automatic-watering switch.
+CONF_SEND_PLAN_NOTIFICATIONS = "send_plan_notifications"
+# Domain used before 0.12. Kept so the import can find old entries and services.
+LEGACY_DOMAIN = "smart_water"
 CONF_WEATHER_ENTITY = "weather_entity"
 CONF_SIMULATION = "simulation"
 CONF_SCENARIO = "scenario"
@@ -231,7 +235,7 @@ EVENT_BUDGET_ALERT = "smart_water_budget_alert"
 EVENT_WEEKLY_SUMMARY = "smart_water_weekly_summary"
 EVENT_FREEZE_ALERT = "smart_water_freeze_alert"
 
-PLATFORMS: list[str] = ["sensor", "switch", "number", "button"]
+PLATFORMS: list[str] = ["sensor", "switch", "number", "button", "calendar"]
 
 # FAO-56 ignores daily rain below about 0.2 × ET0 (Chapter 8).
 RAIN_IGNORE_FRACTION_OF_ET0 = 0.2

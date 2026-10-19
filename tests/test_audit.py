@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from smart_water.audit import audit_result, du_lq
+from sprinklecast.audit import audit_result, du_lq
 
 
 def test_uniformity_uses_the_lowest_quarter() -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1] / "custom_components" / "smart_water"
+ROOT = Path(__file__).resolve().parents[1] / "custom_components" / "sprinklecast"
 CALL = re.compile(
     r"""async_call\(\s*['\"](valve|switch|hydrawise|input_boolean)['\"]""",
     re.MULTILINE,
@@ -29,10 +29,8 @@ def test_only_the_executor_calls_zone_entities() -> None:
 
 
 def test_execution_requires_the_automatic_switch() -> None:
-    from smart_water.safety import EXECUTION_IMPLEMENTED, would_execute
+    from sprinklecast.safety import EXECUTION_IMPLEMENTED, would_execute
 
     assert EXECUTION_IMPLEMENTED is True
-    assert would_execute(automatic=False, mode="auto") is False
-    assert would_execute(automatic=True, mode="auto") is True
-    assert would_execute(automatic=True, mode="notify_only") is True
-    assert would_execute(automatic=True, mode="off") is False
+    assert would_execute(automatic=False) is False
+    assert would_execute(automatic=True) is True
