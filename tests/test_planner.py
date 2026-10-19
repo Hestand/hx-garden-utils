@@ -81,7 +81,7 @@ def test_clay_loam_plan_uses_four_minute_cycles_and_starts_on_time() -> None:
     zone = plan.zones[0]
     assert zone.scheduled is True
     assert zone.max_cycle_min == 4
-    assert zone.soak_min == 60
+    assert zone.soak_min == 30
     assert zone.cycles
     assert all(minutes <= 4 for minutes in zone.cycles)
     assert all(isinstance(minutes, int) for minutes in zone.cycles)

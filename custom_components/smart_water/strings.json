@@ -76,9 +76,6 @@
               "mode": "Mode",
               "notify_target": "Notify service",
               "rain_sensor": "Rain sensor",
-              "start_time": "Start time",
-              "finish_time": "Finish by",
-              "earliest_start": "Earliest start",
               "plan_hour": "Evening plan hour",
               "forecast_skip_mm": "Skip when forecast rain is at least",
               "max_daily_runtime_min": "Max minutes this morning",
@@ -115,9 +112,6 @@
               "longitude": "Leave empty to use Home Assistant's location.",
               "notify_target": "Example: mobile_app_phone, or notify.mobile_app_phone. Empty sends nothing.",
               "forecast_skip_mm": "Optional depth. Leave empty to wait only when expected rain covers the water the zone needs. Forecast rain is never counted as water already in the soil.",
-              "start_time": "Local time the valves should open. Default 05:00.",
-              "finish_time": "The run must end by this time. Default 09:00. It never runs later.",
-              "earliest_start": "If the zones do not fit, the run may start this early. Default 04:00. Anything that does not fit waits for the next allowed day.",
               "round_minutes": "On keeps every cycle a whole minute. Off keeps tenths of a minute.",
               "allowed_weekdays": "Every day is selected by default. Clear a day to skip it. An empty selection waters no day.",
               "blackout_start_hour": "First local hour when watering is not allowed. Leave empty for no blackout.",
@@ -149,6 +143,22 @@
               "plan_hour": "The evening hour when today's water loss is saved and the morning plan is built. Default 23.",
               "max_daily_runtime_min": "Optional limit on valve-on minutes for every zone together this morning."
             }
+          },
+          "morning": {
+            "name": "Morning watering",
+            "description": "When the valves may open. Dynamic start time aims to finish at local sunrise. Don't start before is a hard limit in every mode.",
+            "data": {
+              "dynamic_start": "Dynamic start time",
+              "earliest_start": "Don't start before",
+              "finish_time": "Finish by",
+              "start_time": "Start time"
+            },
+            "data_description": {
+              "dynamic_start": "On for a new hub. The morning aims to finish at local sunrise for that day, so the clock moves with the season and daylight saving. The start is sunrise minus every cycle and every soak. If that would be earlier than Don't start before, watering starts then and may run past sunrise, but it still ends by the finish time. Anything that does not fit waits for the next allowed day. Off uses the start time, and cycles that would pass the finish time wait. The start time is hidden while this is on.",
+              "earliest_start": "Hard limit. Watering never starts earlier than this: not with a dynamic start, a fixed start, the year-ahead projection, or a later morning catching up minutes that did not fit. Default 04:00. If the work does not fit, the rest waits for the next allowed day.",
+              "finish_time": "Latest the run may end. Default 09:00. With dynamic start on, this is the buffer after sunrise. The run never goes later.",
+              "start_time": "Shown only when Dynamic start time is off. Local time the valves open. Default 05:00. Not used while Dynamic start time is on."
+            }
           }
         }
       },
@@ -176,9 +186,6 @@
               "mode": "Mode",
               "notify_target": "Notify service",
               "rain_sensor": "Rain sensor",
-              "start_time": "Start time",
-              "finish_time": "Finish by",
-              "earliest_start": "Earliest start",
               "plan_hour": "Evening plan hour",
               "forecast_skip_mm": "Skip when forecast rain is at least",
               "max_daily_runtime_min": "Max minutes this morning",
@@ -244,10 +251,23 @@
               "max_daily_runtime_min": "Optional limit on valve-on minutes for every zone together this morning.",
               "round_minutes": "On keeps every cycle a whole minute. Off keeps tenths of a minute.",
               "elevation_m": "Meters above sea level. Used when estimating how much water a reference lawn loses (ET0) and no pressure sensor is set.",
-              "notify_target": "Example: mobile_app_phone, or notify.mobile_app_phone. Empty sends nothing.",
-              "start_time": "Local time the valves should open. Default 05:00.",
-              "finish_time": "The run must end by this time. Default 09:00. It never runs later.",
-              "earliest_start": "If the zones do not fit, the run may start this early. Default 04:00. Anything that does not fit waits for the next allowed day."
+              "notify_target": "Example: mobile_app_phone, or notify.mobile_app_phone. Empty sends nothing."
+            }
+          },
+          "morning": {
+            "name": "Morning watering",
+            "description": "When the valves may open. Dynamic start time aims to finish at local sunrise. Don't start before is a hard limit in every mode.",
+            "data": {
+              "dynamic_start": "Dynamic start time",
+              "earliest_start": "Don't start before",
+              "finish_time": "Finish by",
+              "start_time": "Start time"
+            },
+            "data_description": {
+              "dynamic_start": "On for a new hub. The morning aims to finish at local sunrise for that day, so the clock moves with the season and daylight saving. The start is sunrise minus every cycle and every soak. If that would be earlier than Don't start before, watering starts then and may run past sunrise, but it still ends by the finish time. Anything that does not fit waits for the next allowed day. Off uses the start time, and cycles that would pass the finish time wait. The start time is hidden while this is on.",
+              "earliest_start": "Hard limit. Watering never starts earlier than this: not with a dynamic start, a fixed start, the year-ahead projection, or a later morning catching up minutes that did not fit. Default 04:00. If the work does not fit, the rest waits for the next allowed day.",
+              "finish_time": "Latest the run may end. Default 09:00. With dynamic start on, this is the buffer after sunrise. The run never goes later.",
+              "start_time": "Shown only when Dynamic start time is off. Local time the valves open. Default 05:00. Not used while Dynamic start time is on."
             }
           }
         }
@@ -379,9 +399,6 @@
               "mode": "Mode",
               "notify_target": "Notify service",
               "rain_sensor": "Rain sensor",
-              "start_time": "Start time",
-              "finish_time": "Finish by",
-              "earliest_start": "Earliest start",
               "plan_hour": "Evening plan hour",
               "forecast_skip_mm": "Skip when forecast rain is at least",
               "max_daily_runtime_min": "Max minutes this morning",
@@ -447,12 +464,25 @@
               "round_minutes": "On keeps every cycle a whole minute. Off keeps tenths of a minute.",
               "elevation_m": "Meters above sea level. Used when estimating how much water a reference lawn loses (ET0) and no pressure sensor is set.",
               "latitude": "Leave empty to use Home Assistant's location. Set both latitude and longitude, or neither.",
-              "longitude": "Leave empty to use Home Assistant's location.",
-              "start_time": "Local time the valves should open. Default 05:00.",
-              "finish_time": "The run must end by this time. Default 09:00. It never runs later.",
-              "earliest_start": "If the zones do not fit, the run may start this early. Default 04:00. Anything that does not fit waits for the next allowed day."
+              "longitude": "Leave empty to use Home Assistant's location."
             },
             "description": "Defaults match the central Texas design site (about 219 m) and water any day. Automatic watering is a switch and stays off until you turn it on."
+          },
+          "morning": {
+            "name": "Morning watering",
+            "description": "When the valves may open. Dynamic start time aims to finish at local sunrise. Don't start before is a hard limit in every mode.",
+            "data": {
+              "dynamic_start": "Dynamic start time",
+              "earliest_start": "Don't start before",
+              "finish_time": "Finish by",
+              "start_time": "Start time"
+            },
+            "data_description": {
+              "dynamic_start": "On for a new hub. The morning aims to finish at local sunrise for that day, so the clock moves with the season and daylight saving. The start is sunrise minus every cycle and every soak. If that would be earlier than Don't start before, watering starts then and may run past sunrise, but it still ends by the finish time. Anything that does not fit waits for the next allowed day. Off uses the start time, and cycles that would pass the finish time wait. The start time is hidden while this is on.",
+              "earliest_start": "Hard limit. Watering never starts earlier than this: not with a dynamic start, a fixed start, the year-ahead projection, or a later morning catching up minutes that did not fit. Default 04:00. If the work does not fit, the rest waits for the next allowed day.",
+              "finish_time": "Latest the run may end. Default 09:00. With dynamic start on, this is the buffer after sunrise. The run never goes later.",
+              "start_time": "Shown only when Dynamic start time is off. Local time the valves open. Default 05:00. Not used while Dynamic start time is on."
+            }
           }
         },
         "error": {

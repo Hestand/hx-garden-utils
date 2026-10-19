@@ -35,6 +35,7 @@ from .flow import expected_gallons
 from .planner import NightPlan, PlanRequest, build_plan, build_zone_request
 from .presets import resolved_root_depth_in, stored_float
 from .schedule import morning_window, rules_for
+from .solar import local_sunrise
 from .units import inches_to_mm, mm_to_inches, speed_m_s, temperature_c
 
 BUCKET_FULL = "full"
@@ -188,6 +189,7 @@ class SimSettings:
     wind_height_m: float = DEFAULT_WIND_HEIGHT_M
     mode: str = "notify_only"
     dry_run: bool = False
+    dynamic_start: bool = False
 
 
 def preset_week(scenario: str) -> tuple[WeatherDay, ...]:
@@ -544,12 +546,26 @@ def _plan_evening(
         settings.start_time,
         settings.finish_time,
     )
+    sunrise = None
+    if settings.dynamic_start:
+        try:
+            sunrise = local_sunrise(
+                settings.latitude,
+                settings.longitude,
+                start_at.date(),
+                ZoneInfo(settings.timezone),
+                settings.elevation_m,
+            )
+        except ValueError:
+            sunrise = None
     plan = build_plan(
         PlanRequest(
             zones=tuple(requests),
             start_at=start_at,
             finish_by=finish_by,
             earliest_start=earliest,
+            dynamic_start=settings.dynamic_start,
+            sunrise_at=sunrise,
             forecast_precip_mm=tomorrow_rain_mm,
             forecast_skip_mm=settings.forecast_skip_mm,
             hub_rain_wet=False,

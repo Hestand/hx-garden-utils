@@ -27,8 +27,8 @@ INTAKE_IN_PER_HR: dict[str, tuple[float, float, float, float]] = {
     key: row.intake_in_hr for key, row in SOILS.items()
 }
 
-# Soils that get the longer EPA WaterSense soak (60 min). Others use 30 min.
-LONG_SOAK_SOILS = frozenset({"clay", "clay_loam", "silt_loam_compact"})
+# Clay, clay loam, and compact silt loam used a 60-minute soak through 0.10.1.
+# Every soil now uses 30 minutes unless the zone stores its own soak.
 
 
 @dataclass(frozen=True)
@@ -73,9 +73,15 @@ def intake_rate_in_per_hr(soil_type: str, slope_pct: float) -> float:
 
 
 def default_soak_minutes(soil_type: str) -> int:
-    """Return the EPA WaterSense soak: 60 minutes on slow soils, else 30."""
-    if soil_type in LONG_SOAK_SOILS:
-        return 60
+    """Return the soak used when a zone leaves Soak blank.
+
+    30 minutes for every soil, including clay, clay loam, and compact silt
+    loam. A stored soak on the zone replaces this. Drip and bubbler still
+    soak 0 unless that zone sets a number. ``soil_type`` is kept so a zone
+    that already calls this with its soil still gets the preset.
+    """
+    if not soil_type:
+        raise ValueError("soil type is required")
     return 30
 
 
@@ -100,7 +106,6 @@ def crop_coefficient(
 __all__ = [
     "AWC_RANGE",
     "INTAKE_IN_PER_HR",
-    "LONG_SOAK_SOILS",
     "PLANT_TYPES",
     "PLANTS",
     "SOIL_TYPES",

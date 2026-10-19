@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "smart_water"
 NAME = "Smart Water"
-VERSION = "0.10.1"
+VERSION = "0.11.0"
 
 # Retired option key. v0.5 stores the automatic-watering switch in the hub
 # store (default off) and drops this option on migration.
@@ -35,6 +35,7 @@ CONF_PLAN_HOUR = "plan_hour"
 CONF_START_TIME = "start_time"
 CONF_FINISH_TIME = "finish_time"
 CONF_EARLIEST_START = "earliest_start"
+CONF_DYNAMIC_START = "dynamic_start"
 CONF_FORECAST_SKIP_MM = "forecast_skip_mm"
 CONF_MAX_DAILY_RUNTIME_MIN = "max_daily_runtime_min"
 CONF_TEMPERATURE_SENSOR = "temperature_sensor"
@@ -132,6 +133,9 @@ DEFAULT_PLAN_HOUR = 23
 DEFAULT_START_TIME = "05:00:00"
 DEFAULT_FINISH_TIME = "09:00:00"
 DEFAULT_EARLIEST_START = "04:00:00"
+# New hubs aim to finish at sunrise. An upgraded hub is migrated to off so
+# it keeps the 0.10.1 fixed start until the user turns this on.
+DEFAULT_DYNAMIC_START = True
 DEFAULT_WIND_HEIGHT_M = 2.0
 DEFAULT_EFFICIENCY = 1.0
 DEFAULT_PRIORITY = 10

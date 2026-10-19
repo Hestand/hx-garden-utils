@@ -15,6 +15,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event
 
 from .const import (
+    CONF_DYNAMIC_START,
     CONF_EARLIEST_HOUR,
     CONF_EARLIEST_START,
     CONF_FINISH_TIME,
@@ -89,8 +90,11 @@ async def async_migrate_entry(hass, entry) -> bool:
     Version 8 moves the first zone flow sensor onto the hub. The meter is
     treated as irrigation-only so an existing idle-flow alert stays on until
     the user picks whole-home. Other zone fields are left as stored.
+
+    Version 9 writes dynamic start time off. An existing hub keeps the
+    0.10.1 fixed start. Zone data is not rewritten.
     """
-    if entry.version > 8:
+    if entry.version > 9:
         return False
     if entry.version < 4:
         hass.config_entries.async_update_entry(
@@ -122,7 +126,26 @@ async def async_migrate_entry(hass, entry) -> bool:
             version=8,
             minor_version=1,
         )
+    if entry.version < 9:
+        hass.config_entries.async_update_entry(
+            entry,
+            options=_migrate_dynamic_start(dict(entry.options)),
+            version=9,
+            minor_version=1,
+        )
     return True
+
+
+def _migrate_dynamic_start(options: dict) -> dict:
+    """Record a fixed start for hubs that already exist.
+
+    New installs default dynamic start on. Writing false here keeps the
+    0.10.1 rule until the user turns the option on. The key is stored so a
+    missing value is not read as the new-install default.
+    """
+    updated = dict(options)
+    updated[CONF_DYNAMIC_START] = False
+    return updated
 
 
 def _migrate_hub_flow(hass, entry) -> dict:

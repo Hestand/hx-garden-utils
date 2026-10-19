@@ -102,7 +102,8 @@ async def test_six_zones_move_the_first_flow_meter_onto_the_hub(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert entry.version == 8
+    assert entry.version == 9
+    assert entry.options["dynamic_start"] is False
     assert entry.options[CONF_FLOW_SENSOR] == "sensor.main_flow"
     assert entry.options[CONF_FLOW_KIND] == "rate"
     assert entry.options[CONF_FLOW_SCOPE] == FLOW_SCOPE_IRRIGATION

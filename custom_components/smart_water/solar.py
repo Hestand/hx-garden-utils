@@ -1,10 +1,9 @@
-"""Civil sunrise approximation.
+"""Sunrise for the dynamic morning window, plus a rough civil estimate.
 
-The watering window is a clock, not this sunrise. The calculation stays for
-callers that want a rough time: declination from the day of year, the
-equation of time, and a zenith of 90.833° so refraction and the solar radius
-are included. It is accurate to roughly ten minutes. Longitude is degrees
-east (negative in the Americas).
+``local_sunrise`` uses astral, the same helper Home Assistant uses for sun
+events, so each calendar day has its own sunrise in the hub's time zone.
+``sunrise_utc`` is the older approximation (about ten minutes). Longitude is
+degrees east (negative in the Americas).
 """
 
 from __future__ import annotations
@@ -39,6 +38,25 @@ def sunrise_utc(latitude_deg: float, longitude_east: float, day: date) -> dateti
     hours = _sunrise_hours_utc(latitude_deg, longitude_east, day)
     midnight = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
     return midnight + timedelta(hours=hours)
+
+
+def local_sunrise(
+    latitude_deg: float,
+    longitude_east: float,
+    day: date,
+    tz: object,
+    elevation_m: float = 0.0,
+) -> datetime:
+    """Sunrise for one calendar day, from astral, in ``tz``.
+
+    This is the same calculation Home Assistant uses for sun events. The
+    rough ``sunrise_utc`` estimate above is not used for the watering window.
+    """
+    from astral import Observer
+    import astral.sun
+
+    observer = Observer(float(latitude_deg), float(longitude_east), float(elevation_m))
+    return astral.sun.sunrise(observer, day, tzinfo=tz)
 
 
 def next_sunrise(

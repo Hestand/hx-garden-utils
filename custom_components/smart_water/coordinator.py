@@ -35,6 +35,7 @@ from .const import (
     CONF_DEPLETION,
     CONF_DORMANT_BELOW_F,
     CONF_DRIP_IGNORES_SCHEDULE,
+    CONF_DYNAMIC_START,
     CONF_EARLIEST_START,
     CONF_EFFICIENCY,
     CONF_ELEVATION_M,
@@ -196,6 +197,7 @@ from .presets import (
 )
 from .safety import would_execute
 from .schedule import morning_window, rules_for, shift_minutes
+from .solar import local_sunrise
 from .skips import SkipInputs, safety_reason
 from .week_plan import OUTLOOK_DAYS, project_week, split_outlook
 from .store import SmartWaterStore
@@ -1359,6 +1361,38 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             month=month,
         )
 
+    def _sun_place(self) -> tuple[float, float, float] | None:
+        """Latitude, longitude, and elevation used for sunrise.
+
+        A hub latitude override uses the hub elevation. Otherwise this is
+        Home Assistant's location and elevation.
+        """
+        options = self._options()
+        latitude = options.get(CONF_LATITUDE, self.hass.config.latitude)
+        longitude = options.get(CONF_LONGITUDE, self.hass.config.longitude)
+        if latitude in (None, "") or longitude in (None, ""):
+            return None
+        if options.get(CONF_LATITUDE) not in (None, ""):
+            elevation = float(
+                options.get(CONF_ELEVATION_M, self.hass.config.elevation or 0)
+            )
+        else:
+            elevation = float(self.hass.config.elevation or 0)
+        return float(latitude), float(longitude), elevation
+
+    def _sunrise_on(
+        self,
+        day: date,
+        place: tuple[float, float, float] | None,
+    ) -> datetime | None:
+        """Local sunrise for ``day``, or None when the location is missing."""
+        if place is None:
+            return None
+        try:
+            return local_sunrise(place[0], place[1], day, self._timezone(), place[2])
+        except ValueError:
+            return None
+
     def _build_plan(
         self,
         *,
@@ -1420,6 +1454,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             _optional_int(options, CONF_BLACKOUT_START_HOUR),
             _optional_int(options, CONF_BLACKOUT_END_HOUR),
         )
+        dynamic = bool(options.get(CONF_DYNAMIC_START, False))
+        sun = self._sun_place()
         plan = build_plan(
             PlanRequest(
                 zones=tuple(requests),
@@ -1438,6 +1474,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 whole_minutes=bool(options.get(CONF_ROUND_MINUTES, DEFAULT_ROUND_MINUTES)),
                 max_run_min=self.hub_nightly_cap(),
                 hourly_wind=tuple(observation.hourly_wind),
+                dynamic_start=dynamic,
+                sunrise_at=self._sunrise_on(start_at.date(), sun) if dynamic else None,
             )
         )
         try:
@@ -1476,6 +1514,10 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 defer_days=self._defer_days_before(now),
                 days=OUTLOOK_DAYS,
                 et_factors=self._et_factors(observation, now.date(), et0),
+                dynamic_start=dynamic,
+                latitude=None if sun is None else sun[0],
+                longitude=None if sun is None else sun[1],
+                elevation_m=0.0 if sun is None else sun[2],
             )
             self._week, self._outlook = split_outlook(
                 full, timezone=self._timezone().key
@@ -2603,6 +2645,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 wind_height_m=float(options.get(CONF_WIND_HEIGHT_M, DEFAULT_WIND_HEIGHT_M)),
                 mode=str(options.get(CONF_MODE, MODE_NOTIFY_ONLY)),
                 dry_run=False,
+                dynamic_start=bool(options.get(CONF_DYNAMIC_START, False)),
             ),
             bucket=chosen_bucket,
             scenario=scenario_key,

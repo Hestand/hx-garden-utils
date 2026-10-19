@@ -46,6 +46,7 @@ from .const import (
     CONF_DEPLETION,
     CONF_DORMANT_BELOW_F,
     CONF_DRIP_IGNORES_SCHEDULE,
+    CONF_DYNAMIC_START,
     CONF_EARLIEST_START,
     CONF_EFFICIENCY,
     CONF_ELEVATION_M,
@@ -141,6 +142,7 @@ from .const import (
     DEFAULT_RAIN_KIND,
     DEFAULT_ROUND_MINUTES,
     DEFAULT_SPRINKLER_TYPE,
+    DEFAULT_DYNAMIC_START,
     DEFAULT_EARLIEST_START,
     DEFAULT_FINISH_TIME,
     DEFAULT_START_TIME,
@@ -181,12 +183,15 @@ from .soil import PLANT_TYPES, SOIL_TYPES, SUN_EXPOSURES
 
 _SECTION_SENSORS = "sensors"
 _SECTION_LOCATION = "location"
+_SECTION_MORNING = "morning"
 _SECTION_FLOW = "flow_meter"
 _SECTION_PLANT = "plant_overrides"
 _SECTION_HARDWARE = "hardware_overrides"
 _SECTION_MEASURE = "measurement_overrides"
 
-_HUB_SECTIONS = frozenset({_SECTION_SENSORS, _SECTION_LOCATION, _SECTION_FLOW})
+_HUB_SECTIONS = frozenset(
+    {_SECTION_SENSORS, _SECTION_LOCATION, _SECTION_FLOW, _SECTION_MORNING}
+)
 _ZONE_SECTIONS = frozenset({_SECTION_PLANT, _SECTION_HARDWARE, _SECTION_MEASURE})
 
 _PLANT_KEYS = (
@@ -247,9 +252,6 @@ _LOCATION_KEYS = (
     CONF_MODE,
     CONF_NOTIFY_TARGET,
     CONF_RAIN_SENSOR,
-    CONF_START_TIME,
-    CONF_FINISH_TIME,
-    CONF_EARLIEST_START,
     CONF_PLAN_HOUR,
     CONF_FORECAST_SKIP_MM,
     CONF_MAX_DAILY_RUNTIME_MIN,
@@ -277,6 +279,12 @@ _LOCATION_KEYS = (
     CONF_COST_PER_1000_GAL,
     CONF_WEEKLY_BUDGET_GAL,
     CONF_WEEKLY_SUMMARY,
+)
+_MORNING_KEYS = (
+    CONF_DYNAMIC_START,
+    CONF_EARLIEST_START,
+    CONF_FINISH_TIME,
+    CONF_START_TIME,
 )
 
 _WEATHER = selector.EntitySelector(selector.EntitySelectorConfig(domain="weather"))
@@ -425,11 +433,6 @@ def _location_fields() -> dict[Any, Any]:
         vol.Required(CONF_MODE, default=MODE_NOTIFY_ONLY): _select(MODES, "mode"),
         vol.Optional(CONF_NOTIFY_TARGET): _TEXT,
         vol.Optional(CONF_RAIN_SENSOR): _BINARY,
-        vol.Required(CONF_START_TIME, default=DEFAULT_START_TIME): selector.TimeSelector(),
-        vol.Required(CONF_FINISH_TIME, default=DEFAULT_FINISH_TIME): selector.TimeSelector(),
-        vol.Required(
-            CONF_EARLIEST_START, default=DEFAULT_EARLIEST_START
-        ): selector.TimeSelector(),
         vol.Required(CONF_PLAN_HOUR, default=DEFAULT_PLAN_HOUR): _number(0, 23, 1),
         vol.Optional(CONF_FORECAST_SKIP_MM): _number(0, 100, 0.1, "mm"),
         vol.Optional(CONF_MAX_DAILY_RUNTIME_MIN): _number(1, 600, 1, "min"),
@@ -537,11 +540,57 @@ def _flow_fields(*, show_idle: bool) -> dict[Any, Any]:
     return fields
 
 
-def _hub_schema(*, sensors_collapsed: bool, show_idle: bool = False) -> vol.Schema:
+def _dynamic_enabled(source: dict[str, Any] | None, *, default: bool) -> bool:
+    """True when this form, or the stored options, turn dynamic start on."""
+    if not source:
+        return default
+    nested = source.get(_SECTION_MORNING)
+    if isinstance(nested, dict) and CONF_DYNAMIC_START in nested:
+        return bool(nested[CONF_DYNAMIC_START])
+    if CONF_DYNAMIC_START in source:
+        return bool(source[CONF_DYNAMIC_START])
+    return default
+
+
+def _morning_fields(*, show_start: bool) -> dict[Any, Any]:
+    """Dynamic start, Don't start before, and the finish time.
+
+    The fixed start time is hidden while dynamic start is on. A stored
+    start time is kept so turning the option off later still has a clock.
+    """
+    fields: dict[Any, Any] = {
+        vol.Required(CONF_DYNAMIC_START, default=DEFAULT_DYNAMIC_START): _BOOL,
+        vol.Required(
+            CONF_EARLIEST_START, default=DEFAULT_EARLIEST_START
+        ): selector.TimeSelector(),
+        vol.Required(CONF_FINISH_TIME, default=DEFAULT_FINISH_TIME): selector.TimeSelector(),
+    }
+    if show_start:
+        fields[vol.Required(CONF_START_TIME, default=DEFAULT_START_TIME)] = (
+            selector.TimeSelector()
+        )
+    return fields
+
+
+def _keep_start_time(data: dict[str, Any], previous: dict[str, Any] | None) -> None:
+    """Leave a start time stored even when the field was hidden."""
+    if CONF_START_TIME in data and not _blank(data.get(CONF_START_TIME)):
+        return
+    stored = None if previous is None else previous.get(CONF_START_TIME)
+    data[CONF_START_TIME] = stored or DEFAULT_START_TIME
+
+
+def _hub_schema(
+    *, sensors_collapsed: bool, show_idle: bool = False, show_start: bool = False
+) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required("name"): _TEXT,
             vol.Optional(CONF_WEATHER_ENTITY): _WEATHER,
+            vol.Required(_SECTION_MORNING): section(
+                vol.Schema(_morning_fields(show_start=show_start)),
+                {"collapsed": False},
+            ),
             vol.Required(_SECTION_SENSORS): section(
                 vol.Schema(_sensor_fields()),
                 {"collapsed": sensors_collapsed},
@@ -559,7 +608,11 @@ def _hub_schema(*, sensors_collapsed: bool, show_idle: bool = False) -> vol.Sche
 
 
 def _options_schema(
-    *, sensors_collapsed: bool, simulation: bool = False, show_idle: bool = False
+    *,
+    sensors_collapsed: bool,
+    simulation: bool = False,
+    show_idle: bool = False,
+    show_start: bool = True,
 ) -> vol.Schema:
     fields: dict[Any, Any] = {}
     if simulation:
@@ -577,6 +630,10 @@ def _options_schema(
         vol.Schema(_flow_fields(show_idle=show_idle)),
         {"collapsed": False},
     )
+    fields[vol.Required(_SECTION_MORNING)] = section(
+        vol.Schema(_morning_fields(show_start=show_start)),
+        {"collapsed": False},
+    )
     fields[vol.Required(_SECTION_LOCATION)] = section(
         vol.Schema(_location_fields()),
         {"collapsed": True},
@@ -584,7 +641,7 @@ def _options_schema(
     return vol.Schema(fields)
 
 
-def _simulation_schema() -> vol.Schema:
+def _simulation_schema(*, show_start: bool = False) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required("name"): _TEXT,
@@ -592,6 +649,10 @@ def _simulation_schema() -> vol.Schema:
                 SCENARIOS, "scenario"
             ),
             vol.Required(CONF_BUCKET, default=DEFAULT_BUCKET): _select(BUCKETS, "bucket"),
+            vol.Required(_SECTION_MORNING): section(
+                vol.Schema(_morning_fields(show_start=show_start)),
+                {"collapsed": False},
+            ),
             vol.Required(_SECTION_LOCATION): section(
                 vol.Schema(_location_fields()),
                 {"collapsed": True},
@@ -743,7 +804,7 @@ def _has_climate(weather: Any, temperature: Any) -> bool:
 class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
     """Set up a Smart Water hub."""
 
-    VERSION = 8
+    VERSION = 9
     MINOR_VERSION = 1
 
     def __init__(self) -> None:
@@ -832,6 +893,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
                 _hub_schema(
                     sensors_collapsed=not sensors_open,
                     show_idle=_show_idle(user_input),
+                    show_start=not _dynamic_enabled(user_input, default=True),
                 ),
                 suggested,
             ),
@@ -845,7 +907,9 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         """Name only. Weather, sensors, and valves are not required."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            flat = _flatten(user_input, frozenset({_SECTION_LOCATION}))
+            flat = _flatten(
+                user_input, frozenset({_SECTION_LOCATION, _SECTION_MORNING})
+            )
             if _blank(flat.get(CONF_LATITUDE)) != _blank(flat.get(CONF_LONGITUDE)):
                 errors["base"] = "latitude_pair"
             else:
@@ -853,7 +917,9 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="simulation",
             data_schema=self.add_suggested_values_to_schema(
-                _simulation_schema(),
+                _simulation_schema(
+                    show_start=not _dynamic_enabled(user_input, default=True)
+                ),
                 user_input or {},
             ),
             errors=errors,
@@ -868,6 +934,8 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         draft.pop("dry_run", None)
         draft.pop("schedule_preset", None)
         draft.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
+        draft.setdefault(CONF_DYNAMIC_START, DEFAULT_DYNAMIC_START)
+        _keep_start_time(draft, None)
         draft[CONF_SCENARIO] = scenario
         draft[CONF_BUCKET] = bucket
         return self._queue_zones(
@@ -884,6 +952,8 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         draft.pop("dry_run", None)
         draft.pop("schedule_preset", None)
         draft.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
+        draft.setdefault(CONF_DYNAMIC_START, DEFAULT_DYNAMIC_START)
+        _keep_start_time(draft, None)
         _apply_flow_options(draft)
         data: dict[str, Any] = {}
         if weather:
@@ -1069,15 +1139,21 @@ class SmartWaterOptionsFlow(OptionsFlow):
                 data.pop("dry_run", None)
                 data.pop("schedule_preset", None)
                 data.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
+                data.setdefault(CONF_DYNAMIC_START, DEFAULT_DYNAMIC_START)
+                _keep_start_time(data, current)
                 _apply_flow_options(data)
                 return self.async_create_entry(data=data)
         show_idle = _show_idle(user_input) if user_input else _show_idle(current)
+        show_start = not _dynamic_enabled(
+            user_input if user_input is not None else current, default=False
+        )
         flow_keys = _FLOW_KEYS + (_FLOW_IDLE_KEYS if show_idle else ())
         suggested = user_input or {
             CONF_SCENARIO: current.get(CONF_SCENARIO, DEFAULT_SCENARIO),
             CONF_BUCKET: current.get(CONF_BUCKET, DEFAULT_BUCKET),
             _SECTION_SENSORS: _present(current, _SENSOR_KEYS),
             _SECTION_FLOW: _present(current, flow_keys),
+            _SECTION_MORNING: _present(current, _MORNING_KEYS),
             _SECTION_LOCATION: _present(current, _LOCATION_KEYS),
         }
         sensors_open = bool(current.get(CONF_TEMPERATURE_SENSOR)) or bool(
@@ -1090,6 +1166,7 @@ class SmartWaterOptionsFlow(OptionsFlow):
                     sensors_collapsed=not sensors_open,
                     simulation=simulating,
                     show_idle=show_idle,
+                    show_start=show_start,
                 ),
                 suggested,
             ),

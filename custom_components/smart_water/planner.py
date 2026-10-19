@@ -2,11 +2,15 @@
 
 The planner decides which zones are due, splits each run with cycle-and-soak,
 and lays the cycles on one shared timeline so only one valve is open.
-While one zone soaks, another zone may run. The sequence starts at the
-target start time and must finish by the finish time. If it does not fit,
-it may start earlier, down to the earliest start, and the rest stays in
-the bucket. This module does not call a service. The executor applies the
-timeline when automatic watering is on.
+While one zone soaks, another zone may run. With a fixed start, the
+sequence opens at the start time and must finish by the finish time. Valve
+time that cannot finish by then may open earlier, but never before Don't
+start before. With a dynamic start, the sequence aims to finish at sunrise:
+the start is sunrise minus every cycle and soak, and it is never earlier
+than Don't start before. If that floor is used, the run may finish after
+sunrise as long as it ends by the finish time. Anything that still does not
+fit waits for the next allowed day. This module does not call a service.
+The executor applies the timeline when automatic watering is on.
 
 Zones are ordered by priority, then by a larger deficit. Soak times are
 kept. A cycle that would run past the finish time is shortened or left
@@ -231,6 +235,10 @@ class PlanRequest:
     # Each zone's own cap lives on ZoneRequest.max_run_min.
     max_run_min: float | None = None
     hourly_wind: tuple[tuple[datetime, float], ...] = ()
+    # When true, aim to finish at ``sunrise_at`` (or the finish time when
+    # sunrise is missing). The fixed start time is not used.
+    dynamic_start: bool = False
+    sunrise_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -446,6 +454,8 @@ def _window_anchor(
     carried. A runtime longer than the start-to-finish window may open earlier,
     and never before ``earliest``.
     """
+    if start_at < earliest:
+        start_at = earliest
     preferred = elapsed_seconds(finish_by, start_at) / 60.0
     if span_min <= preferred + 1e-6 or valve_min <= preferred + 1e-6:
         return start_at
@@ -453,6 +463,78 @@ def _window_anchor(
     if anchor < earliest:
         return earliest
     return anchor
+
+
+def _dynamic_anchor(
+    span_min: float,
+    earliest: datetime,
+    finish_by: datetime,
+    sunrise: datetime | None,
+) -> datetime:
+    """Start so the full span, soaks included, ends at sunrise.
+
+    The finish time is the latest allowed end. If sunrise is later than that,
+    the target is the finish time. If sunrise minus the span is before
+    ``earliest``, the start is ``earliest`` and the run may finish after
+    sunrise.
+    """
+    target = finish_by if sunrise is None else sunrise
+    if target > finish_by:
+        target = finish_by
+    anchor = shift_minutes(target, -span_min)
+    if anchor < earliest:
+        return earliest
+    return anchor
+
+
+def _place_in_window(
+    events: list[tuple[_Job, int, int, int]],
+    *,
+    dynamic: bool,
+    start_at: datetime,
+    earliest: datetime,
+    finish_by: datetime,
+    sunrise: datetime | None,
+    whole: bool,
+) -> tuple[list[tuple[_Job, int, int, int]], datetime, float]:
+    """Choose the morning's start and drop cycles that pass the finish time.
+
+    Minute 0 of the relative timeline is the returned anchor. That anchor is
+    never earlier than ``earliest``.
+    """
+    if start_at < earliest:
+        start_at = earliest
+    if not events:
+        return events, start_at, 0.0
+    span = float(_span_minutes(events))
+    valve = _valve_minutes(events)
+    if not dynamic:
+        preferred_min = elapsed_seconds(finish_by, start_at) / 60.0
+        full_min = elapsed_seconds(finish_by, earliest) / 60.0
+        limit = full_min if valve > preferred_min + 1e-6 else preferred_min
+        deferred = 0.0
+        if limit <= 0:
+            return [], earliest, valve
+        if span > limit + 1e-6:
+            events, deferred = _trim_to_window(events, limit, whole=whole)
+        anchor = _window_anchor(
+            float(_span_minutes(events)) if events else 0.0,
+            _valve_minutes(events),
+            start_at,
+            earliest,
+            finish_by,
+        )
+        if anchor < earliest:
+            anchor = earliest
+        return events, anchor, deferred
+    anchor = _dynamic_anchor(span, earliest, finish_by, sunrise)
+    limit = elapsed_seconds(finish_by, anchor) / 60.0
+    if limit <= 0:
+        return [], earliest, valve
+    deferred = 0.0
+    if span > limit + 1e-6:
+        events, deferred = _trim_to_window(events, limit, whole=whole)
+    return events, anchor, deferred
 
 
 def short_status(plan: NightPlan | None) -> str:
@@ -708,16 +790,15 @@ def build_plan(request: PlanRequest) -> NightPlan:
             f"{deferred:.0f} min waits for the next allowed day."
         )
     ids_after_caps = {item[0].zone.zone_id for item in events}
-    preferred_min = elapsed_seconds(request_finish, start_at) / 60.0
-    full_min = elapsed_seconds(request_finish, request_earliest) / 60.0
-    # Soak gaps do not pull a short run off the configured start. Only a valve
-    # runtime that cannot finish by the finish time may use the early window.
-    limit = full_min if _valve_minutes(events) > preferred_min + 1e-6 else preferred_min
-    window_deferred = 0.0
-    if events and limit > 0 and _span_minutes(events) > limit + 1e-6:
-        events, window_deferred = _trim_to_window(
-            events, limit, whole=request.whole_minutes
-        )
+    events, anchor, window_deferred = _place_in_window(
+        events,
+        dynamic=request.dynamic_start,
+        start_at=start_at,
+        earliest=request_earliest,
+        finish_by=request_finish,
+        sunrise=request.sunrise_at,
+        whole=request.whole_minutes,
+    )
     if window_deferred > 0:
         warnings.append(
             f"The morning window left {window_deferred:.0f} min "
@@ -725,21 +806,43 @@ def build_plan(request: PlanRequest) -> NightPlan:
         )
     ids_after_window = {item[0].zone.zone_id for item in events}
     window_dropped = ids_after_caps - ids_after_window
-    anchor = _window_anchor(
-        float(_span_minutes(events)),
-        _valve_minutes(events),
-        start_at,
-        request_earliest,
-        request_finish,
-    )
     timeline = _place(events, anchor)
+    early_min = 0.0
+    if timeline:
+        kept_timeline = []
+        for event in timeline:
+            if event.start < request_earliest:
+                early_min += float(event.duration_min)
+                continue
+            kept_timeline.append(event)
+        if early_min:
+            timeline = tuple(kept_timeline)
+            still = {event.zone_id for event in timeline}
+            window_dropped = window_dropped | (ids_after_window - still)
+            warnings.append(
+                f"A cycle was held because it would have started before "
+                f"{request_earliest.strftime('%H:%M')}."
+            )
     if (
         timeline
+        and not request.dynamic_start
         and timeline[0].start < shift_minutes(start_at, -0.5)
     ):
         warnings.append(
             f"The run starts at {timeline[0].start.strftime('%H:%M')} "
             f"so it finishes by {request_finish.strftime('%H:%M')}."
+        )
+    if (
+        request.dynamic_start
+        and timeline
+        and request.sunrise_at is not None
+        and elapsed_seconds(timeline[-1].end, request.sunrise_at) > 30
+        and timeline[0].start <= shift_minutes(request_earliest, 0.5)
+    ):
+        warnings.append(
+            f"The run starts at {timeline[0].start.strftime('%H:%M')}, "
+            f"which is as early as it may, and finishes at "
+            f"{timeline[-1].end.strftime('%H:%M')}, after sunrise."
         )
 
     zone_plans, jobs, timeline, run_on = _apply_watering_day(

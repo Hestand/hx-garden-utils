@@ -119,7 +119,7 @@ def _hub_entry(**kwargs: Any) -> MockConfigEntry:
 
 
 def _sections() -> dict[str, dict[str, Any]]:
-    return {"sensors": {}, "location": {}}
+    return {"sensors": {}, "morning": {}, "location": {}}
 
 
 async def _finish_with_no_zones(
@@ -165,6 +165,12 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert _field(fields, "sensors")["type"] == "expandable"
     assert _field(fields, "sensors")["expanded"] is False
     assert _field(fields, "location")["expanded"] is False
+    assert _field(fields, "morning")["expanded"] is True
+    assert "boolean" in _field(fields, "dynamic_start")["selector"]
+    assert "time" in _field(fields, "earliest_start")["selector"]
+    assert "time" in _field(fields, "finish_time")["selector"]
+    with pytest.raises(StopIteration):
+        _field(fields, "start_time")
     assert _field(fields, CONF_LATITUDE)["selector"]["number"]["step"] == "any"
     assert _field(fields, CONF_LONGITUDE)["selector"]["number"]["step"] == "any"
     assert _field(fields, "allowed_weekdays")["selector"]["select"]["options"] == [
@@ -201,7 +207,10 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert result["result"].options[CONF_ELEVATION_M] == 219
     assert result["result"].options[CONF_MODE] == MODE_NOTIFY_ONLY
     assert CONF_TEMPERATURE_SENSOR not in result["result"].options
-    assert result["result"].version == 8
+    assert result["result"].version == 9
+    assert result["result"].options["dynamic_start"] is True
+    assert result["result"].options["start_time"] == "05:00:00"
+    assert result["result"].options["earliest_start"] == "04:00:00"
 
 
 async def test_user_flow_http_post_is_ok(hass: HomeAssistant, hass_client) -> None:
@@ -240,6 +249,7 @@ async def test_temperature_sensor_can_replace_weather(hass: HomeAssistant) -> No
         {
             "name": "Sensors only",
             "sensors": {CONF_TEMPERATURE_SENSOR: "sensor.tempest_air_temperature"},
+            "morning": {},
             "location": {},
         },
     )
@@ -287,16 +297,21 @@ async def test_tempest_entities_are_suggested(hass: HomeAssistant) -> None:
 
 async def test_options_flow_forms_serialize(hass: HomeAssistant) -> None:
     """Hub options are one form with the same two sections."""
-    entry = _hub_entry()
+    entry = _hub_entry(options={"dynamic_start": False, "start_time": "06:15:00"})
     entry.add_to_hass(hass)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     fields = _serialize(result)
     assert result["step_id"] == "init"
+    assert _field(fields, "dynamic_start")["description"]["suggested_value"] is False
+    assert _field(fields, "start_time")["description"]["suggested_value"] == "06:15:00"
     assert _field(fields, CONF_LATITUDE)["selector"]["number"]["step"] == "any"
     assert _field(fields, CONF_LONGITUDE)["selector"]["number"]["step"] == "any"
     assert _field(fields, "allowed_weekdays")["selector"]["select"]["multiple"] is True
     assert _field(fields, "location")["type"] == "expandable"
+    assert _field(fields, "morning")["expanded"] is True
+    assert "time" in _field(fields, "start_time")["selector"]
+    assert "time" in _field(fields, "earliest_start")["selector"]
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
@@ -545,13 +560,14 @@ async def test_simulation_hub_uses_dropdowns_and_a_virtual_valve(
             "name": "Play yard",
             CONF_SCENARIO: "hot_dry",
             CONF_BUCKET: "full",
+            "morning": {},
             "location": {},
         },
     )
     result = await _finish_with_no_zones(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
-    assert entry.version == 8
+    assert entry.version == 9
     assert entry.data == {CONF_SIMULATION: True}
     assert entry.options[CONF_SCENARIO] == "hot_dry"
     assert entry.options[CONF_BUCKET] == "full"
@@ -659,7 +675,7 @@ async def test_hub_flow_adds_zones_and_keeps_later_picks(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
-    assert entry.version == 8
+    assert entry.version == 9
     zones = {zone.title: zone for zone in entry.subentries.values()}
     assert set(zones) == {"Front", "Back"}
     assert zones["Front"].data[CONF_VALVE_ENTITY] == "switch.front"
@@ -727,6 +743,7 @@ async def test_simulation_setup_zone_uses_a_virtual_valve(hass: HomeAssistant) -
             "name": "Play yard",
             CONF_SCENARIO: "hot_dry",
             CONF_BUCKET: "full",
+            "morning": {},
             "location": {},
         },
     )

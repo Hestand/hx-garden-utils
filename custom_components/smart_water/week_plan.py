@@ -21,6 +21,7 @@ from .flow import expected_gallons
 from .forecast_rain import defer_reason
 from .planner import NightPlan, PlanRequest, ZoneRequest, build_plan
 from .schedule import morning_window, parse_clock, wall_clock
+from .solar import local_sunrise
 from .units import mm_to_inches
 
 
@@ -54,6 +55,10 @@ def project_week(
     forecast_threshold_mm: float | None = None,
     defer_days: dict[str, int] | None = None,
     et_factors: list[float] | None = None,
+    dynamic_start: bool = False,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    elevation_m: float = 0.0,
 ) -> dict[str, object]:
     """Return ``days``, a short ``summary``, and a markdown table."""
     tz = ZoneInfo(timezone)
@@ -92,6 +97,14 @@ def project_week(
         earliest = wall_clock(day, *earliest_hm, tz)
         start_at = wall_clock(day, *start_hm, tz)
         finish_by = wall_clock(day, *finish_hm, tz)
+        sunrise = None
+        if dynamic_start and latitude is not None and longitude is not None:
+            try:
+                sunrise = local_sunrise(
+                    latitude, longitude, day, tz, elevation_m
+                )
+            except ValueError:
+                sunrise = None
         requests = []
         for zone in zones:
             current = replace(
@@ -142,6 +155,8 @@ def project_week(
                 whole_minutes=whole_minutes,
                 max_run_min=max_run_min,
                 hourly_wind=hourly_wind if offset == 0 else (),
+                dynamic_start=dynamic_start,
+                sunrise_at=sunrise,
             )
         )
         rows.append(_day_row(plan, areas, tz))
@@ -163,10 +178,17 @@ def project_week(
                 since[zone_plan.zone_id] = 0
 
     summary = _summary(rows)
-    window = (
-        f"Start {first_start.strftime('%H:%M')}, finish by {first_finish.strftime('%H:%M')}, "
-        f"earliest {first_earliest.strftime('%H:%M')}."
-    )
+    if dynamic_start:
+        window = (
+            f"Dynamic start, aims to finish at sunrise, "
+            f"finish by {first_finish.strftime('%H:%M')}, "
+            f"don't start before {first_earliest.strftime('%H:%M')}."
+        )
+    else:
+        window = (
+            f"Start {first_start.strftime('%H:%M')}, finish by {first_finish.strftime('%H:%M')}, "
+            f"earliest {first_earliest.strftime('%H:%M')}."
+        )
     return {
         "summary": summary,
         "days": rows,

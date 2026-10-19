@@ -60,7 +60,7 @@ def test_design_doc_clay_loam_cycle_is_four_minutes() -> None:
         slope_pct=6,
     )
     assert plan.max_cycle_min == 4
-    assert plan.soak_min == 60
+    assert plan.soak_min == 30
     assert plan.total_runtime_min == 31
     assert sum(plan.cycles_min) == 31
     assert all(minutes <= 4 for minutes in plan.cycles_min)

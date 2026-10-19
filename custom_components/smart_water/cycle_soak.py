@@ -6,9 +6,9 @@ That matches the design example: 1.5 in/hr sprays on clay loam at a 5–8% slope
 not exceed the intake rate, then raised to 1 minute. A warning is set when 1 minute still exceeds
 the intake rate.
 
-Soak time follows the EPA WaterSense cycle-and-soak guidance: 30 minutes, or
-60 minutes on clay, clay loam, and compact silt loam. A measured "pooling
-test" can override either number.
+Soak time is 30 minutes for every soil, including clay, clay loam, and
+compact silt loam. A measured pooling test can override that number. Drip
+and bubbler soak 0 unless the zone sets one.
 
 Total runtime (minutes) = 60 × gross depth (in) ÷ precipitation rate.
 Gross depth = net depth ÷ efficiency. Efficiency defaults to 1.0; this
