@@ -29,6 +29,10 @@ from custom_components.smart_water.const import (
     CONF_DRY_RUN,
     CONF_EFFICIENCY,
     CONF_ELEVATION_M,
+    CONF_FLOW_KIND,
+    CONF_FLOW_LOW_RATIO,
+    CONF_FLOW_SCOPE,
+    CONF_FLOW_SENSOR,
     CONF_LATITUDE,
     CONF_LONGITUDE,
     CONF_MODE,
@@ -197,7 +201,7 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert result["result"].options[CONF_ELEVATION_M] == 219
     assert result["result"].options[CONF_MODE] == MODE_NOTIFY_ONLY
     assert CONF_TEMPERATURE_SENSOR not in result["result"].options
-    assert result["result"].version == 7
+    assert result["result"].version == 8
 
 
 async def test_user_flow_http_post_is_ok(hass: HomeAssistant, hass_client) -> None:
@@ -366,6 +370,9 @@ async def test_zone_quick_setup_leaves_presets_blank(hass: HomeAssistant) -> Non
         "override",
     ]
     assert _field(fields, "moisture_weight")["selector"]["number"]["step"] == 0.05
+    assert all(field["name"] != CONF_FLOW_SENSOR for field in fields)
+    assert all(field["name"] != CONF_FLOW_KIND for field in fields)
+    assert _field(fields, CONF_FLOW_LOW_RATIO)
 
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"],
@@ -544,7 +551,7 @@ async def test_simulation_hub_uses_dropdowns_and_a_virtual_valve(
     result = await _finish_with_no_zones(hass, result)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
-    assert entry.version == 7
+    assert entry.version == 8
     assert entry.data == {CONF_SIMULATION: True}
     assert entry.options[CONF_SCENARIO] == "hot_dry"
     assert entry.options[CONF_BUCKET] == "full"
@@ -652,7 +659,7 @@ async def test_hub_flow_adds_zones_and_keeps_later_picks(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     entry = result["result"]
-    assert entry.version == 7
+    assert entry.version == 8
     zones = {zone.title: zone for zone in entry.subentries.values()}
     assert set(zones) == {"Front", "Back"}
     assert zones["Front"].data[CONF_VALVE_ENTITY] == "switch.front"
@@ -747,3 +754,72 @@ async def test_simulation_setup_zone_uses_a_virtual_valve(hass: HomeAssistant) -
     assert zone.data[CONF_VALVE_ENTITY] == "simulation.front_lawn"
     assert zone.data[CONF_AREA_SQFT] == 800
     assert CONF_EFFICIENCY not in zone.data
+
+
+async def test_flow_meter_is_on_the_hub_and_requires_a_choice(
+    hass: HomeAssistant,
+) -> None:
+    """The hub form asks for one meter and which kind of meter it is."""
+    result = await _open_live(hass)
+    fields = _serialize(result)
+    assert _field(fields, "flow_meter")["expanded"] is True
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "name": "Garden",
+            CONF_WEATHER_ENTITY: "weather.home",
+            **_sections(),
+            "flow_meter": {
+                CONF_FLOW_SENSOR: "sensor.main_flow",
+                CONF_FLOW_KIND: "total",
+            },
+        },
+    )
+    assert result["errors"]["base"] == "flow_scope"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "name": "Garden",
+            CONF_WEATHER_ENTITY: "weather.home",
+            **_sections(),
+            "flow_meter": {
+                CONF_FLOW_SENSOR: "sensor.main_flow",
+                CONF_FLOW_KIND: "total",
+                CONF_FLOW_SCOPE: "whole_home",
+            },
+        },
+    )
+    result = await _finish_with_no_zones(hass, result)
+    options = result["result"].options
+    assert options[CONF_FLOW_SENSOR] == "sensor.main_flow"
+    assert options[CONF_FLOW_KIND] == "total"
+    assert options[CONF_FLOW_SCOPE] == "whole_home"
+    assert "flow_idle_gpm" not in options
+
+
+async def test_irrigation_meter_shows_idle_settings_and_whole_home_hides_them(
+    hass: HomeAssistant,
+) -> None:
+    """Idle-flow settings appear only after an irrigation-only meter is saved."""
+    irrigation = _hub_entry(
+        options={
+            CONF_FLOW_SENSOR: "sensor.main_flow",
+            CONF_FLOW_KIND: "total",
+            CONF_FLOW_SCOPE: "irrigation",
+        }
+    )
+    irrigation.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(irrigation.entry_id)
+    assert _field(_serialize(result), "flow_idle_gpm")
+
+    whole = _hub_entry(
+        options={
+            CONF_FLOW_SENSOR: "sensor.main_flow",
+            CONF_FLOW_KIND: "total",
+            CONF_FLOW_SCOPE: "whole_home",
+        }
+    )
+    whole.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(whole.entry_id)
+    with pytest.raises(StopIteration):
+        _field(_serialize(result), "flow_idle_gpm")

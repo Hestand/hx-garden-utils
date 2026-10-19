@@ -48,6 +48,24 @@
               "wind_height_m": "How high the wind sensor is mounted. The estimate adjusts that speed to 2 meters."
             }
           },
+          "flow_meter": {
+            "name": "Flow meter",
+            "description": "Optional. One meter for the whole system. A whole-home meter does not alert while nothing is running, because the house uses water too. An irrigation-only meter keeps that alert.",
+            "data": {
+              "flow_sensor": "Flow sensor",
+              "flow_kind": "Flow sensor kind",
+              "flow_scope": "What this meter measures",
+              "flow_idle_gpm": "Flow while nothing is running",
+              "flow_idle_action": "When flow is seen with every zone off"
+            },
+            "data_description": {
+              "flow_sensor": "Optional. One sensor for every zone. Volume total or a flow rate. Water used while a zone is running is counted for that zone.",
+              "flow_kind": "Volume total counts up. Flow rate is gallons or liters per minute.",
+              "flow_scope": "Required when a flow sensor is set. Whole-home does not alert while the house is using water. Irrigation-only alerts when water moves and no zone is running.",
+              "flow_idle_gpm": "Shown only for an irrigation-only meter. Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on.",
+              "flow_idle_action": "Notify only, or stop watering and skip every zone until you reset flow learning. Hidden for a whole-home meter."
+            }
+          },
           "location": {
             "name": "Location and schedule",
             "description": "Defaults match the central Texas design site (about 219 m) and water any day. Automatic watering is a switch and stays off until you turn it on.",
@@ -287,6 +305,7 @@
     "error": {
       "latitude_pair": "Set both latitude and longitude, or leave both empty.",
       "need_weather": "Pick a weather entity or a temperature sensor.",
+      "flow_scope": "A flow meter needs a choice: whole-home or irrigation-only.",
       "name_exists": "A zone with this name already exists."
     },
     "abort": {
@@ -331,6 +350,24 @@
               "temperature_sensor": "Used before the weather entity. Required only if you leave the weather entity empty.",
               "pressure_sensor": "Station pressure, not sea-level pressure.",
               "rain_amount_sensor": "Preferred over the weather forecast. A daily total matches a rain-today sensor."
+            }
+          },
+          "flow_meter": {
+            "name": "Flow meter",
+            "description": "Optional. One meter for the whole system. A whole-home meter does not alert while nothing is running, because the house uses water too. An irrigation-only meter keeps that alert.",
+            "data": {
+              "flow_sensor": "Flow sensor",
+              "flow_kind": "Flow sensor kind",
+              "flow_scope": "What this meter measures",
+              "flow_idle_gpm": "Flow while nothing is running",
+              "flow_idle_action": "When flow is seen with every zone off"
+            },
+            "data_description": {
+              "flow_sensor": "Optional. One sensor for every zone. Volume total or a flow rate. Water used while a zone is running is counted for that zone.",
+              "flow_kind": "Volume total counts up. Flow rate is gallons or liters per minute.",
+              "flow_scope": "Required when a flow sensor is set. Whole-home does not alert while the house is using water. Irrigation-only alerts when water moves and no zone is running.",
+              "flow_idle_gpm": "Shown only for an irrigation-only meter. Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on.",
+              "flow_idle_action": "Notify only, or stop watering and skip every zone until you reset flow learning. Hidden for a whole-home meter."
             }
           },
           "location": {
@@ -417,6 +454,9 @@
             },
             "description": "Defaults match the central Texas design site (about 219 m) and water any day. Automatic watering is a switch and stays off until you turn it on."
           }
+        },
+        "error": {
+          "flow_scope": "A flow meter needs a choice: whole-home or irrigation-only."
         }
       }
     }
@@ -520,8 +560,8 @@
               }
             },
             "measurement_overrides": {
-              "name": "Moisture, flow, and priority",
-              "description": "Optional. A moisture sensor can correct the soil water and slowly learn how much the soil holds. Flow only labels the plan.",
+              "name": "Moisture and priority",
+              "description": "Optional. A moisture sensor can correct the soil water and slowly learn how much the soil holds. Low-flow and leak ratios apply to the hub flow meter.",
               "data": {
                 "priority": "Priority",
                 "moisture_sensor": "Soil moisture sensor",
@@ -529,8 +569,6 @@
                 "moisture_kind": "Moisture reading",
                 "moisture_weight": "Moisture correction weight",
                 "field_capacity_vwc": "Full-soil reading",
-                "flow_sensor": "Flow sensor",
-                "flow_kind": "Flow sensor kind",
                 "flow_low_ratio": "Low-flow ratio",
                 "flow_leak_ratio": "Leak ratio",
                 "rain_sensor": "Rain sensor"
@@ -539,13 +577,11 @@
                 "priority": "Lower numbers run first when two zones are both ready.",
                 "moisture_mode": "Off ignores the sensor. Adjust blends the reading into the soil water once a day. Replace overwrites the soil water on every update.",
                 "moisture_kind": "Percent of the water the soil can hold (0–100, or a 0–1 fraction). A volumetric reading also needs the full-soil number.",
-                "flow_sensor": "Any sensor that reports a volume total or a flow rate. Used to flag low flow and leaks. Nothing is closed.",
-                "flow_low_ratio": "Delivered ÷ expected below this, after the run window, is low flow. Default 0.5.",
+                "flow_low_ratio": "Delivered ÷ expected below this, after the run window, is low flow. Default 0.5. Uses the hub flow meter.",
                 "flow_leak_ratio": "Delivered ÷ expected above this is a leak. Default 1.5. Unscheduled delivery of at least 1 gallon is also a leak.",
                 "moisture_sensor": "Optional sensor that reports how full the soil is.",
                 "moisture_weight": "How strongly a once-a-day correction follows the sensor. 1 follows it fully.",
                 "field_capacity_vwc": "The volumetric reading when this soil is full. Used only for a volumetric sensor.",
-                "flow_kind": "Volume total counts up. Flow rate is gallons or liters per minute.",
                 "rain_sensor": "Optional on/off sensor. On means it is raining and watering waits."
               }
             }
@@ -665,6 +701,12 @@
         "rate": "Flow rate"
       }
     },
+    "flow_scope": {
+      "options": {
+        "whole_home": "Whole-home meter",
+        "irrigation": "Irrigation-only meter"
+      }
+    },
     "flow_action": {
       "options": {
         "notify": "Notify only",
@@ -711,7 +753,7 @@
         "name": "Flow check"
       },
       "moisture": {
-        "name": "Sensor water needed"
+        "name": "Soil moisture level"
       },
       "simulation": {
         "name": "Sample week"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "smart_water"
 NAME = "Smart Water"
-VERSION = "0.8.1"
+VERSION = "0.9.0"
 
 # Retired option key. v0.5 stores the automatic-watering switch in the hub
 # store (default off) and drops this option on migration.
@@ -69,6 +69,7 @@ CONF_MOISTURE_WEIGHT = "moisture_weight"
 CONF_FIELD_CAPACITY = "field_capacity_vwc"
 CONF_FLOW_SENSOR = "flow_sensor"
 CONF_FLOW_KIND = "flow_kind"
+CONF_FLOW_SCOPE = "flow_scope"
 CONF_FLOW_LOW_RATIO = "flow_low_ratio"
 CONF_FLOW_LEAK_RATIO = "flow_leak_ratio"
 CONF_FREEZE_SKIP_F = "freeze_skip_f"
@@ -181,6 +182,9 @@ MOISTURE_KINDS = (MOISTURE_KIND_RELATIVE, MOISTURE_KIND_VWC)
 FLOW_KIND_RATE = "rate"
 FLOW_KIND_TOTAL = "total"
 FLOW_KINDS = (FLOW_KIND_TOTAL, FLOW_KIND_RATE)
+FLOW_SCOPE_WHOLE = "whole_home"
+FLOW_SCOPE_IRRIGATION = "irrigation"
+FLOW_SCOPES = (FLOW_SCOPE_WHOLE, FLOW_SCOPE_IRRIGATION)
 
 SERVICE_CALCULATE_PLAN = "calculate_plan"
 SERVICE_RESET_BUCKET = "reset_bucket"

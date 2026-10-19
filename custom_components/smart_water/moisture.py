@@ -14,6 +14,19 @@ from __future__ import annotations
 from .const import MOISTURE_CORRECT, MOISTURE_KIND_RELATIVE, MOISTURE_KIND_VWC, MOISTURE_OVERRIDE
 
 
+def reading_percent(reading: float, unit: str | None) -> float:
+    """Show a moisture sensor as a percent.
+
+    A 0–1 fraction becomes 0–100. A reading that is already a percent, or
+    whose unit says so, is left as it is.
+    """
+    if unit and unit.strip().casefold() in {"%", "percent", "pct"}:
+        return reading
+    if abs(reading) <= 1.5:
+        return reading * 100.0
+    return reading
+
+
 def deficit_from_reading(
     *,
     reading: float,

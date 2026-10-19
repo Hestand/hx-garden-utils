@@ -61,6 +61,7 @@ from .const import (
     CONF_FLOW_LOW_PCT,
     CONF_FLOW_LEAK_RATIO,
     CONF_FLOW_LOW_RATIO,
+    CONF_FLOW_SCOPE,
     CONF_FLOW_SENSOR,
     CONF_FORECAST_DEFER_DAYS,
     CONF_FORECAST_HOURS,
@@ -148,6 +149,8 @@ from .const import (
     FLOW_ACTION_NOTIFY,
     FLOW_ACTIONS,
     FLOW_KINDS,
+    FLOW_SCOPE_IRRIGATION,
+    FLOW_SCOPES,
     MODE_NOTIFY_ONLY,
     MODES,
     MOISTURE_KINDS,
@@ -178,11 +181,12 @@ from .soil import PLANT_TYPES, SOIL_TYPES, SUN_EXPOSURES
 
 _SECTION_SENSORS = "sensors"
 _SECTION_LOCATION = "location"
+_SECTION_FLOW = "flow_meter"
 _SECTION_PLANT = "plant_overrides"
 _SECTION_HARDWARE = "hardware_overrides"
 _SECTION_MEASURE = "measurement_overrides"
 
-_HUB_SECTIONS = frozenset({_SECTION_SENSORS, _SECTION_LOCATION})
+_HUB_SECTIONS = frozenset({_SECTION_SENSORS, _SECTION_LOCATION, _SECTION_FLOW})
 _ZONE_SECTIONS = frozenset({_SECTION_PLANT, _SECTION_HARDWARE, _SECTION_MEASURE})
 
 _PLANT_KEYS = (
@@ -221,8 +225,6 @@ _MEASURE_KEYS = (
     CONF_MOISTURE_KIND,
     CONF_MOISTURE_WEIGHT,
     CONF_FIELD_CAPACITY,
-    CONF_FLOW_SENSOR,
-    CONF_FLOW_KIND,
     CONF_FLOW_LOW_RATIO,
     CONF_FLOW_LEAK_RATIO,
     CONF_RAIN_SENSOR,
@@ -270,10 +272,8 @@ _LOCATION_KEYS = (
     CONF_FLOW_HIGH_PCT,
     CONF_FLOW_LOW_PCT,
     CONF_FLOW_LEARN_RUNS,
-    CONF_FLOW_IDLE_GPM,
     CONF_FLOW_HIGH_ACTION,
     CONF_FLOW_LOW_ACTION,
-    CONF_FLOW_IDLE_ACTION,
     CONF_COST_PER_1000_GAL,
     CONF_WEEKLY_BUDGET_GAL,
     CONF_WEEKLY_SUMMARY,
@@ -472,16 +472,10 @@ def _location_fields() -> dict[Any, Any]:
         vol.Required(CONF_FLOW_HIGH_PCT, default=DEFAULT_HIGH_PCT): _number(5, 200, 1, "%"),
         vol.Required(CONF_FLOW_LOW_PCT, default=DEFAULT_LOW_PCT): _number(5, 90, 1, "%"),
         vol.Required(CONF_FLOW_LEARN_RUNS, default=DEFAULT_LEARN_RUNS): _number(1, 30, 1),
-        vol.Required(CONF_FLOW_IDLE_GPM, default=DEFAULT_IDLE_GPM): _number(
-            0, 20, 0.1, "gal/min"
-        ),
         vol.Required(CONF_FLOW_HIGH_ACTION, default=FLOW_ACTION_NOTIFY): _select(
             FLOW_ACTIONS, "flow_action"
         ),
         vol.Required(CONF_FLOW_LOW_ACTION, default=FLOW_ACTION_NOTIFY): _select(
-            FLOW_ACTIONS, "flow_action"
-        ),
-        vol.Required(CONF_FLOW_IDLE_ACTION, default=FLOW_ACTION_NOTIFY): _select(
             FLOW_ACTIONS, "flow_action"
         ),
         vol.Optional(CONF_COST_PER_1000_GAL): _number(0, 100, 0.01, "USD"),
@@ -490,7 +484,60 @@ def _location_fields() -> dict[Any, Any]:
     }
 
 
-def _hub_schema(*, sensors_collapsed: bool) -> vol.Schema:
+_FLOW_KEYS = (CONF_FLOW_SENSOR, CONF_FLOW_KIND, CONF_FLOW_SCOPE)
+_FLOW_IDLE_KEYS = (CONF_FLOW_IDLE_GPM, CONF_FLOW_IDLE_ACTION)
+
+
+def _show_idle(source: dict[str, Any] | None) -> bool:
+    """Idle-flow settings belong only to an irrigation-only meter."""
+    if not source:
+        return False
+    nested = source.get(_SECTION_FLOW)
+    flat = nested if isinstance(nested, dict) else source
+    return (
+        not _blank(flat.get(CONF_FLOW_SENSOR))
+        and flat.get(CONF_FLOW_SCOPE) == FLOW_SCOPE_IRRIGATION
+    )
+
+
+def _flow_choice_missing(flat: dict[str, Any]) -> bool:
+    return not _blank(flat.get(CONF_FLOW_SENSOR)) and flat.get(CONF_FLOW_SCOPE) not in FLOW_SCOPES
+
+
+def _apply_flow_options(data: dict[str, Any]) -> None:
+    """Drop idle-flow settings unless this is an irrigation-only meter."""
+    if _blank(data.get(CONF_FLOW_SENSOR)):
+        data.pop(CONF_FLOW_SENSOR, None)
+        data.pop(CONF_FLOW_KIND, None)
+        data.pop(CONF_FLOW_SCOPE, None)
+        data.pop(CONF_FLOW_IDLE_GPM, None)
+        data.pop(CONF_FLOW_IDLE_ACTION, None)
+        return
+    data.setdefault(CONF_FLOW_KIND, DEFAULT_FLOW_KIND)
+    if data.get(CONF_FLOW_SCOPE) != FLOW_SCOPE_IRRIGATION:
+        data.pop(CONF_FLOW_IDLE_GPM, None)
+        data.pop(CONF_FLOW_IDLE_ACTION, None)
+
+
+def _flow_fields(*, show_idle: bool) -> dict[Any, Any]:
+    fields: dict[Any, Any] = {
+        vol.Optional(CONF_FLOW_SENSOR): _SENSOR,
+        vol.Required(CONF_FLOW_KIND, default=DEFAULT_FLOW_KIND): _select(
+            FLOW_KINDS, "flow_kind"
+        ),
+        vol.Optional(CONF_FLOW_SCOPE): _select(FLOW_SCOPES, "flow_scope"),
+    }
+    if show_idle:
+        fields[vol.Required(CONF_FLOW_IDLE_GPM, default=DEFAULT_IDLE_GPM)] = _number(
+            0, 20, 0.1, "gal/min"
+        )
+        fields[vol.Required(CONF_FLOW_IDLE_ACTION, default=FLOW_ACTION_NOTIFY)] = _select(
+            FLOW_ACTIONS, "flow_action"
+        )
+    return fields
+
+
+def _hub_schema(*, sensors_collapsed: bool, show_idle: bool = False) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required("name"): _TEXT,
@@ -498,6 +545,10 @@ def _hub_schema(*, sensors_collapsed: bool) -> vol.Schema:
             vol.Required(_SECTION_SENSORS): section(
                 vol.Schema(_sensor_fields()),
                 {"collapsed": sensors_collapsed},
+            ),
+            vol.Optional(_SECTION_FLOW): section(
+                vol.Schema(_flow_fields(show_idle=show_idle)),
+                {"collapsed": False},
             ),
             vol.Required(_SECTION_LOCATION): section(
                 vol.Schema(_location_fields()),
@@ -507,7 +558,9 @@ def _hub_schema(*, sensors_collapsed: bool) -> vol.Schema:
     )
 
 
-def _options_schema(*, sensors_collapsed: bool, simulation: bool = False) -> vol.Schema:
+def _options_schema(
+    *, sensors_collapsed: bool, simulation: bool = False, show_idle: bool = False
+) -> vol.Schema:
     fields: dict[Any, Any] = {}
     if simulation:
         fields[vol.Required(CONF_SCENARIO, default=DEFAULT_SCENARIO)] = _select(
@@ -519,6 +572,10 @@ def _options_schema(*, sensors_collapsed: bool, simulation: bool = False) -> vol
     fields[vol.Required(_SECTION_SENSORS)] = section(
         vol.Schema(_sensor_fields()),
         {"collapsed": sensors_collapsed},
+    )
+    fields[vol.Optional(_SECTION_FLOW)] = section(
+        vol.Schema(_flow_fields(show_idle=show_idle)),
+        {"collapsed": False},
     )
     fields[vol.Required(_SECTION_LOCATION)] = section(
         vol.Schema(_location_fields()),
@@ -652,10 +709,6 @@ def _advanced_schema() -> vol.Schema:
                             CONF_MOISTURE_WEIGHT, default=DEFAULT_MOISTURE_WEIGHT
                         ): _number(0, 1, 0.05),
                         vol.Optional(CONF_FIELD_CAPACITY): _number(0.01, 0.6, 0.01),
-                        vol.Optional(CONF_FLOW_SENSOR): _SENSOR,
-                        vol.Required(CONF_FLOW_KIND, default=DEFAULT_FLOW_KIND): _select(
-                            FLOW_KINDS, "flow_kind"
-                        ),
                         vol.Required(
                             CONF_FLOW_LOW_RATIO, default=DEFAULT_FLOW_LOW_RATIO
                         ): _number(0, 1, 0.05),
@@ -690,7 +743,7 @@ def _has_climate(weather: Any, temperature: Any) -> bool:
 class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
     """Set up a Smart Water hub."""
 
-    VERSION = 7
+    VERSION = 8
     MINOR_VERSION = 1
 
     def __init__(self) -> None:
@@ -739,6 +792,8 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
                 flat.get(CONF_WEATHER_ENTITY), flat.get(CONF_TEMPERATURE_SENSOR)
             ):
                 errors["base"] = "need_weather"
+            elif _flow_choice_missing(flat):
+                errors["base"] = "flow_scope"
             else:
                 return self._create(flat)
         suggested: dict[str, Any] = dict(user_input or {})
@@ -774,7 +829,10 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="live",
             data_schema=self.add_suggested_values_to_schema(
-                _hub_schema(sensors_collapsed=not sensors_open),
+                _hub_schema(
+                    sensors_collapsed=not sensors_open,
+                    show_idle=_show_idle(user_input),
+                ),
                 suggested,
             ),
             errors=errors,
@@ -826,6 +884,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         draft.pop("dry_run", None)
         draft.pop("schedule_preset", None)
         draft.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
+        _apply_flow_options(draft)
         data: dict[str, Any] = {}
         if weather:
             data[CONF_WEATHER_ENTITY] = weather
@@ -1003,16 +1062,22 @@ class SmartWaterOptionsFlow(OptionsFlow):
                 flat.get(CONF_TEMPERATURE_SENSOR),
             ):
                 errors["base"] = "need_weather"
+            elif _flow_choice_missing(flat):
+                errors["base"] = "flow_scope"
             else:
                 data = _drop_blanks(flat)
                 data.pop("dry_run", None)
                 data.pop("schedule_preset", None)
                 data.setdefault(CONF_MODE, MODE_NOTIFY_ONLY)
+                _apply_flow_options(data)
                 return self.async_create_entry(data=data)
+        show_idle = _show_idle(user_input) if user_input else _show_idle(current)
+        flow_keys = _FLOW_KEYS + (_FLOW_IDLE_KEYS if show_idle else ())
         suggested = user_input or {
             CONF_SCENARIO: current.get(CONF_SCENARIO, DEFAULT_SCENARIO),
             CONF_BUCKET: current.get(CONF_BUCKET, DEFAULT_BUCKET),
             _SECTION_SENSORS: _present(current, _SENSOR_KEYS),
+            _SECTION_FLOW: _present(current, flow_keys),
             _SECTION_LOCATION: _present(current, _LOCATION_KEYS),
         }
         sensors_open = bool(current.get(CONF_TEMPERATURE_SENSOR)) or bool(
@@ -1024,6 +1089,7 @@ class SmartWaterOptionsFlow(OptionsFlow):
                 _options_schema(
                     sensors_collapsed=not sensors_open,
                     simulation=simulating,
+                    show_idle=show_idle,
                 ),
                 suggested,
             ),

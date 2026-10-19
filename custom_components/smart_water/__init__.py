@@ -18,15 +18,21 @@ from .const import (
     CONF_EARLIEST_HOUR,
     CONF_EARLIEST_START,
     CONF_FINISH_TIME,
+    CONF_FLOW_KIND,
+    CONF_FLOW_SCOPE,
+    CONF_FLOW_SENSOR,
     CONF_MAX_RUN_MIN,
     CONF_START_TIME,
     CONF_SUNRISE_BUFFER_MIN,
     CONF_ZONE_MAX_RUN_MIN,
     DEFAULT_EARLIEST_START,
     DEFAULT_FINISH_TIME,
+    DEFAULT_FLOW_KIND,
     DEFAULT_START_TIME,
     DOMAIN,
+    FLOW_SCOPE_IRRIGATION,
     PLATFORMS,
+    SUBENTRY_ZONE,
 )
 from .schedule import migrate_options
 
@@ -79,8 +85,12 @@ async def async_migrate_entry(hass, entry) -> bool:
 
     Version 7 replaces the sunrise deadline with a 05:00 start, a 09:00
     finish, and a 04:00 earliest start. It does not call migrate_options.
+
+    Version 8 moves the first zone flow sensor onto the hub. The meter is
+    treated as irrigation-only so an existing idle-flow alert stays on until
+    the user picks whole-home. Other zone fields are left as stored.
     """
-    if entry.version > 7:
+    if entry.version > 8:
         return False
     if entry.version < 4:
         hass.config_entries.async_update_entry(
@@ -105,7 +115,39 @@ async def async_migrate_entry(hass, entry) -> bool:
             version=7,
             minor_version=1,
         )
+    if entry.version < 8:
+        hass.config_entries.async_update_entry(
+            entry,
+            options=_migrate_hub_flow(hass, entry),
+            version=8,
+            minor_version=1,
+        )
     return True
+
+
+def _migrate_hub_flow(hass, entry) -> dict:
+    """Move the first zone flow meter onto the hub and clear it from every zone."""
+    options = dict(entry.options)
+    sensor = options.get(CONF_FLOW_SENSOR)
+    kind = options.get(CONF_FLOW_KIND)
+    for subentry in entry.subentries.values():
+        if subentry.subentry_type != SUBENTRY_ZONE:
+            continue
+        data = dict(subentry.data)
+        found = data.get(CONF_FLOW_SENSOR)
+        if (sensor is None or sensor == "") and found not in (None, ""):
+            sensor = found
+            kind = data.get(CONF_FLOW_KIND) or DEFAULT_FLOW_KIND
+        if CONF_FLOW_SENSOR not in data and CONF_FLOW_KIND not in data:
+            continue
+        data.pop(CONF_FLOW_SENSOR, None)
+        data.pop(CONF_FLOW_KIND, None)
+        hass.config_entries.async_update_subentry(entry, subentry, data=data)
+    if sensor not in (None, ""):
+        options[CONF_FLOW_SENSOR] = sensor
+        options[CONF_FLOW_KIND] = kind or DEFAULT_FLOW_KIND
+        options.setdefault(CONF_FLOW_SCOPE, FLOW_SCOPE_IRRIGATION)
+    return options
 
 
 async def async_setup(hass, config) -> bool:

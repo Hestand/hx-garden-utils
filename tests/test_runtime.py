@@ -159,8 +159,10 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
     assert by_uid[f"{entry.entry_id}_{zone_id}_soil_water"].entity_category is None
     assert by_uid[f"{entry.entry_id}_{zone_id}_last_run"].entity_category is None
     assert by_uid[f"{entry.entry_id}_water_use"].entity_category is None
-    assert f"{entry.entry_id}_{zone_id}_flow" in unique_ids
-    assert f"{entry.entry_id}_{zone_id}_moisture" in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_flow" not in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_moisture" not in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_learned_gpm" not in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_last_run_gpm" not in unique_ids
     assert f"{entry.entry_id}_{zone_id}_adjustment" in unique_ids
     assert f"{entry.entry_id}_{zone_id}_run_now" in unique_ids
 
@@ -301,7 +303,7 @@ async def test_v1_entry_migrates_without_changing_stored_overrides(
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 7
+    assert entry.version == 8
     assert entry.minor_version == 1
     zone = next(iter(entry.subentries.values()))
     assert zone.data[CONF_EFFICIENCY] == 1.0
@@ -363,7 +365,7 @@ async def test_v4_custom_days_survive_the_v5_bump(hass: HomeAssistant) -> None:
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 7
+    assert entry.version == 8
     assert entry.options[CONF_ALLOWED_WEEKDAYS] == ["mon", "thu"]
     assert entry.options["start_time"] == "05:00:00"
     assert entry.options["finish_time"] == "09:00:00"
@@ -391,7 +393,7 @@ async def test_v5_hub_cap_becomes_a_per_zone_default(hass: HomeAssistant) -> Non
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 7
+    assert entry.version == 8
     assert entry.options[CONF_ZONE_MAX_RUN_MIN] == 45
     assert CONF_MAX_RUN_MIN not in entry.options
     assert CONF_HUB_NIGHTLY_CAP_MIN not in entry.options
@@ -423,7 +425,7 @@ async def test_v2_entry_migrates_without_rewriting_zones(hass: HomeAssistant) ->
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert entry.version == 7
+    assert entry.version == 8
     zone = next(iter(entry.subentries.values()))
     assert zone.data[CONF_EFFICIENCY] == 1.0
     assert zone.data[CONF_PRECIPITATION_RATE] == 1.5

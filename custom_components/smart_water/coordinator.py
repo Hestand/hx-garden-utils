@@ -43,6 +43,7 @@ from .const import (
     CONF_FLOW_KIND,
     CONF_FLOW_LEAK_RATIO,
     CONF_FLOW_LOW_RATIO,
+    CONF_FLOW_SCOPE,
     CONF_FLOW_SENSOR,
     CONF_FORECAST_DEFER_DAYS,
     CONF_FORECAST_HOURS,
@@ -120,6 +121,7 @@ from .const import (
     EVENT_FREEZE_ALERT,
     EVENT_WEEKLY_SUMMARY,
     FLOW_ACTION_STOP,
+    FLOW_SCOPE_IRRIGATION,
     DEFAULT_FREEZE_SKIP_F,
     DEFAULT_MAX_RUN_MIN,
     DEFAULT_MOISTURE_KIND,
@@ -146,7 +148,7 @@ from .const import (
 from .cycle_soak import plan_cycles
 from .dormancy import MAINTENANCE_MM, classify, maintenance_due
 from .audit import audit_result
-from .et import ETInputs, daily_et0
+from .et import ETInputs, daily_et0, extraterrestrial_radiation_mj, hargreaves_et0_mm
 from .forecast_rain import (
     DEFAULT_FORECAST_DEFER_DAYS,
     DEFAULT_FORECAST_HOURS,
@@ -173,7 +175,7 @@ from .flow_learn import (
     run_status,
 )
 from .learn import relative_full, should_learn, update_awc_factor
-from .moisture import apply_moisture, deficit_from_reading
+from .moisture import apply_moisture, deficit_from_reading, reading_percent
 from .observe import (
     note_rain,
     note_solar_w,
@@ -195,7 +197,7 @@ from .presets import (
 from .safety import would_execute
 from .schedule import morning_window, rules_for
 from .skips import SkipInputs, safety_reason
-from .week_plan import project_week
+from .week_plan import project_week, split_outlook
 from .store import SmartWaterStore
 from .usage import (
     DEFAULT_BASELINE_DAYS,
@@ -250,7 +252,10 @@ class ZoneSnapshot:
     adjustment_pct: float = DEFAULT_ADJUSTMENT_PCT
     sprinkler_type: str = DEFAULT_SPRINKLER_TYPE
     moisture_deficit_mm: float | None = None
+    moisture_pct: float | None = None
     moisture_mode: str = "off"
+    next_estimated: bool = False
+    next_note: str = ""
     flow_status: str = "not_configured"
     flow_delivered_gal: float = 0.0
     flow_expected_gal: float | None = None
@@ -313,6 +318,7 @@ class HubSnapshot:
     schedule_window: str = ""
     watering_now: str = "Idle"
     alerts: list[str] = field(default_factory=list)
+    outlook_summary: str = ""
 
 
 def _optional_int(data: dict[str, Any], key: str) -> int | None:
@@ -380,6 +386,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         self._notified_date = store.notified_date
         self._lock = asyncio.Lock()
         self._week: dict[str, Any] | None = None
+        self._outlook: dict[str, Any] = {"by_zone": {}, "summary": ""}
         self._last_observation: Observation | None = None
         # A main-leak stop must not run while this lock is held. Credit needs it.
         self._pending_flow_stop = False
@@ -730,6 +737,13 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             self.store.et0_method = et_result.method
             self.store.et0_detail = et_result.detail
             self.store.et0_date = today
+            history = [
+                item
+                for item in self.store.et0_history
+                if isinstance(item, dict) and item.get("date") != today
+            ]
+            history.append({"date": today, "mm": round(float(et0), 3)})
+            self.store.et0_history = history[-14:]
         elif et_result is not None and et_result.detail:
             error = error or et_result.detail
 
@@ -806,8 +820,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             if learned is not None:
                 pending_learn.append((subentry_id, *learned))
             self._apply_moisture(state, data, limits, balanced=balanced, awc_factor=factor)
-            self._note_zone_flow(state, data, now, today, subentry_id)
             self._note_bucket(state, today, limits.taw_mm * factor)
+        self._note_hub_flow(now, today)
 
         plan: NightPlan | None = None
         try:
@@ -985,6 +999,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             hourly_precip=observation.hourly_precip,
             daily_precip=observation.daily_precip,
             forecast_lows=observation.forecast_lows,
+            forecast_days=observation.forecast_days,
         )
 
     def _apply_moisture(
@@ -996,13 +1011,15 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         balanced: bool,
         awc_factor: float = 1.0,
     ) -> None:
-        mode = str(data.get(CONF_MOISTURE_MODE, DEFAULT_MOISTURE_MODE))
-        if mode in {"", "off"} or not data.get(CONF_MOISTURE_SENSOR):
+        if not data.get(CONF_MOISTURE_SENSOR):
             state["moisture_deficit_mm"] = None
+            state["moisture_pct"] = None
             return
-        reading, _unit = _state_float(self.hass, data.get(CONF_MOISTURE_SENSOR))
+        reading, unit = _state_float(self.hass, data.get(CONF_MOISTURE_SENSOR))
         if reading is None:
             return
+        state["moisture_pct"] = reading_percent(reading, unit)
+        mode = str(data.get(CONF_MOISTURE_MODE, DEFAULT_MOISTURE_MODE))
         try:
             sensor_mm = deficit_from_reading(
                 reading=reading,
@@ -1013,8 +1030,11 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             )
         except ValueError as err:
             _LOGGER.debug("Moisture reading skipped: %s", err)
+            state["moisture_deficit_mm"] = None
             return
         state["moisture_deficit_mm"] = sensor_mm
+        if mode in {"", "off"}:
+            return
         if mode == MOISTURE_OVERRIDE or (mode == MOISTURE_CORRECT and balanced):
             state["deficit_mm"] = clamp_deficit(
                 apply_moisture(
@@ -1026,43 +1046,52 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 limits.taw_mm,
             )
 
-    def _note_zone_flow(
-        self,
-        state: dict[str, Any],
-        data: dict[str, Any],
-        now: datetime,
-        today: str,
-        zone_id: str,
-    ) -> None:
-        entity_id = data.get(CONF_FLOW_SENSOR) or None
+    def _note_hub_flow(self, now: datetime, today: str) -> None:
+        """Credit the one hub meter to the zone that is actually running.
+
+        A whole-home meter is not checked while every zone is off. House use
+        would look like a leak, and this does not try to subtract that use.
+        """
+        options = self._options()
+        entity_id = options.get(CONF_FLOW_SENSOR) or None
         if not entity_id:
             return
         value, unit = _state_float(self.hass, entity_id)
         if value is None:
             return
-        kind = str(data.get(CONF_FLOW_KIND, DEFAULT_FLOW_KIND))
+        kind = str(options.get(CONF_FLOW_KIND, DEFAULT_FLOW_KIND))
         reading = volume_gallons(value, unit) if kind != "rate" else rate_gpm(value, unit)
-        note_flow(state, kind=kind, gallons=reading, at=now, today=today)
-        self._note_idle_flow(state, data, zone_id, kind, reading, today)
+        running = None
+        if self.executor is not None and self.executor.current_zone_id:
+            running = self.executor.current_zone_id
+        if running and running in self.config_entry.subentries:
+            note_flow(
+                self.store.zone(running),
+                kind=kind,
+                gallons=reading,
+                at=now,
+                today=today,
+            )
+        if str(options.get(CONF_FLOW_SCOPE) or "") != FLOW_SCOPE_IRRIGATION:
+            return
+        self._note_idle_hub(
+            kind,
+            reading,
+            today,
+            running is not None or bool(self.store.watering_entity),
+        )
 
-    def _zone_running(self) -> bool:
-        if self.store.watering_entity:
-            return True
-        return self.executor is not None and bool(self.executor.current_zone_id)
-
-    def _note_idle_flow(
+    def _note_idle_hub(
         self,
-        state: dict[str, Any],
-        data: dict[str, Any],
-        zone_id: str,
         kind: str,
         reading: float,
         today: str,
+        running: bool,
     ) -> None:
-        """Flag flow while every zone is off. A running zone explains the meter."""
-        if self._zone_running():
+        """Flag flow while every zone is off. Only an irrigation-only meter."""
+        if running:
             if kind != "rate":
-                state["idle_cursor"] = reading
+                self.store.flow_idle_cursor = reading
             return
         options = self._options()
         idle_gpm = float(options.get(CONF_FLOW_IDLE_GPM, DEFAULT_IDLE_GPM))
@@ -1072,33 +1101,27 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             gpm = reading
             leaking = reading >= idle_gpm
         else:
-            cursor = state.get("idle_cursor")
+            cursor = self.store.flow_idle_cursor
             if cursor is not None and reading - float(cursor) >= 1.0:
                 leaking = True
-                minutes = 60.0
-                gpm = (reading - float(cursor)) / minutes
-            state["idle_cursor"] = reading
-        if not leaking:
+                gpm = (reading - float(cursor)) / 60.0
+            self.store.flow_idle_cursor = reading
+        if not leaking or self.store.flow_idle_alert_date == today:
             return
-        if state.get("flow_alert") == "main_leak" and state.get("flow_alert_date") == today:
-            return
-        subentry = self.config_entry.subentries.get(zone_id)
-        name = subentry.title if subentry is not None else zone_id
+        self.store.flow_idle_alert_date = today
         action = str(options.get(CONF_FLOW_IDLE_ACTION, "notify"))
-        state["flow_alert"] = "main_leak"
-        state["flow_alert_date"] = today
         if action == FLOW_ACTION_STOP:
             self.store.flow_locked = True
-            state["flow_locked"] = True
+        name = self.config_entry.title
         self._raise_flow_alert(
             {
                 "kind": "main_leak",
-                "zone_id": zone_id,
+                "zone_id": None,
                 "name": name,
                 "gpm": None if gpm is None else round(gpm, 3),
-                "learned_gpm": state.get("learned_gpm"),
+                "learned_gpm": None,
                 "action": action,
-                "detail": alert_detail("main_leak", name=name, gpm=gpm, learned=state.get("learned_gpm")),
+                "detail": alert_detail("main_leak", name=name, gpm=gpm, learned=None),
             }
         )
 
@@ -1418,7 +1441,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             )
         )
         try:
-            self._week = project_week(
+            full = project_week(
                 tuple(requests),
                 now=now,
                 timezone=self._timezone().key,
@@ -1451,6 +1474,11 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 forecast_horizon_days=self._forecast_horizon_days(),
                 forecast_threshold_mm=skip,
                 defer_days=self._defer_days_before(now),
+                days=60,
+                et_factors=self._et_factors(observation, now.date(), et0),
+            )
+            self._week, self._outlook = split_outlook(
+                full, timezone=self._timezone().key
             )
         except (KeyError, TypeError, ValueError) as err:
             _LOGGER.debug("Smart Water could not project a week: %s", err)
@@ -1884,8 +1912,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             precip_in_hr=precip,
             efficiency=resolved_efficiency(data),
             area_sqft=_optional_float(data, CONF_AREA_SQFT),
-            flow_entity=data.get(CONF_FLOW_SENSOR) or None,
-            flow_kind=str(data.get(CONF_FLOW_KIND) or "") or None,
+            flow_entity=self._options().get(CONF_FLOW_SENSOR) or None,
+            flow_kind=str(self._options().get(CONF_FLOW_KIND) or "") or None,
             finish_by=finish_by,
             marked_at=marked_at,
             soak_after_min=soak_after_min,
@@ -2170,8 +2198,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         delivered = float(state.get("flow_delivered_gal") or 0.0)
         expected = None
         status = "not_configured"
+        hub_flow = bool(self._options().get(CONF_FLOW_SENSOR))
         has_volume = bool(
-            data.get(CONF_FLOW_SENSOR)
+            hub_flow
             or _volume_gpm(state, data)
             or _optional_float(data, CONF_AREA_SQFT)
         )
@@ -2182,8 +2211,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 area_sqft=_optional_float(data, CONF_AREA_SQFT),
                 flow_gpm=_volume_gpm(state, data),
             )
-        # Area alone estimates gallons. Only a flow sensor classifies a leak.
-        if data.get(CONF_FLOW_SENSOR):
+        # Area alone estimates gallons. Only a hub flow meter classifies a leak.
+        if hub_flow:
             now = dt_util.now(self._timezone())
             run_finished = True
             if scheduled and next_run is not None:
@@ -2199,7 +2228,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         alert = state.get("flow_alert")
         if alert:
             status = str(alert)
-        elif data.get(CONF_FLOW_SENSOR) and state.get("last_run_gpm") and not state.get("learned_gpm"):
+        elif hub_flow and state.get("last_run_gpm") and not state.get("learned_gpm"):
             status = "learning"
         today = dt_util.now(self._timezone()).date()
         week_gal = period_gallons(state.get("water_days"), today, span="week")
@@ -2208,6 +2237,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             "adjustment_pct": float(state.get("adjustment_pct", DEFAULT_ADJUSTMENT_PCT)),
             "sprinkler_type": str(data.get(CONF_SPRINKLER_TYPE, DEFAULT_SPRINKLER_TYPE)),
             "moisture_deficit_mm": state.get("moisture_deficit_mm"),
+            "moisture_pct": state.get("moisture_pct"),
             "moisture_mode": str(data.get(CONF_MOISTURE_MODE, DEFAULT_MOISTURE_MODE)),
             "flow_status": status,
             "flow_delivered_gal": delivered,
@@ -2335,6 +2365,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                         taw_mm=taw,
                     ),
                 )
+        self._apply_outlook(by_zone)
         blocked = plan.block_reason if plan is not None else "No plan yet."
         options = self._options()
         rules = rules_for(
@@ -2377,7 +2408,70 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             schedule_window=str(week.get("window") or ""),
             watering_now=watering,
             alerts=self._alert_lines(),
+            outlook_summary=str((self._outlook or {}).get("summary") or ""),
         )
+
+    def _apply_outlook(self, by_zone: dict[str, ZoneSnapshot]) -> None:
+        """Fill a next-watering time from the 60-day projection when this morning has none."""
+        found = (self._outlook or {}).get("by_zone") or {}
+        for zone_id, snap in by_zone.items():
+            info = found.get(zone_id) or {}
+            snap.next_note = str(info.get("note") or "")
+            if snap.next_run is None and info.get("at") is not None:
+                snap.next_run = info["at"]  # type: ignore[assignment]
+                snap.next_estimated = bool(info.get("estimated"))
+            elif snap.next_run is not None:
+                snap.next_estimated = False
+
+    def _et_factors(
+        self, observation: Observation, today: date, et0: float | None
+    ) -> list[float]:
+        """Expected water loss on each future morning, relative to today.
+
+        A forecast high and low use Hargreaves. Otherwise the recent average
+        of stored daily water loss is used. With neither, later days repeat today.
+        """
+        horizon = 60
+        factors = [1.0] * horizon
+        if et0 is None or et0 <= 0:
+            return factors
+        by_day = {
+            day: (high, low) for day, high, low in observation.forecast_days
+        }
+        samples: list[float] = []
+        for item in self.store.et0_history:
+            if not isinstance(item, dict):
+                continue
+            try:
+                samples.append(float(item["mm"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        recent = [value for value in samples[-14:] if value > 0]
+        average = sum(recent) / len(recent) if recent else None
+        latitude = observation.inputs.latitude_deg if observation.inputs else None
+        if latitude is None:
+            raw = self._options().get(CONF_LATITUDE, self.hass.config.latitude)
+            latitude = None if raw is None else float(raw)
+        for offset in range(1, horizon):
+            day = today + timedelta(days=offset)
+            high, low = by_day.get(day, (None, None))
+            if (
+                high is not None
+                and low is not None
+                and high - low >= 0.5
+                and latitude is not None
+            ):
+                projected = hargreaves_et0_mm(
+                    high,
+                    low,
+                    extraterrestrial_radiation_mj(float(latitude), day.timetuple().tm_yday),
+                )
+                if projected > 0:
+                    factors[offset] = projected / et0
+                    continue
+            if average:
+                factors[offset] = average / et0
+        return factors
 
     async def _maybe_notify(
         self,
@@ -2552,6 +2646,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         hourly_wind: list[tuple[datetime, float]] = []
         hourly_precip: list[tuple[datetime, float, float | None]] = []
         forecast_lows: list[tuple[datetime, float]] = []
+        forecast_days: list[tuple[date, float | None, float | None]] = []
         for row in hourly_rows:
             stamp = row.get("datetime")
             parsed = dt_util.parse_datetime(str(stamp)) if stamp else None
@@ -2589,6 +2684,10 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 forecast_lows.append(
                     (local, _forecast_temperature_f(float(row["templow"]), temp_unit))
                 )
+            high_c = _row_temp(row, "temperature", temp_unit)
+            low_c = _row_temp(row, "templow", temp_unit)
+            if high_c is not None or low_c is not None:
+                forecast_days.append((local.date(), high_c, low_c))
         today = now.date()
         tomorrow = today + timedelta(days=1)
         today_row = _forecast_on(forecast, today)
@@ -2658,6 +2757,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             hourly_precip=tuple(hourly_precip),
             daily_precip=tuple(daily_precip),
             forecast_lows=tuple(forecast_lows),
+            forecast_days=tuple(forecast_days),
         )
 
     async def _async_forecast(
@@ -2695,6 +2795,7 @@ class Observation:
     hourly_precip: tuple[tuple[datetime, float, float | None], ...] = ()
     daily_precip: tuple[tuple[datetime, float, float | None], ...] = ()
     forecast_lows: tuple[tuple[datetime, float], ...] = ()
+    forecast_days: tuple[tuple[date, float | None, float | None], ...] = ()
 
 
 def _volume_gpm(state: dict[str, Any], data: dict[str, Any]) -> float | None:

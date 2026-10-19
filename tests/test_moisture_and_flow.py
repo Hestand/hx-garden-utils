@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from smart_water.flow import classify_flow, expected_gallons, note_flow
-from smart_water.moisture import apply_moisture, deficit_from_reading
+from smart_water.moisture import apply_moisture, deficit_from_reading, reading_percent
 
 
 def test_relative_moisture_and_a_fraction() -> None:
@@ -37,6 +37,13 @@ def test_volumetric_moisture_uses_field_capacity() -> None:
         field_capacity_vwc=30,
     )
     assert percent == pytest.approx(15.24)
+
+
+def test_reading_percent_keeps_a_percent_and_scales_a_fraction() -> None:
+    assert reading_percent(0.42, None) == pytest.approx(42)
+    assert reading_percent(35, "%") == pytest.approx(35)
+    assert reading_percent(35, None) == pytest.approx(35)
+    assert reading_percent(35, "percent") == pytest.approx(35)
 
 
 def test_correct_blends_and_override_replaces() -> None:

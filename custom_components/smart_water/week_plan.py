@@ -53,6 +53,7 @@ def project_week(
     forecast_horizon_days: int = 0,
     forecast_threshold_mm: float | None = None,
     defer_days: dict[str, int] | None = None,
+    et_factors: list[float] | None = None,
 ) -> dict[str, object]:
     """Return ``days``, a short ``summary``, and a markdown table."""
     tz = ZoneInfo(timezone)
@@ -69,11 +70,14 @@ def project_week(
 
     for offset in range(days):
         if offset > 0:
+            scale = 1.0
+            if et_factors is not None and offset < len(et_factors):
+                scale = max(0.0, float(et_factors[offset]))
             for zone in zones:
                 updated = apply_daily_balance(
                     deficits[zone.zone_id],
                     taw[zone.zone_id],
-                    etc_mm=etc[zone.zone_id],
+                    etc_mm=etc[zone.zone_id] * scale,
                     precip_mm=0.0,
                     et0_mm=0.0,
                 )
@@ -267,6 +271,104 @@ def _day_row(
             }
         )
     return {"date": day, "zones": zones}
+
+
+FIRM_DAYS = 7
+OUTLOOK_DAYS = 60
+
+
+def split_outlook(
+    full: dict[str, object],
+    *,
+    timezone: str,
+    firm_days: int = FIRM_DAYS,
+    horizon: int = OUTLOOK_DAYS,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Keep a 7-day table, and a longer outlook for the next-watering date."""
+    days = list(full.get("days") or [])
+    firm = days[:firm_days]
+    window = str(full.get("window") or "")
+    week = {
+        "summary": _summary(firm),
+        "days": firm,
+        "markdown": render_markdown(firm, window),
+        "window": window,
+        "note": full.get("note") or "",
+    }
+    return week, describe_outlook(
+        days, timezone=timezone, firm_days=firm_days, horizon=horizon
+    )
+
+
+def describe_outlook(
+    days: list[dict[str, object]],
+    *,
+    timezone: str,
+    firm_days: int = 7,
+    horizon: int = 60,
+) -> dict[str, object]:
+    """First morning each zone would water, and a sentence when that is not this week.
+
+    A date inside ``firm_days`` is the plan. A later date is an estimate.
+    A dormant zone with no date inside ``horizon`` keeps its dormancy note.
+    """
+    tz = ZoneInfo(timezone)
+    found: dict[str, dict[str, object]] = {}
+    dormant: dict[str, str] = {}
+    for index, day in enumerate(days):
+        for zone in list(day["zones"]):
+            if not isinstance(zone, dict):
+                continue
+            zone_id = str(zone["zone_id"])
+            reason = str(zone.get("reason") or "")
+            if zone_id not in dormant and (
+                reason.startswith("Dormant") or "Regular watering is off" in reason
+            ):
+                dormant[zone_id] = reason
+            if not zone.get("scheduled") or zone_id in found:
+                continue
+            found[zone_id] = {
+                "at": _at(str(day["date"]), str(zone.get("starts") or ""), tz),
+                "estimated": index >= firm_days,
+                "note": "",
+                "name": str(zone["name"]),
+            }
+    for zone_id, note in dormant.items():
+        if zone_id not in found:
+            found[zone_id] = {"at": None, "estimated": False, "note": note, "name": ""}
+    dated = [item for item in found.values() if item.get("at") is not None]
+    if dated:
+        earliest = min(dated, key=lambda item: item["at"])  # type: ignore[arg-type, return-value]
+        when = _friendly(earliest["at"])  # type: ignore[arg-type]
+        if earliest["estimated"]:
+            summary = f"Next watering ~{when} (estimated)"
+        else:
+            summary = ""
+    elif dormant:
+        summary = next(iter(dormant.values()))
+    elif days:
+        summary = f"No watering projected in the next {horizon} days."
+    else:
+        summary = ""
+    return {"by_zone": found, "summary": summary}
+
+
+def _at(date_text: str, starts: str, tz: ZoneInfo) -> datetime:
+    clock = (starts or "05:00").split(",")[0].strip() or "05:00"
+    hour_text, minute_text = clock.split(":")[:2]
+    year_text, month_text, day_text = date_text.split("-")
+    return datetime(
+        int(year_text),
+        int(month_text),
+        int(day_text),
+        int(hour_text),
+        int(minute_text),
+        tzinfo=tz,
+    )
+
+
+def _friendly(moment: datetime) -> str:
+    return f"{moment.strftime('%b')} {moment.day}"
 
 
 def _summary(days: list[dict[str, object]]) -> str:

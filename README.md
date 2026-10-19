@@ -2,7 +2,7 @@
 
 Work in progress, not ready for general use.
 
-Water-balance planner and zone controller for Home Assistant (`smart_water` 0.8.1).
+Water-balance planner and zone controller for Home Assistant (`smart_water` 0.9.0).
 
 It estimates reference evapotranspiration, tracks a soil-water deficit for each zone, and builds a cycle-and-soak plan for the next morning. The plan is made at the plan hour (default 23:00). Valves open at the start time (default 05:00) and must finish by 09:00. **Automatic watering is off after a new install and after an upgrade.** Turn the hub's **Automatic watering** switch on when you want it to open valves. Until then the plan is only sensors and an optional notification. Run now is a manual action and runs even while that switch is off. A simulation hub still plays an example week and never calls a real on/off entity. The controller calls `switch`, `valve`, or `input_boolean` services only. It does not call a controller API.
 
@@ -16,6 +16,7 @@ The screens use plain names. The technical term is here so a manual or a forum p
 | --- | --- | --- |
 | Soil water | Bucket, percent full | How full the root zone is, from 0% to 100%. |
 | Water needed | Deficit, Dr | How much water the root zone is missing. |
+| Soil moisture level | Moisture sensor | The raw reading from a soil sensor, in percent. Water needed stays the calculated amount. |
 | Watering point | RAW, readily available water | How dry the soil may get before a watering. |
 | Water loss today (reference lawn) | ET0 | How much water a reference lawn would lose today. |
 | Plant water use | ETc, crop ET | Water loss today times the plant factor. |
@@ -33,7 +34,7 @@ Requires Home Assistant **2025.3** or newer (config subentries). Tested on **202
 
 1. HACS → Integrations → ⋮ → Custom repositories.
 2. Add `https://github.com/Hestand/hx-garden-utils` as category **Integration**.
-3. Download **Smart Water** (release `v0.8.1`), then restart Home Assistant.
+3. Download **Smart Water** (release `v0.9.0`), then restart Home Assistant.
 
 `hacs.json` is included. This is not in the default HACS store.
 
@@ -49,7 +50,7 @@ That directory must contain `__init__.py` and `manifest.json`. Restart Home Assi
 
 ### Upgrading from 0.5.x, 0.4.x, 0.3.x, 0.2.x, or 0.1.x
 
-Download 0.8.1 and restart. 0.8.1 renames the sensors and settings into plain English. Entity ids and history stay the same, because the unique ids did not change. Reference water loss and other technical sensors move to the diagnostic section, so the device page leads with soil water, the next watering, the last run, and water used. The config entry stays at version 7. 0.8.0 replaces the sunrise deadline with a morning window: start at **05:00**, finish by **09:00**, and start no earlier than **04:00**. A sequence that does not fit 05:00–09:00 may start earlier, down to 04:00, and the rest stays in the bucket for the next allowed day. An allowed day is the morning the valves open. Existing hubs pick up these times on restart. They are not asked to run setup again, zone data is not rewritten, and the stored bucket (storage version 1) is kept. **Automatic watering stays off.** 0.7.2 dated each schedule row by the morning the valves open. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
+Download 0.9.0 and restart. Feature releases bump the middle number (0.9, then 0.10, then 0.11). 1.0.0 is reserved for the true release. 0.9.0 projects the next watering out to about 60 days, so the date stays filled when nothing is due this week. The flow meter moves to the hub: one sensor, and a required choice of whole-home or irrigation-only. A whole-home meter does not alert while nothing is running. An existing per-zone flow sensor is copied onto the hub as irrigation-only, and the zone copy is removed. You are not asked to run setup again. Soil moisture level shows the sensor's own percent. That entity, and the flow entities, are created only when the sensor is set. The config entry moves to version 8. 0.8.1 renames the sensors and settings into plain English. Entity ids and history stay the same, because the unique ids did not change. Reference water loss and other technical sensors move to the diagnostic section, so the device page leads with soil water, the next watering, the last run, and water used. 0.8.0 replaces the sunrise deadline with a morning window: start at **05:00**, finish by **09:00**, and start no earlier than **04:00**. A sequence that does not fit 05:00–09:00 may start earlier, down to 04:00, and the rest stays in the bucket for the next allowed day. An allowed day is the morning the valves open. Existing hubs pick up these times on restart. They are not asked to run setup again, zone data is not rewritten, and the stored bucket (storage version 1) is kept. **Automatic watering stays off.** 0.7.2 dated each schedule row by the morning the valves open. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
 
 0.7 caps each zone on its own, can wait for confident forecast rain, warns before a freeze, and includes a dashboard card. Flow alerts still notify only until you change that. The weekly summary is off. Cost and the weekly gallon budget stay empty until you set them.
 
@@ -160,7 +161,7 @@ Plant choices cover St. Augustine, Bermuda, Zoysia, Buffalo, a generic warm-seas
 | Enabled | Per-zone switch. Off keeps that zone out of the plan and out of run now. |
 | Minimum days, target depth, freeze, wind, moisture skip, dormancy lines, winter maintenance, moisture learning | Optional. Blank uses the defaults in the next section. |
 | Soil moisture | Relative percent (or a 0–1 fraction) or volumetric water content. **Correct** blends toward the sensor once on the day the bucket commits, weight default 0.5. **Override** replaces the deficit on every update. VWC needs field capacity: deficit = max(0, (θFC − θ) × root depth in meters × 1000). |
-| Flow sensor | Any entity, volume total or rate. Records delivered gallons and sets the flow sensor to `pending`, `ok`, `low_flow`, `leak`, `no_data`, or `not_configured`. Default low ratio 0.5, leak ratio 1.5. A flow label does not shut a valve off. If a total rises during a cycle, that gallon increase is what gets credited to the bucket. |
+| Flow meter | One sensor on the hub, volume total or rate. Choose whole-home or irrigation-only. Water used while a zone is running is counted for that zone. Whole-home does not alert while nothing is running. |
 | Zone rain sensor | Binary sensor. On skips that zone. |
 
 ## Simulation
@@ -302,7 +303,7 @@ Valve-on time is 249 minutes. No zone is over 60. Clock order, local time on 14 
 
 ## Flow
 
-Each zone can learn its normal gallons per minute from the flow sensor while it runs. The estimate is the median of the last 12 runs. A run more than twice the median, or under 0.4 times it, is reported and left out of the median. Alerts start after 3 runs (change that on the hub).
+The hub has one flow meter. While a zone is running, the measured flow is that zone's. House use is not subtracted. Each zone can learn its normal gallons per minute from that meter while it runs. The estimate is the median of the last 12 runs. A run more than twice the median, or under 0.4 times it, is reported and left out of the median. Alerts start after 3 runs (change that on the hub). A whole-home meter hides the idle-flow alert. An irrigation-only meter keeps it.
 
 | Alert | Default | What it means |
 | --- | --- | --- |
@@ -312,7 +313,7 @@ Each zone can learn its normal gallons per minute from the flow sensor while it 
 
 Each alert is **Notify only** or **Stop and skip until reset**. Notify is the default. Stop on a zone skips that zone. Stop on idle flow skips every zone. `smart_water.reset_flow_learning` clears the samples, the alert, and the skip. Leave the zone empty to reset the hub. The event is `smart_water_flow_alert`. A repair is raised with the same sentence. A notify target, if set, gets it too.
 
-Sensors: **Learned flow**, **Last run flow** (gal/min), and the existing **Flow** status (`learning`, `ok`, `high_flow`, `low_flow`, `main_leak`). With no area, gallons use the learned rate once it exists. An entered rate still wins over flow and area. Area still wins over GPM for the gallon estimate.
+Sensors, only when a hub flow meter is set: **Flow check**, **Learned flow rate**, and **Last flow rate** (gal/min). Flow check can read `learning`, `ok`, `high_flow`, `low_flow`, or `main_leak`. With no area, gallons use the learned rate once it exists. An entered rate still wins over flow and area. Area still wins over GPM for the gallon estimate.
 
 ## Water use
 
@@ -377,7 +378,7 @@ A zone is usable when Home Assistant already exposes it as a valve, switch, or i
 
 ## Entities
 
-Per zone, on the device page: soil water (percent full), water needed, next watering, why this plan, today's run, flow check, last run, plant activity, water used, water saved, a watering-amount number (0–300%), a run-now button, and an enabled switch. The watering point, the moisture sensor's water needed, and the learned flow rates are diagnostic.
+Per zone, on the device page: soil water (percent full), water needed, next watering, why this plan, today's run, last run, plant activity, water used, water saved, a watering-amount number (0–300%), a run-now button, and an enabled switch. The watering point is diagnostic. Soil moisture level is diagnostic and exists only when that zone has a moisture sensor. Flow check, learned flow rate, and last flow rate exist only when the hub has a flow meter.
 
 Hub: mode, today's plan, rain today, next watering, watering schedule, watering now, water used, water saved, water cost when a price is set, and the Automatic watering switch. Water loss today (reference lawn) is diagnostic. A simulation hub also has a Sample week sensor and a Run simulation button. Entity ids are the ones created with the old names; renaming the label does not change them.
 

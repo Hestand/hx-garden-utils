@@ -81,6 +81,10 @@ class SmartWaterStore:
         self.summary_sent_week: str | None = None
         self.freeze_alert_key: str | None = None
         self.freeze_alert_detail: str | None = None
+        self.et0_history: list[dict[str, Any]] = []
+        self.flow_idle_cursor: float | None = None
+        self.flow_idle_last_at: str | None = None
+        self.flow_idle_alert_date: str | None = None
 
     async def async_load(self) -> None:
         """Load the last saved state."""
@@ -110,6 +114,11 @@ class SmartWaterStore:
         self.summary_sent_week = data.get("summary_sent_week")
         self.freeze_alert_key = data.get("freeze_alert_key")
         self.freeze_alert_detail = data.get("freeze_alert_detail")
+        self.et0_history = list(data.get("et0_history") or [])
+        cursor = data.get("flow_idle_cursor")
+        self.flow_idle_cursor = None if cursor is None else float(cursor)
+        self.flow_idle_last_at = data.get("flow_idle_last_at")
+        self.flow_idle_alert_date = data.get("flow_idle_alert_date")
 
     def zone(self, zone_id: str) -> dict[str, Any]:
         """Return mutable state for a zone, creating it at field capacity."""
@@ -160,5 +169,9 @@ class SmartWaterStore:
                 "summary_sent_week": self.summary_sent_week,
                 "freeze_alert_key": self.freeze_alert_key,
                 "freeze_alert_detail": self.freeze_alert_detail,
+                "et0_history": self.et0_history,
+                "flow_idle_cursor": self.flow_idle_cursor,
+                "flow_idle_last_at": self.flow_idle_last_at,
+                "flow_idle_alert_date": self.flow_idle_alert_date,
             }
         )

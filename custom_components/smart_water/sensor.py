@@ -16,12 +16,28 @@ from homeassistant.const import (
     UnitOfVolumeFlowRate,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_COST_PER_1000_GAL, CONF_SIMULATION, SUBENTRY_ZONE
+from .const import (
+    CONF_COST_PER_1000_GAL,
+    CONF_FLOW_SENSOR,
+    CONF_MOISTURE_SENSOR,
+    CONF_SIMULATION,
+    DOMAIN,
+    SUBENTRY_ZONE,
+)
 from .coordinator import SmartWaterConfigEntry
 from .entity import SmartWaterHubEntity, SmartWaterZoneEntity
 from .units import mm_to_inches
+
+
+def _drop_sensor(hass: HomeAssistant, unique_id: str) -> None:
+    """Remove a sensor that no longer has a moisture sensor or a flow meter."""
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+    if entity_id is not None:
+        registry.async_remove(entity_id)
 
 
 async def async_setup_entry(
@@ -51,25 +67,35 @@ async def async_setup_entry(
         if subentry.subentry_type != SUBENTRY_ZONE:
             continue
         zone_id = subentry.subentry_id
-        async_add_entities(
-            [
-                SoilWaterSensor(coordinator, zone_id),
-                DeficitSensor(coordinator, zone_id),
-                RawSensor(coordinator, zone_id),
-                NextRunSensor(coordinator, zone_id),
-                PlanReasonSensor(coordinator, zone_id),
-                ZonePlanSensor(coordinator, zone_id),
-                FlowSensor(coordinator, zone_id),
-                MoistureSensor(coordinator, zone_id),
-                LastRunSensor(coordinator, zone_id),
-                DormancySensor(coordinator, zone_id),
-                LearnedGpmSensor(coordinator, zone_id),
-                LastRunGpmSensor(coordinator, zone_id),
-                ZoneWaterUseSensor(coordinator, zone_id),
-                ZoneWaterSavedSensor(coordinator, zone_id),
-            ],
-            config_subentry_id=zone_id,
-        )
+        prefix = f"{entry.entry_id}_{zone_id}"
+        zone_sensors: list[SensorEntity] = [
+            SoilWaterSensor(coordinator, zone_id),
+            DeficitSensor(coordinator, zone_id),
+            RawSensor(coordinator, zone_id),
+            NextRunSensor(coordinator, zone_id),
+            PlanReasonSensor(coordinator, zone_id),
+            ZonePlanSensor(coordinator, zone_id),
+            LastRunSensor(coordinator, zone_id),
+            DormancySensor(coordinator, zone_id),
+            ZoneWaterUseSensor(coordinator, zone_id),
+            ZoneWaterSavedSensor(coordinator, zone_id),
+        ]
+        if subentry.data.get(CONF_MOISTURE_SENSOR):
+            zone_sensors.append(MoistureSensor(coordinator, zone_id))
+        else:
+            _drop_sensor(hass, f"{prefix}_moisture")
+        if entry.options.get(CONF_FLOW_SENSOR):
+            zone_sensors.extend(
+                [
+                    FlowSensor(coordinator, zone_id),
+                    LearnedGpmSensor(coordinator, zone_id),
+                    LastRunGpmSensor(coordinator, zone_id),
+                ]
+            )
+        else:
+            for suffix in ("flow", "learned_gpm", "last_run_gpm"):
+                _drop_sensor(hass, f"{prefix}_{suffix}")
+        async_add_entities(zone_sensors, config_subentry_id=zone_id)
 
 
 class ModeSensor(SmartWaterHubEntity, SensorEntity):
@@ -330,6 +356,8 @@ class NextRunSensor(_ZoneSensor):
             "cycles_min": list(zone.cycles),
             "soak_min": zone.soak_min,
             "max_cycle_min": zone.max_cycle_min,
+            "estimated": zone.next_estimated,
+            "note": zone.next_note,
         }
 
 
@@ -402,24 +430,45 @@ class ScheduleSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Return the earliest cycle start, if any zone is scheduled."""
+        """Return the earliest next watering, including a date past this week."""
         data = self.coordinator.data
-        if data is None or data.plan is None or not data.plan.timeline:
+        if data is None or not data.zones:
             return None
-        return data.plan.timeline[0].start
+        moments = [
+            zone.next_run for zone in data.zones.values() if zone.next_run is not None
+        ]
+        if not moments:
+            return None
+        return min(moments)
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Show the allowed days and the blackout that shaped the window."""
+        """Show the allowed days and whether the date is an estimate."""
         data = self.coordinator.data
         if data is None:
             return {}
+        moments = [
+            zone.next_run for zone in data.zones.values() if zone.next_run is not None
+        ]
+        earliest = min(moments) if moments else None
+        estimated = False
+        note = data.outlook_summary
+        if earliest is not None:
+            matched = [
+                zone for zone in data.zones.values() if zone.next_run == earliest
+            ]
+            estimated = any(zone.next_estimated for zone in matched)
+            notes = [zone.next_note for zone in matched if zone.next_note]
+            if notes:
+                note = notes[0]
         return {
             "source": data.schedule_source,
             "allowed_weekdays": list(data.allowed_weekdays or []),
             "blackout_start": data.blackout_start,
             "blackout_end": data.blackout_end,
             "round_minutes": data.round_minutes,
+            "estimated": estimated,
+            "note": note,
         }
 
 
@@ -496,14 +545,14 @@ class FlowSensor(_ZoneSensor):
 
 
 class MoistureSensor(_ZoneSensor):
-    """Water the moisture sensor says the zone still needs."""
+    """The configured soil-moisture sensor's own reading, as a percent."""
 
     _attr_translation_key = "moisture"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_device_class = SensorDeviceClass.PRECIPITATION
-    _attr_native_unit_of_measurement = UnitOfPrecipitationDepth.MILLIMETERS
+    _attr_device_class = SensorDeviceClass.MOISTURE
+    _attr_native_unit_of_measurement = PERCENTAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_suggested_display_precision = 1
+    _attr_suggested_display_precision = 0
     _attr_icon = "mdi:water-percent"
 
     def __init__(self, coordinator, zone_id: str) -> None:
@@ -512,20 +561,21 @@ class MoistureSensor(_ZoneSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return the deficit implied by the moisture sensor."""
+        """Return the raw moisture reading as a percent."""
         zone = self._zone()
         if zone is None:
             return None
-        return zone.moisture_deficit_mm
+        return zone.moisture_pct
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Show whether the reading corrects or replaces the bucket."""
+        """Keep the old deficit-from-sensor figure as an attribute."""
         zone = self._zone()
         if zone is None:
             return {}
         return {
             "mode": zone.moisture_mode,
+            "water_needed_mm": zone.moisture_deficit_mm,
             "learn_factor": round(zone.learn_factor, 3),
             "learn_confidence": round(zone.learn_confidence, 2),
         }
@@ -544,22 +594,24 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def native_value(self) -> str | None:
-        """Return how many waterings are planned and when the next one is."""
+        """Return this week's plan, or a later estimated date when nothing is due yet."""
         data = self.coordinator.data
-        if data is None or not data.schedule_days:
-            return "No watering in the next 7 days"
+        if data is None or not data.zones:
+            return None
         planned = [
             (day["date"], zone)
-            for day in data.schedule_days
+            for day in data.schedule_days or []
             for zone in day.get("zones", [])
             if zone.get("scheduled")
         ]
-        if not planned:
-            return "No watering in the next 7 days"
-        day, zone = planned[0]
-        start = str(zone.get("starts") or "").split(",")[0].strip()
-        clock = f" {start}" if start else ""
-        return f"{len(planned)} waterings · next {day}{clock} {zone['name']}"[:255]
+        if planned:
+            day, zone = planned[0]
+            start = str(zone.get("starts") or "").split(",")[0].strip()
+            clock = f" {start}" if start else ""
+            return f"{len(planned)} waterings · next {day}{clock} {zone['name']}"[:255]
+        if data.outlook_summary:
+            return data.outlook_summary[:255]
+        return None
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
