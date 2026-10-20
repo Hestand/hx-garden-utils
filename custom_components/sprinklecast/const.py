@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "sprinklecast"
 NAME = "Sprinklecast"
-VERSION = "0.14.5"
+VERSION = "0.14.6"
 
 # Retired option key. v0.5 stores the automatic-watering switch in the hub
 # store (default off) and drops this option on migration.

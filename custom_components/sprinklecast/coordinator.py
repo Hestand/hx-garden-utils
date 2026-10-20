@@ -149,6 +149,7 @@ from .const import (
 from .cycle_soak import plan_cycles
 from .dormancy import MAINTENANCE_MM, classify, maintenance_due
 from .audit import audit_result, rate_from_average_depth
+from . import climate_day
 from .et import (
     ETInputs,
     METHOD_HARGREAVES,
@@ -1145,38 +1146,44 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         self._accumulate_day(now, today)
         self._note_temp_history(now, today)
         observation = self._overlay_observed(await self._async_observation(now))
-        self._last_observation = observation
         if observation.error:
             error = observation.error
-        # A restart used to save Hargreaves ET0 before humidity and wind had
-        # loaded, then keep that number, the plan, and the projection all day.
-        # Wait until startup grace has passed and every configured input has a
-        # real state. Until then the last saved ET0 stays in place.
-        inputs = observation.inputs
-        commit_et = inputs is not None and not self._et_blocked()
+        # Daily ET0 is the calendar day's aggregates. A live reading at refresh
+        # time is not a daily total: at night solar is 0 and the other sensors
+        # are whatever they are right now, so every restart used to move the
+        # plan. Recorder history (or the stored running aggregate) is reread,
+        # and a finished day stays locked.
+        wind_height = float(options.get(CONF_WIND_HEIGHT_M, DEFAULT_WIND_HEIGHT_M))
+        await self._async_lock_finished(now, latitude_f, elevation, wind_height)
+        climate = await self._async_today_climate(now, today)
+        inputs = climate_day.inputs_from_day(
+            climate,
+            latitude=latitude_f,
+            elevation_m=elevation,
+            wind_height_m=wind_height,
+        )
+        if inputs is not None:
+            observation = replace(observation, inputs=inputs)
+        self._last_observation = observation
         et_result = None
         et0 = None
-        if commit_et and inputs is not None:
-            et_result = daily_et0(
-                inputs, missing=self._missing_penman_names(inputs)
-            )
+        if inputs is not None:
+            et_result = self._et0_result(climate, inputs)
             et0 = et_result.et0_mm
             if et0 is not None:
                 self._et_waiting = False
+                climate["et0_mm"] = et0
+                climate["method"] = et_result.method
+                climate["detail"] = et_result.detail
                 self.store.et0_mm = et0
                 self.store.et0_method = et_result.method
                 self.store.et0_detail = et_result.detail
                 self.store.et0_date = today
-                history = [
-                    item
-                    for item in self.store.et0_history
-                    if isinstance(item, dict) and item.get("date") != today
-                ]
-                history.append({"date": today, "mm": round(float(et0), 3)})
-                self.store.et0_history = history[-14:]
             elif et_result.detail:
                 error = error or et_result.detail
-        elif self._et_blocked():
+        else:
+            # No daily total yet. Keep the last saved value instead of locking
+            # a fallback from whatever has loaded.
             self._et_waiting = True
 
         zone_ids = [
@@ -1185,9 +1192,14 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             if subentry.subentry_type == SUBENTRY_ZONE
         ]
         self.store.prune(set(zone_ids))
-        # Planning can reuse the last good ET0 when today's weather read fails.
-        # The bucket is only credited when this refresh actually computed ET0.
-        et0_for_plan = et0 if et0 is not None else self.store.et0_mm
+        # The plan and the days past the forecast use finished days. Today's
+        # partial total is only the bucket step for this calendar day.
+        locked_et0 = self._locked_et_average(today)
+        et0_for_plan = (
+            locked_et0
+            if locked_et0 is not None
+            else et0 if et0 is not None else self.store.et0_mm
+        )
         if et0 is not None:
             preview = apply_daily_balance(
                 0.0,
@@ -1225,9 +1237,18 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             )
             balanced = False
             etc_today = None if limits.etc_mm is None else limits.etc_mm * season.factor
+            bucket_et0 = et0
+            bucket_etc = etc_today
+            if et0 is not None and et0 != et0_for_plan:
+                bucket_limits = self._limits(data, et0, now.month)
+                bucket_etc = (
+                    None
+                    if bucket_limits.etc_mm is None
+                    else bucket_limits.etc_mm * season.factor
+                )
             if (
-                et0 is not None
-                and etc_today is not None
+                bucket_et0 is not None
+                and bucket_etc is not None
                 and should_apply_balance(
                     state.get("balance_date"),
                     today,
@@ -1239,9 +1260,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 updated = apply_daily_balance(
                     float(state["deficit_mm"]),
                     limits.taw_mm * factor,
-                    etc_mm=etc_today,
+                    etc_mm=bucket_etc,
                     precip_mm=observation.precip_today_mm,
-                    et0_mm=et0,
+                    et0_mm=bucket_et0,
                 )
                 state["deficit_mm"] = updated.deficit_mm
                 state["balance_date"] = today
@@ -1325,6 +1346,253 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             ),
             jobs,
         )
+
+    def _et0_result(self, day: dict[str, Any], inputs: ETInputs):
+        """Compute ET0 and say that the totals are daily, not a live reading."""
+        result = daily_et0(inputs, missing=self._missing_penman_names(inputs))
+        if result.et0_mm is None:
+            return result
+        return replace(result, detail=f"{result.detail} {climate_day.source_sentence(day)}")
+
+    async def _async_lock_finished(
+        self,
+        now: datetime,
+        latitude: float | None,
+        elevation: float,
+        wind_height: float,
+    ) -> None:
+        """Compute each finished day once, then never again."""
+        today = now.date().isoformat()
+        for day in list(self.store.climate_days):
+            if day.get("locked"):
+                continue
+            day_name = str(day.get("date") or "")
+            if not day_name or day_name >= today:
+                continue
+            finished = date.fromisoformat(day_name)
+            start = climate_day.midnight(now, finished)
+            await self._async_fill_climate(
+                day, start, climate_day.next_midnight(start), live=False
+            )
+            inputs = climate_day.inputs_from_day(
+                day,
+                latitude=latitude,
+                elevation_m=elevation,
+                wind_height_m=wind_height,
+            )
+            if inputs is not None:
+                result = self._et0_result(day, inputs)
+                if result.et0_mm is not None:
+                    day["et0_mm"] = result.et0_mm
+                    day["method"] = result.method
+                    day["detail"] = result.detail
+            if day.get("et0_mm") is None:
+                continue
+            day["locked"] = True
+            self._remember_locked_et0(day_name, float(day["et0_mm"]))
+
+    async def _async_today_climate(self, now: datetime, today: str) -> dict[str, Any]:
+        """Today's aggregate from recorder history, else the stored running total."""
+        day = self.store.climate_day(today)
+        if day.get("locked"):
+            return day
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        await self._async_fill_climate(day, start, now, live=True)
+        self.store.climate_days = climate_day.prune_days(self.store.climate_days, today)
+        # prune replaces the list; keep the same day object, which prune retains.
+        for item in self.store.climate_days:
+            if item.get("date") == today:
+                return item
+        return day
+
+    async def _async_fill_climate(
+        self,
+        day: dict[str, Any],
+        start: datetime,
+        end: datetime,
+        *,
+        live: bool,
+    ) -> None:
+        """Fill one day. Recorded series replace a field. Live samples only fill gaps."""
+        if day.get("locked"):
+            return
+        specs = self._climate_specs()
+        histories = await climate_day.async_entity_histories(
+            self.hass,
+            [entity_id for _kind, entity_id, _attribute in specs],
+            start,
+            end,
+        )
+        for kind, entity_id, attribute in specs:
+            recorded = self._recorded_points(histories, kind, entity_id, attribute)
+            if recorded:
+                series_kind, points = recorded
+                climate_day.apply_series(day, series_kind, points, start, end)
+                continue
+            if not live:
+                continue
+            sample = self._live_climate_value(kind, entity_id, attribute)
+            if sample is None:
+                continue
+            series_kind, value = sample
+            climate_day.note_climate(day, series_kind, value, end)
+
+    def _climate_specs(self) -> list[tuple[str, str, str | None]]:
+        """Kind, entity, and optional attribute for each daily ET0 input."""
+        options = self._options()
+        weather = self.config_entry.data.get(CONF_WEATHER_ENTITY)
+        specs: list[tuple[str, str, str | None]] = []
+        temperature = options.get(CONF_TEMPERATURE_SENSOR)
+        if temperature:
+            specs.append(("temperature", str(temperature), None))
+        elif weather:
+            specs.append(("temperature", str(weather), "temperature"))
+        humidity = options.get(CONF_HUMIDITY_SENSOR)
+        if humidity:
+            specs.append(("humidity", str(humidity), None))
+        elif weather:
+            specs.append(("humidity", str(weather), "humidity"))
+        wind = options.get(CONF_WIND_SENSOR)
+        if wind:
+            specs.append(("wind", str(wind), None))
+        elif weather:
+            specs.append(("wind", str(weather), "wind_speed"))
+        pressure = options.get(CONF_PRESSURE_SENSOR)
+        if pressure:
+            specs.append(("pressure", str(pressure), None))
+        solar = options.get(CONF_SOLAR_SENSOR)
+        if solar:
+            specs.append(("solar", str(solar), None))
+        elif options.get(CONF_UV_SENSOR):
+            specs.append(("uv", str(options[CONF_UV_SENSOR]), None))
+        return specs
+
+    def _recorded_points(
+        self,
+        histories: dict[str, list[climate_day.HistoryPoint]] | None,
+        kind: str,
+        entity_id: str,
+        attribute: str | None,
+    ) -> tuple[str, list[tuple[datetime, float]]] | None:
+        if not histories:
+            return None
+        points: list[tuple[datetime, float]] = []
+        series_kind = kind
+        for item in histories.get(entity_id) or []:
+            parsed = self._climate_number(
+                kind, item.state, item.unit, item.attributes, attribute
+            )
+            if parsed is None:
+                continue
+            series_kind, value = parsed
+            points.append((item.at, value))
+        if not points:
+            return None
+        return series_kind, points
+
+    def _live_climate_value(
+        self, kind: str, entity_id: str, attribute: str | None
+    ) -> tuple[str, float] | None:
+        if entity_not_ready(self.hass, entity_id):
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return None
+        unit = state.attributes.get("unit_of_measurement")
+        return self._climate_number(
+            kind,
+            state.state,
+            None if unit is None else str(unit),
+            dict(state.attributes),
+            attribute,
+        )
+
+    def _climate_number(
+        self,
+        kind: str,
+        state: str,
+        unit: str | None,
+        attributes: dict[str, Any],
+        attribute: str | None,
+    ) -> tuple[str, float] | None:
+        """Convert one reading into the series kind and an SI value."""
+        if attribute:
+            raw = attributes.get(attribute)
+            if attribute == "temperature":
+                unit = attributes.get("temperature_unit")
+            elif attribute == "wind_speed":
+                unit = attributes.get("wind_speed_unit")
+            elif attribute == "humidity":
+                unit = "%"
+        else:
+            raw = state
+        try:
+            number = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if kind == "temperature":
+            converted = temperature_c(number, unit)
+            return None if converted is None else ("temperature", converted)
+        if kind == "humidity":
+            converted = humidity_percent(number, unit)
+            return None if converted is None else ("humidity", converted)
+        if kind == "wind":
+            converted = speed_m_s(number, unit)
+            return None if converted is None else ("wind", converted)
+        if kind == "pressure":
+            converted = pressure_kpa(number, unit)
+            return None if converted is None else ("pressure", converted)
+        if kind == "solar":
+            daily_mj, watts = solar_parts(number, unit)
+            if daily_mj is not None:
+                return "solar_mj", daily_mj
+            if watts is not None:
+                return "solar_w", watts
+            return None
+        if kind == "uv":
+            index = uv_index_value(number, unit)
+            if index is None:
+                return None
+            return "solar_w", uv_index_to_w_m2(index)
+        return None
+
+    def _remember_locked_et0(self, day: str, mm: float) -> None:
+        """Store a finished day's ET0. A locked row is left as it was."""
+        kept: list[dict[str, Any]] = []
+        already = False
+        for item in self.store.et0_history:
+            if not isinstance(item, dict):
+                continue
+            if item.get("date") != day:
+                kept.append(item)
+                continue
+            if item.get("locked") and not already:
+                kept.append(item)
+                already = True
+        if not already:
+            kept.append({"date": day, "mm": round(float(mm), 3), "locked": True})
+        self.store.et0_history = kept[-14:]
+
+    def _locked_et_average(self, today: str) -> float | None:
+        """Mean of finished days. Today's partial total is not included."""
+        values: list[float] = []
+        for item in self.store.et0_history:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("date") or "") >= today:
+                continue
+            if item.get("locked") is False:
+                continue
+            try:
+                value = float(item["mm"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if value > 0:
+                values.append(value)
+        recent = values[-14:]
+        if not recent:
+            return None
+        return sum(recent) / len(recent)
 
     def _configured_et_entities(self) -> list[tuple[str, str]]:
         """Unit kind and entity id for inputs that must exist before ET0 is saved."""
@@ -3196,7 +3464,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             effective_rain_mm=float(self.store.weather.get("effective_rain_mm") or 0.0),
             rain_ignored=bool(self.store.weather.get("rain_ignored")),
             precip_source=str(self.store.weather.get("precip_source") or "none"),
-            solar_mj=float(self.store.weather.get("solar_mj") or 0.0),
+            solar_mj=self._solar_today(),
             schedule_source=rules.source,
             allowed_weekdays=rules.allowed_weekdays,
             blackout_start=rules.blackout_start,
@@ -3229,13 +3497,22 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             elif snap.next_run is not None:
                 snap.next_estimated = False
 
+    def _solar_today(self) -> float:
+        """Daily solar total for the current aggregate, in MJ/m²."""
+        current = str(self.store.weather.get("date") or self.store.et0_date or "")
+        for day in self.store.climate_days:
+            if day.get("date") == current:
+                return float(day.get("solar_mj") or 0.0)
+        return float(self.store.weather.get("solar_mj") or 0.0)
+
     def _et_factors(
         self, observation: Observation, today: date, et0: float | None
     ) -> list[float]:
-        """Expected water loss on each future morning, relative to today.
+        """Expected water loss on each future morning, relative to the plan ET0.
 
-        A forecast high and low use Hargreaves. Otherwise the recent average
-        of stored daily water loss is used. With neither, later days repeat today.
+        A forecast high and low use Hargreaves. Days past the forecast use the
+        locked recent average, not today's partial total. With neither, later
+        days repeat the plan ET0.
         """
         horizon = OUTLOOK_DAYS
         factors = [1.0] * horizon
@@ -3244,16 +3521,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         by_day = {
             day: (high, low) for day, high, low in observation.forecast_days
         }
-        samples: list[float] = []
-        for item in self.store.et0_history:
-            if not isinstance(item, dict):
-                continue
-            try:
-                samples.append(float(item["mm"]))
-            except (KeyError, TypeError, ValueError):
-                continue
-        recent = [value for value in samples[-14:] if value > 0]
-        average = sum(recent) / len(recent) if recent else None
+        average = self._locked_et_average(today.isoformat())
         latitude = observation.inputs.latitude_deg if observation.inputs else None
         if latitude is None:
             raw = self._options().get(CONF_LATITUDE, self.hass.config.latitude)

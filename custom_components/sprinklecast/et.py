@@ -6,8 +6,8 @@ otherwise the Hargreaves radiation estimate (Eq. 50) inside Penman-Monteith.
 Temperature-only days fall back to the Hargreaves ET0 equation (Eq. 52).
 
 An instantaneous W/m² reading is not itself the daily total. The coordinator
-integrates those samples (and a UV-index fallback) to MJ/m²/day and passes
-that integral in as ``rs_mj_m2_day``.
+passes the day's high and low, mean humidity, mean wind, mean pressure, and
+the solar integral (MJ/m²/day) from recorded history or the stored aggregate.
 """
 
 from __future__ import annotations

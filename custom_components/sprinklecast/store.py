@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from .climate_day import fresh_climate_day
 from .const import DEFAULT_ADJUSTMENT_PCT, DOMAIN
 from .observe import fresh_day
 
@@ -99,6 +100,7 @@ class SmartWaterStore:
         self.freeze_alert_key: str | None = None
         self.freeze_alert_detail: str | None = None
         self.et0_history: list[dict[str, Any]] = []
+        self.climate_days: list[dict[str, Any]] = []
         self.flow_idle_cursor: float | None = None
         self.flow_idle_last_at: str | None = None
         self.flow_idle_alert_date: str | None = None
@@ -132,6 +134,12 @@ class SmartWaterStore:
         self.freeze_alert_key = data.get("freeze_alert_key")
         self.freeze_alert_detail = data.get("freeze_alert_detail")
         self.et0_history = list(data.get("et0_history") or [])
+        self.climate_days = []
+        for item in data.get("climate_days") or []:
+            if isinstance(item, dict) and item.get("date"):
+                self.climate_days.append(
+                    {**fresh_climate_day(str(item["date"])), **item}
+                )
         cursor = data.get("flow_idle_cursor")
         self.flow_idle_cursor = None if cursor is None else float(cursor)
         self.flow_idle_last_at = data.get("flow_idle_last_at")
@@ -156,6 +164,15 @@ class SmartWaterStore:
             self.weather["rain_cursor"] = cursor
             self.weather["rain_last_at"] = last_at
         return self.weather
+
+    def climate_day(self, day: str) -> dict[str, Any]:
+        """Return the aggregate for one local date, creating it unlocked."""
+        for item in self.climate_days:
+            if item.get("date") == day:
+                return item
+        created = fresh_climate_day(day)
+        self.climate_days.append(created)
+        return created
 
     def prune(self, zone_ids: set[str]) -> None:
         """Drop state for zones that were removed."""
@@ -187,6 +204,7 @@ class SmartWaterStore:
                 "freeze_alert_key": self.freeze_alert_key,
                 "freeze_alert_detail": self.freeze_alert_detail,
                 "et0_history": self.et0_history,
+                "climate_days": self.climate_days,
                 "flow_idle_cursor": self.flow_idle_cursor,
                 "flow_idle_last_at": self.flow_idle_last_at,
                 "flow_idle_alert_date": self.flow_idle_alert_date,
