@@ -66,6 +66,7 @@ async def async_setup_entry(
         WateringNowSensor(coordinator),
         WaterUseSensor(coordinator),
         WaterSavedSensor(coordinator),
+        AverageSoilMoistureSensor(coordinator),
     ]
     if entry.options.get(CONF_COST_PER_1000_GAL) not in (None, ""):
         hub_sensors.append(WaterCostSensor(coordinator))
@@ -199,6 +200,35 @@ class _ZoneSensor(SmartWaterZoneEntity, SensorEntity):
         """Set the unique id from the zone and the sensor key."""
         super().__init__(coordinator, zone_id)
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{zone_id}_{key}"
+
+
+class AverageSoilMoistureSensor(SmartWaterHubEntity, SensorEntity):
+    """Mean soil moisture of the enabled zones."""
+
+    _attr_translation_key = "average_soil_moisture"
+    _attr_device_class = SensorDeviceClass.MOISTURE
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+    _attr_icon = "mdi:water-percent"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = (
+            f"{coordinator.config_entry.entry_id}_average_soil_moisture"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the mean percent, or nothing when every zone is off."""
+        data = self.coordinator.data
+        if data is None:
+            return None
+        values = [zone.full_pct for zone in data.zones.values() if zone.enabled]
+        if not values:
+            return None
+        return sum(values) / len(values)
 
 
 class SoilWaterSensor(_ZoneSensor):

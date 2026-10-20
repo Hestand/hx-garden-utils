@@ -157,6 +157,8 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
     assert by_uid[f"{entry.entry_id}_et0"].entity_category is EntityCategory.DIAGNOSTIC
     assert by_uid[f"{entry.entry_id}_{zone_id}_raw"].entity_category is EntityCategory.DIAGNOSTIC
     assert by_uid[f"{entry.entry_id}_{zone_id}_soil_water"].entity_category is None
+    assert f"{entry.entry_id}_average_soil_moisture" in unique_ids
+    assert by_uid[f"{entry.entry_id}_average_soil_moisture"].entity_category is None
     assert by_uid[f"{entry.entry_id}_{zone_id}_last_run"].entity_category is None
     assert by_uid[f"{entry.entry_id}_water_use"].entity_category is None
     assert f"{entry.entry_id}_{zone_id}_flow" not in unique_ids

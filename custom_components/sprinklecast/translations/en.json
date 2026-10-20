@@ -765,7 +765,10 @@
         "name": "Water loss today (reference lawn)"
       },
       "soil_water": {
-        "name": "Soil water"
+        "name": "Soil moisture"
+      },
+      "average_soil_moisture": {
+        "name": "Average soil moisture"
       },
       "deficit": {
         "name": "Water needed"

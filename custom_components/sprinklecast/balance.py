@@ -17,6 +17,8 @@ p = p_table + 0.04 (5 − ETc) and is limited to 0.1–0.8.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, timedelta
+from typing import Any
 
 from .const import RAIN_IGNORE_FRACTION_OF_ET0
 from .soil import PLANTS, available_water, crop_coefficient
@@ -166,6 +168,85 @@ def should_apply_balance(
     if force:
         return True
     return hour >= plan_hour
+
+
+# A long outage is not walked back forever. Older days stay where they were.
+MAX_CATCHUP_DAYS = 14
+
+
+def days_to_balance(
+    balance_date: str | None,
+    today: str,
+    hour: int,
+    plan_hour: int,
+    *,
+    force: bool,
+    finished_et0_days: set[str] | None = None,
+) -> list[str]:
+    """Local dates whose water loss has not been applied yet, oldest first.
+
+    A stored balance date means every earlier day was applied. Days after it,
+    through yesterday, are due on any refresh. Today is due at the plan hour
+    or when a manual calculate asks. Each date is applied once: the caller
+    stores that date as the new balance date.
+
+    A bucket with no balance date is new. It does not walk back through
+    history. Yesterday is applied only when that day's water loss was already
+    computed, and today only when the evening step is due.
+    """
+    today_d = date.fromisoformat(today)
+    include_today = force or hour >= plan_hour
+    if balance_date:
+        try:
+            start = date.fromisoformat(str(balance_date)[:10]) + timedelta(days=1)
+        except ValueError:
+            return []
+        last = today_d if include_today else today_d - timedelta(days=1)
+        if start > last:
+            return []
+        if (last - start).days >= MAX_CATCHUP_DAYS:
+            start = last - timedelta(days=MAX_CATCHUP_DAYS - 1)
+        days: list[str] = []
+        cursor = start
+        while cursor <= last:
+            days.append(cursor.isoformat())
+            cursor += timedelta(days=1)
+        return days
+    days = []
+    yesterday = (today_d - timedelta(days=1)).isoformat()
+    if finished_et0_days and yesterday in finished_et0_days:
+        days.append(yesterday)
+    if include_today:
+        days.append(today)
+    return days
+
+
+def rewind_hand_set(state: dict[str, Any]) -> None:
+    """Undo one 0.14.6 hand set that stamped the day without applying its ET.
+
+    Setting the level used to write the balance date, so the evening step
+    treated the day as already done. Step that date back one day, once, so
+    the upgrade applies it. A later real step moves the date forward, and
+    the flag stops a second rewind even though the set mark stays on the row.
+    """
+    if state.get("balance_rewound"):
+        return
+    state["balance_rewound"] = True
+    balance = state.get("balance_date")
+    if not balance:
+        return
+    day = str(balance)[:10]
+    marked = any(
+        isinstance(item, dict) and item.get("date") == day and item.get("set")
+        for item in list(state.get("bucket_history") or [])
+    )
+    if not marked:
+        return
+    try:
+        previous = date.fromisoformat(day) - timedelta(days=1)
+    except ValueError:
+        return
+    state["balance_date"] = previous.isoformat()
 
 
 def zone_is_due(

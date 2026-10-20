@@ -1,7 +1,10 @@
 """Hourly weather read, evening bucket update, and watering plan.
 
-The coordinator commits one day of ET and measured rain at the plan hour
-(or when calculate_plan asks), then builds a plan for the next morning.
+The coordinator commits each finished day's ET and measured rain once: at the
+plan hour, or on the next refresh if that hour was missed. A hand-set soil
+level replaces the bucket at that moment and does not mark the day done.
+The full day's water loss still applies once (not a prorated remainder).
+It then builds a plan for the next morning.
 Valves open at the start time and finish by the finish time. When automatic
 watering is on, the executor runs that plan. Rain from the weather forecast
 is not treated as rain that already fell.
@@ -29,7 +32,13 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .balance import apply_daily_balance, clamp_deficit, root_zone, should_apply_balance
+from .balance import (
+    apply_daily_balance,
+    clamp_deficit,
+    days_to_balance,
+    rewind_hand_set,
+    root_zone,
+)
 from .const import (
     CONF_ALLOWED_WEEKDAYS,
     CONF_AREA_SQFT,
@@ -536,7 +545,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             return ZoneInfo("UTC")
 
     async def _async_update_data(self) -> HubSnapshot:
-        """Hourly refresh. Applies the daily balance only at the plan hour."""
+        """Hourly refresh. Finished days catch up; today applies at the plan hour."""
         return await self._publish(force_balance=False, force_notify=False)
 
     async def _publish(self, *, force_balance: bool, force_notify: bool) -> HubSnapshot:
@@ -604,9 +613,10 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             )
         state = self.store.zone(zone_id)
         state["deficit_mm"] = deficit
-        # The value the user entered is today's soil water. Do not add
-        # today's water loss on top of it.
-        state["balance_date"] = dt_util.now(self._timezone()).date().isoformat()
+        # A hand set replaces the level at this moment. It does not mark the
+        # day done and it does not pin the level. The full day's water loss
+        # (not a prorated remainder) still applies once, at the plan hour or
+        # on the next refresh if that hour was missed.
         self._mark_bucket_set(state, pct, deficit)
         title = self.config_entry.subentries[zone_id].title
         _LOGGER.info(
@@ -1236,36 +1246,42 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 float(state["deficit_mm"]), limits.taw_mm * factor
             )
             balanced = False
-            etc_today = None if limits.etc_mm is None else limits.etc_mm * season.factor
-            bucket_et0 = et0
-            bucket_etc = etc_today
-            if et0 is not None and et0 != et0_for_plan:
-                bucket_limits = self._limits(data, et0, now.month)
-                bucket_etc = (
-                    None
-                    if bucket_limits.etc_mm is None
-                    else bucket_limits.etc_mm * season.factor
-                )
-            if (
-                bucket_et0 is not None
-                and bucket_etc is not None
-                and should_apply_balance(
-                    state.get("balance_date"),
-                    today,
-                    now.hour,
-                    plan_hour,
-                    force=force_balance,
-                )
+            # A 0.14.6 hand set stamped the balance date without applying
+            # that day's water loss. Step it back once so the upgrade
+            # catches the day. A new hand set does not stamp the date.
+            rewind_hand_set(state)
+            capacity = limits.taw_mm * factor
+            for day in days_to_balance(
+                state.get("balance_date"),
+                today,
+                now.hour,
+                plan_hour,
+                force=force_balance,
+                finished_et0_days=self._finished_et0_days(today),
             ):
+                day_et0 = self._et0_for_balance_day(day, today, et0)
+                if day_et0 is None:
+                    # Leave the hole so a later refresh can apply it. Do not
+                    # skip it and do not apply a later day in its place.
+                    break
+                day_month = date.fromisoformat(day).month
+                day_limits = self._limits(data, day_et0, day_month)
+                day_etc = (
+                    None
+                    if day_limits.etc_mm is None
+                    else day_limits.etc_mm * season.factor
+                )
+                if day_etc is None:
+                    break
                 updated = apply_daily_balance(
                     float(state["deficit_mm"]),
-                    limits.taw_mm * factor,
-                    etc_mm=bucket_etc,
-                    precip_mm=observation.precip_today_mm,
-                    et0_mm=bucket_et0,
+                    capacity,
+                    etc_mm=day_etc,
+                    precip_mm=self._rain_for_balance_day(day, today, now, observation),
+                    et0_mm=day_et0,
                 )
                 state["deficit_mm"] = updated.deficit_mm
-                state["balance_date"] = today
+                state["balance_date"] = day
                 balanced = True
             learned = self._consider_learning(
                 state, data, limits, today=now.date(), rain_mm=observation.precip_today_mm
@@ -1556,6 +1572,74 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             return "solar_w", uv_index_to_w_m2(index)
         return None
 
+    def _finished_et0_days(self, today: str) -> set[str]:
+        """Dates before today whose water loss can be applied."""
+        found: set[str] = set()
+        yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
+        for item in self.store.climate_days:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("date") or "")
+            if not name or name >= today:
+                continue
+            if item.get("locked") or (name == yesterday and item.get("et0_mm") is not None):
+                if self._et0_for_balance_day(name, today, None) is not None:
+                    found.add(name)
+        for item in self.store.et0_history:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("date") or "")
+            if not name or name >= today or item.get("locked") is False:
+                continue
+            if self._et0_for_balance_day(name, today, None) is not None:
+                found.add(name)
+        return found
+
+    def _et0_for_balance_day(
+        self, day: str, today: str, today_et0: float | None
+    ) -> float | None:
+        """Water loss for one bucket day. Today is the running aggregate.
+
+        A finished day uses its locked total. An older history row with no
+        locked flag counts as locked. Missing means the caller waits.
+        """
+        if day == today:
+            return today_et0
+        for item in self.store.climate_days:
+            if not isinstance(item, dict) or item.get("date") != day:
+                continue
+            if item.get("locked") and item.get("et0_mm") is not None:
+                return float(item["et0_mm"])
+        for item in self.store.et0_history:
+            if not isinstance(item, dict) or str(item.get("date") or "") != day:
+                continue
+            if item.get("locked") is False:
+                continue
+            try:
+                return float(item["mm"])
+            except (KeyError, TypeError, ValueError):
+                continue
+        return None
+
+    def _rain_for_balance_day(
+        self, day: str, today: str, now: datetime, observation: Observation
+    ) -> float:
+        """Measured rain for one bucket day. Forecast rain is not included.
+
+        Today uses the live total. A stored climate-day total wins for a past
+        day. A day saved before rain was stored falls back to rain events on
+        that local date, and otherwise zero. The stored total and the events
+        are not added together.
+        """
+        if day == today:
+            return observation.precip_today_mm
+        for item in self.store.climate_days:
+            if isinstance(item, dict) and item.get("date") == day and "rain_mm" in item:
+                return max(0.0, float(item.get("rain_mm") or 0.0))
+        start = climate_day.midnight(now, date.fromisoformat(day))
+        end = climate_day.next_midnight(start)
+        return rain_between(self.store.weather, start, end - timedelta(microseconds=1))
+
     def _remember_locked_et0(self, day: str, mm: float) -> None:
         """Store a finished day's ET0. A locked row is left as it was."""
         kept: list[dict[str, Any]] = []
@@ -1746,6 +1830,13 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
     def _accumulate_day(self, now: datetime, today: str) -> None:
         """Fold entity samples into today's temperature, rain, solar, and flow."""
         options = self._options()
+        # Midnight clears the weather total. Keep yesterday's rain on the
+        # climate day first, or a catch-up after the roll has nothing to credit.
+        previous_date = str(self.store.weather.get("date") or "")
+        if previous_date and previous_date != today:
+            self._store_day_rain(
+                previous_date, float(self.store.weather.get("rain_mm") or 0.0)
+            )
         track = self.store.weather_for(today)
         temp, temp_unit = _state_float(self.hass, options.get(CONF_TEMPERATURE_SENSOR))
         if temp is not None:
@@ -1778,6 +1869,16 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             uv_value = None if uv is None else uv_index_value(uv, uv_unit)
             if uv_value is not None:
                 note_solar_w(track, uv_index_to_w_m2(uv_value), now)
+        self._store_day_rain(today, float(track.get("rain_mm") or 0.0))
+
+    def _store_day_rain(self, day: str, rain_mm: float) -> None:
+        """Remember one day's measured rain. A locked day keeps what it has."""
+        if not day:
+            return
+        climate = self.store.climate_day(day)
+        if climate.get("locked"):
+            return
+        climate["rain_mm"] = max(0.0, float(rain_mm))
 
     def _overlay_observed(self, observation: Observation) -> Observation:
         """Prefer accumulated entity data, then the weather entity."""

@@ -23,7 +23,8 @@ def test_entity_names_are_plain_and_ids_stay() -> None:
     sensors = data["entity"]["sensor"]
     assert sensors["et0"]["name"] == "Water loss today (reference lawn)"
     assert sensors["deficit"]["name"] == "Water needed"
-    assert sensors["soil_water"]["name"] == "Soil water"
+    assert sensors["soil_water"]["name"] == "Soil moisture"
+    assert sensors["average_soil_moisture"]["name"] == "Average soil moisture"
     assert sensors["raw"]["name"] == "Watering point"
     assert sensors["next_run"]["name"] == "Next watering"
     assert data["entity"]["sensor"]["water_use"]["name"] == "Water used"

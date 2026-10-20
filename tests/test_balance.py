@@ -7,6 +7,8 @@ import pytest
 from sprinklecast.balance import (
     adjusted_depletion_fraction,
     apply_daily_balance,
+    days_to_balance,
+    rewind_hand_set,
     root_zone,
     should_apply_balance,
     total_available_water_mm,
@@ -119,3 +121,49 @@ def test_balance_is_applied_once_per_date() -> None:
     assert should_apply_balance(None, "2026-10-15", 23, 23, force=False) is True
     assert should_apply_balance("2026-10-15", "2026-10-15", 23, 23, force=True) is False
     assert should_apply_balance(None, "2026-10-15", 10, 23, force=True) is True
+
+
+def test_days_to_balance_does_not_backfill_a_new_bucket() -> None:
+    assert days_to_balance(None, "2026-10-19", 15, 23, force=False) == []
+    assert days_to_balance(None, "2026-10-19", 23, 23, force=False) == ["2026-10-19"]
+    assert days_to_balance(
+        None,
+        "2026-10-20",
+        8,
+        23,
+        force=False,
+        finished_et0_days={"2026-10-19"},
+    ) == ["2026-10-19"]
+    assert days_to_balance("2026-10-19", "2026-10-20", 8, 23, force=False) == []
+    assert days_to_balance("2026-10-17", "2026-10-19", 8, 23, force=False) == [
+        "2026-10-18"
+    ]
+    assert days_to_balance("2026-10-19", "2026-10-19", 23, 23, force=False) == []
+    assert days_to_balance("2026-10-18", "2026-10-19", 10, 23, force=True) == [
+        "2026-10-19"
+    ]
+
+
+def test_days_to_balance_caps_a_long_gap() -> None:
+    days = days_to_balance("2026-09-01", "2026-10-20", 8, 23, force=False)
+    assert days[0] == "2026-10-06"
+    assert days[-1] == "2026-10-19"
+    assert len(days) == 14
+
+
+def test_rewind_hand_set_steps_back_once() -> None:
+    state = {
+        "balance_date": "2026-10-19",
+        "bucket_history": [{"date": "2026-10-19", "full_pct": 75, "set": True}],
+    }
+    rewind_hand_set(state)
+    assert state["balance_date"] == "2026-10-18"
+    assert state["balance_rewound"] is True
+    state["balance_date"] = "2026-10-19"
+    rewind_hand_set(state)
+    assert state["balance_date"] == "2026-10-19"
+
+    unmarked = {"balance_date": "2026-10-19", "bucket_history": [{"date": "2026-10-19"}]}
+    rewind_hand_set(unmarked)
+    assert unmarked["balance_date"] == "2026-10-19"
+    assert unmarked["balance_rewound"] is True

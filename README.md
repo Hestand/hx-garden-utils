@@ -4,7 +4,7 @@
 
 Work in progress, not ready for general use.
 
-Water-balance planner and zone controller for Home Assistant (`sprinklecast` 0.14.6).
+Water-balance planner and zone controller for Home Assistant (`sprinklecast` 0.14.7).
 
 It estimates reference evapotranspiration, tracks a soil-water deficit for each zone, and builds a cycle-and-soak plan for the next morning. The plan is made at the plan hour (default 23:00). A new hub turns **Dynamic start time** on: the run aims to finish at that day's local sunrise, and it never opens before **Don't start before** (default 04:00). If that is still too early, it starts then and may run past sunrise, but it ends by the finish time (default 09:00). Turn Dynamic start time off to open at the start time (default 05:00) instead. **Automatic watering is off after a new install.** An upgrade keeps that switch as it was, unless the old Mode was Off. Turn the hub's **Automatic watering** switch on when you want it to open valves. Until then the plan is only sensors and an optional notification. Run now is a manual action and runs even while that switch is off. A simulation hub still plays an example week and never calls a real on/off entity. The controller calls `switch`, `valve`, or `input_boolean` services only. It does not call a controller API.
 
@@ -41,7 +41,7 @@ Requires Home Assistant **2025.3** or newer (config subentries). Tested on **202
 
 1. HACS → Integrations → ⋮ → Custom repositories.
 2. Add `https://github.com/Hestand/hx-garden-utils` as category **Integration**.
-3. Download **Sprinklecast** (release `v0.14.6`), then restart Home Assistant.
+3. Download **Sprinklecast** (release `v0.14.7`), then restart Home Assistant.
 
 `hacs.json` is included. This is not in the default HACS store.
 
@@ -67,7 +67,7 @@ Your config entry, zones, stored soil and flow history, and entity IDs stay. Do 
 2. While HACS still shows **Smart Water**, use HACS → Integrations → Smart Water → ⋮ → Remove. That deletes `config/custom_components/smart_water`. Config entries, `.storage`, and the entity registry stay. If the repository already shows Sprinklecast, skip HACS Remove and delete `config/custom_components/smart_water` by hand with the File editor or Samba.
 3. HACS → Integrations → ⋮ → Custom repositories. Remove `https://github.com/Hestand/hx-garden-utils` if it is still listed.
 4. Add `https://github.com/Hestand/hx-garden-utils` again as category **Integration**.
-5. Download **Sprinklecast** (release `v0.14.6`).
+5. Download **Sprinklecast** (release `v0.14.7`).
 6. Restart Home Assistant.
 7. Settings → Devices & services → Add integration → **Sprinklecast** → **Import my Smart Water setup**. No YAML is required. That copies data, options, zone subentries, and the `.storage` file (`smart_water.<entry id>` becomes `sprinklecast.<new id>`), including each zone's soil water and history and the Automatic watering switch. Devices and entity registry rows move. Entity IDs stay the same. The old config entry is removed.
 8. If you added `sprinklecast:` to `configuration.yaml` so an older build would start, remove that key after the import. An empty `sprinklecast:` is accepted and does nothing else.
@@ -79,39 +79,45 @@ The hub **Mode** option and the Mode sensor are gone. **Automatic watering** is 
 
 New entity: `calendar.<hub>_watering` (name **Watering**), for example `calendar.water_test_watering`. Removed entity: the Mode sensor (`sensor.<hub>_mode` or a renamed id). Its registry row is deleted.
 
+### Already on Sprinklecast 0.14.6
+
+Update to `v0.14.7` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
+
+Nothing is imported again. Config entry version stays 10. A hand-set soil level is a one-time adjustment: it sets the bucket at that moment and does not skip the day. The full day's water loss still applies once, not a prorated remainder. If Home Assistant was down at the usual evening step, the missed days are applied on the next start, each day once. That includes 2026-10-19 on an install that set the soil level that afternoon. The soil water sensor is named **Soil moisture**. The hub adds **Average soil moisture**. Restart after the update.
+
 ### Already on Sprinklecast 0.14.5
 
-Update to `v0.14.6` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
+Update to `v0.14.7` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
 
 Nothing is imported again. Config entry version stays 10. Today's water loss is the calendar day's totals from recorded history: high and low temperature, mean humidity, mean wind, mean pressure, and the solar integral. A restart reads that same history. A finished day stays locked. The watering plan and the days past the forecast use that locked average, not the live reading. Restart after the update.
 
 ### Already on Sprinklecast 0.14.4
 
-Update to `v0.14.6` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
+Update to `v0.14.7` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
 
 Nothing is imported again. Config entry version stays 10. A restart no longer saves today's water loss from whatever sensors have loaded in the first seconds. Sprinklecast waits until Home Assistant has started, then recomputes water loss, the watering point, and the next watering when the configured sensors are available. Restart after the update.
 
 ### Already on Sprinklecast 0.14.3
 
-Update to `v0.14.6` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
+Update to `v0.14.7` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
 
 Nothing is imported again. Config entry version stays 10. A sensor that has not loaded yet, or is unavailable, no longer opens a unit repair. Sprinklecast waits until Home Assistant has started, then checks again when the sensor's state changes. A repair still opens when the sensor has a real state and the unit is missing or not accepted, and it clears when the unit becomes valid. Restart after the update.
 
 ### Already on Sprinklecast 0.14.2
 
-Update to `v0.14.6` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
+Update to `v0.14.7` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
 
 Nothing is imported again. Config entry version stays 10. The rain sensor also accepts a rain-rate sensor (`in/h` or `mm/h`). A rate above the optional threshold (default 0, in that sensor's units) counts as raining. A numeric sensor with a missing or unrecognized rate unit is ignored, and a repair stays open until the unit is valid. An existing on/off rain sensor still means raining when it is on. Restart after the update.
 
 ### Already on Sprinklecast 0.14.1
 
-Update to `v0.14.6` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
+Update to `v0.14.7` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
 
 Nothing is imported again. Config entry version stays 10. A sensor whose unit is missing or not in the accepted list is ignored, and a repair names that sensor until the unit is one Sprinklecast converts. Restart after the update.
 
 ### Already on Sprinklecast 0.14.0
 
-Update to `v0.14.6` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
+Update to `v0.14.7` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
 
 Nothing is imported again. Config entry version stays 10. There are no new entities and no storage change. Restart so the setup and options forms show the sensor names and units. A sensor with a missing or unknown unit is ignored until you set a unit Sprinklecast converts.
 
@@ -119,7 +125,7 @@ The catch-cup and soil-water notes below still apply if you have not done them.
 
 ### Already on Sprinklecast 0.13.0
 
-Update to `v0.14.6` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
+Update to `v0.14.7` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
 
 Nothing is imported again. Config entry version stays 10. Learned flow, soil water, and the automatic switch stay as they are.
 
@@ -141,7 +147,7 @@ Remove `sprinklecast:` from `configuration.yaml` if you added it to start 0.12.0
 
 ### Upgrading from 0.5.x, 0.4.x, 0.3.x, 0.2.x, or 0.1.x
 
-Download 0.14.6 and restart. A Sprinklecast entry stays on config entry version 10. A Smart Water entry follows the steps above. 0.11.1 lists the next watering days on the schedule sensor and the dashboard card: one day for each allowed weekday, however far out, instead of seven calendar rows that are mostly not dry enough. Each of those days is the full morning plan. A day past the weather forecast sets `estimated`; the date and time stay exact. The bucket is refilled in the projection, so the second and third days follow the water that was already applied. The config entry moves to version 9 and writes **Dynamic start time** off, so an existing hub keeps opening at its start time until you turn the option on. A new hub defaults that option on. Clay, clay loam, and compact silt loam now soak 30 minutes unless the zone stored its own soak; a blank Soak field uses that preset. Bug-fix releases bump the patch number (0.10.0, then 0.10.1). Releases with new features bump the middle number (0.10, then 0.11). 1.0.0 is reserved for the true release. 0.10.1 keeps a short run on the configured start time. Soak time between cycles does not move that start earlier. A run whose valve time cannot finish by the finish time may still open as early as the earliest start, and the rest waits. The dashboard card shows the next watering as a date and time, such as Thu Nov 5, 5:00 AM. 0.10.0 keeps the morning window on the wall clock in Home Assistant's time zone, including the mornings when daylight saving starts or ends. A 05:00 start stays 05:00 local. Next watering is an exact local date and time, such as Sun Nov 1, 5:00 AM. Whether that date is past this week stays an `estimated` attribute and is not written into the text. The projection looks out up to a year, using the forecast and then the recent water-loss average, so a deep bed still gets a date. A disabled zone, or a zone that stays dormant for that whole year, stays unknown and the note says why. The hub's next watering is the earliest enabled zone. 0.9.0 projects the next watering out to about 60 days, so the date stays filled when nothing is due this week. The flow meter moves to the hub: one sensor, and a required choice of whole-home or irrigation-only. A whole-home meter does not alert while nothing is running. An existing per-zone flow sensor is copied onto the hub as irrigation-only, and the zone copy is removed. You are not asked to run setup again. Soil moisture level shows the sensor's own percent. That entity, and the flow entities, are created only when the sensor is set. The config entry moves to version 8. 0.8.1 renames the sensors and settings into plain English. Entity ids and history stay the same, because the unique ids did not change. Reference water loss and other technical sensors move to the diagnostic section, so the device page leads with soil water, the next watering, the last run, and water used. 0.8.0 replaces the sunrise deadline with a morning window: start at **05:00**, finish by **09:00**, and start no earlier than **04:00**. A sequence that does not fit 05:00–09:00 may start earlier, down to 04:00, and the rest stays in the bucket for the next allowed day. An allowed day is the morning the valves open. Existing hubs pick up these times on restart. They are not asked to run setup again, zone data is not rewritten, and the stored bucket (storage version 1) is kept. **Automatic watering stays off.** 0.7.2 dated each schedule row by the morning the valves open. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
+Download 0.14.7 and restart. A Sprinklecast entry stays on config entry version 10. A Smart Water entry follows the steps above. 0.11.1 lists the next watering days on the schedule sensor and the dashboard card: one day for each allowed weekday, however far out, instead of seven calendar rows that are mostly not dry enough. Each of those days is the full morning plan. A day past the weather forecast sets `estimated`; the date and time stay exact. The bucket is refilled in the projection, so the second and third days follow the water that was already applied. The config entry moves to version 9 and writes **Dynamic start time** off, so an existing hub keeps opening at its start time until you turn the option on. A new hub defaults that option on. Clay, clay loam, and compact silt loam now soak 30 minutes unless the zone stored its own soak; a blank Soak field uses that preset. Bug-fix releases bump the patch number (0.10.0, then 0.10.1). Releases with new features bump the middle number (0.10, then 0.11). 1.0.0 is reserved for the true release. 0.10.1 keeps a short run on the configured start time. Soak time between cycles does not move that start earlier. A run whose valve time cannot finish by the finish time may still open as early as the earliest start, and the rest waits. The dashboard card shows the next watering as a date and time, such as Thu Nov 5, 5:00 AM. 0.10.0 keeps the morning window on the wall clock in Home Assistant's time zone, including the mornings when daylight saving starts or ends. A 05:00 start stays 05:00 local. Next watering is an exact local date and time, such as Sun Nov 1, 5:00 AM. Whether that date is past this week stays an `estimated` attribute and is not written into the text. The projection looks out up to a year, using the forecast and then the recent water-loss average, so a deep bed still gets a date. A disabled zone, or a zone that stays dormant for that whole year, stays unknown and the note says why. The hub's next watering is the earliest enabled zone. 0.9.0 projects the next watering out to about 60 days, so the date stays filled when nothing is due this week. The flow meter moves to the hub: one sensor, and a required choice of whole-home or irrigation-only. A whole-home meter does not alert while nothing is running. An existing per-zone flow sensor is copied onto the hub as irrigation-only, and the zone copy is removed. You are not asked to run setup again. Soil moisture level shows the sensor's own percent. That entity, and the flow entities, are created only when the sensor is set. The config entry moves to version 8. 0.8.1 renames the sensors and settings into plain English. Entity ids and history stay the same, because the unique ids did not change. Reference water loss and other technical sensors move to the diagnostic section, so the device page leads with soil water, the next watering, the last run, and water used. 0.8.0 replaces the sunrise deadline with a morning window: start at **05:00**, finish by **09:00**, and start no earlier than **04:00**. A sequence that does not fit 05:00–09:00 may start earlier, down to 04:00, and the rest stays in the bucket for the next allowed day. An allowed day is the morning the valves open. Existing hubs pick up these times on restart. They are not asked to run setup again, zone data is not rewritten, and the stored bucket (storage version 1) is kept. **Automatic watering stays off.** 0.7.2 dated each schedule row by the morning the valves open. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
 
 0.7 caps each zone on its own, can wait for confident forecast rain, warns before a freeze, and includes a dashboard card. Flow alerts still notify only until you change that. The weekly summary is off. Cost and the weekly gallon budget stay empty until you set them.
 
