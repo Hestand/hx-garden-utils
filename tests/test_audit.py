@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from sprinklecast.audit import audit_result, du_lq
+from sprinklecast.audit import audit_result, du_lq, rate_from_average_depth
 
 
 def test_uniformity_uses_the_lowest_quarter() -> None:
@@ -18,6 +18,12 @@ def test_inches_over_fifteen_minutes_become_a_rate() -> None:
     assert result.precipitation_rate_in_hr == pytest.approx(1.0)
     assert result.du_lq == pytest.approx(1.0)
     assert result.scheduling_efficiency == pytest.approx(1.0)
+
+
+def test_one_average_depth_is_depth_over_minutes_times_60() -> None:
+    assert rate_from_average_depth(0.25, 15) == pytest.approx(1.0)
+    with pytest.raises(ValueError):
+        rate_from_average_depth(0, 15)
 
 
 def test_millilitres_use_the_cup_diameter() -> None:

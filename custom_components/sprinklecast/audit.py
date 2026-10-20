@@ -28,6 +28,15 @@ class AuditResult:
     cups: int
 
 
+def rate_from_average_depth(depth_in: float, minutes: float) -> float:
+    """Precipitation rate in inches per hour from one average cup depth."""
+    if minutes <= 0:
+        raise ValueError("Minutes must be greater than 0.")
+    if depth_in <= 0:
+        raise ValueError("Depth must be greater than 0.")
+    return float(depth_in) / float(minutes) * 60.0
+
+
 def depths_inches(
     readings: list[float],
     *,

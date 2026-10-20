@@ -276,6 +276,7 @@ async def async_setup_entry(hass, entry) -> bool:
     executor.skip_checker = coordinator.live_skip
     executor.rain_since = coordinator.rain_since_mark
     executor.on_cycle_done = coordinator.async_credit_cycle
+    executor.on_sequence_done = coordinator.async_catch_cup_finished
     executor.on_status = coordinator.poke_status
     executor.hub_cap_fn = coordinator.hub_nightly_cap
     entry.runtime_data = coordinator

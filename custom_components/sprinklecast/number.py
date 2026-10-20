@@ -1,15 +1,16 @@
-"""Per-zone adjustment. Changing it only scales the next plan."""
+"""Per-zone numbers. Adjustment scales the plan. Catch-cup depth sets the rate."""
 
 from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.const import PERCENTAGE
+from homeassistant.const import PERCENTAGE, UnitOfPrecipitationDepth
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import SUBENTRY_ZONE
 from .coordinator import SmartWaterConfigEntry
 from .entity import SmartWaterZoneEntity
+from .units import depth_to_inches, inches_to_depth, inches_to_mm
 
 
 async def async_setup_entry(
@@ -26,6 +27,7 @@ async def async_setup_entry(
             [
                 AdjustmentNumber(coordinator, subentry.subentry_id),
                 SoilWaterLevelNumber(coordinator, subentry.subentry_id),
+                CatchCupDepthNumber(coordinator, subentry.subentry_id),
             ],
             config_subentry_id=subentry.subentry_id,
         )
@@ -91,3 +93,81 @@ class SoilWaterLevelNumber(SmartWaterZoneEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Write the bucket as this percent of the water the soil can hold."""
         await self.coordinator.async_set_soil_water(self._zone_id, percent=value)
+
+
+class CatchCupDepthNumber(SmartWaterZoneEntity, NumberEntity):
+    """Average depth caught in the cups. Setting it stores the precipitation rate."""
+
+    _attr_translation_key = "catch_cup_depth"
+    _attr_mode = NumberMode.BOX
+    _attr_icon = "mdi:cup-water"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = (
+            f"{coordinator.config_entry.entry_id}_{zone_id}_catch_cup_depth"
+        )
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        """Follow Home Assistant's precipitation unit."""
+        return (
+            self.coordinator.hass.config.units.accumulated_precipitation_unit
+            or UnitOfPrecipitationDepth.INCHES
+        )
+
+    @property
+    def native_step(self) -> float:
+        """Hundredths of an inch, or tenths of a millimeter."""
+        if self.native_unit_of_measurement == UnitOfPrecipitationDepth.INCHES:
+            return 0.01
+        return 0.1
+
+    @property
+    def native_min_value(self) -> float:
+        """Zero is empty. The coordinator rejects a zero that is saved."""
+        return 0.0
+
+    @property
+    def native_max_value(self) -> float:
+        """About five inches, in the user's unit."""
+        unit = self.native_unit_of_measurement
+        if unit == UnitOfPrecipitationDepth.MILLIMETERS:
+            return 127.0
+        if unit == UnitOfPrecipitationDepth.CENTIMETERS:
+            return 12.7
+        return 5.0
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the last entered depth, or none before a result is saved."""
+        zone = self._zone()
+        if zone is None or not zone.catch_cup:
+            return None
+        depth_in = zone.catch_cup.get("depth_in")
+        if depth_in in (None, ""):
+            return None
+        return round(inches_to_depth(float(depth_in), self.native_unit_of_measurement), 4)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Date, minutes, and the rate computed from the depth."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        record = zone.catch_cup or {}
+        pending = zone.catch_cup_pending or {}
+        depth_in = record.get("depth_in")
+        return {
+            "tested": record.get("at"),
+            "minutes": record.get("minutes", pending.get("minutes")),
+            "depth_in": depth_in,
+            "depth_mm": None if depth_in in (None, "") else round(inches_to_mm(float(depth_in)), 2),
+            "precipitation_rate_in_hr": record.get("precipitation_rate_in_hr"),
+        }
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Convert the entered depth to inches and store the precipitation rate."""
+        depth_in = depth_to_inches(float(value), self.native_unit_of_measurement)
+        await self.coordinator.async_set_catch_cup_result(self._zone_id, depth_in)

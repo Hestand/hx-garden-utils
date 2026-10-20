@@ -13,7 +13,10 @@ DEFAULT_HIGH_PCT = 30.0
 DEFAULT_LOW_PCT = 25.0
 DEFAULT_LEARN_RUNS = 3
 DEFAULT_IDLE_GPM = 0.5
+DEFAULT_TREND_PCT = 10.0
+DEFAULT_TREND_RUNS = 5
 SAMPLE_LIMIT = 12
+FLOW_HISTORY_LIMIT = 30
 # A run outside this band is an outlier and is not folded into the median.
 _OUTLIER_HIGH = 2.0
 _OUTLIER_LOW = 0.4
@@ -61,18 +64,137 @@ def run_status(
     return "ok"
 
 
-def alert_detail(kind: str, *, name: str, gpm: float | None, learned: float | None) -> str:
+def _positive(value: object) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if number <= 0:
+        return None
+    return number
+
+
+def reference_flow(state: dict) -> tuple[float | None, str]:
+    """Gallons per minute to compare against, and where that number came from.
+
+    A catch-cup or manual baseline wins. Otherwise this is the learned median.
+    """
+    baseline = _positive(state.get("baseline_gpm"))
+    if baseline is not None:
+        return baseline, str(state.get("baseline_source") or "catch_cup")
+    learned = _positive(state.get("learned_gpm"))
+    if learned is not None:
+        return learned, "learned"
+    return None, "none"
+
+
+def compare_to_reference(
+    gpm: float | None,
+    reference: float | None,
+    *,
+    high_pct: float,
+    low_pct: float,
+) -> str:
+    """Label one run against a fixed baseline. No minimum-run wait."""
+    if gpm is None or gpm <= 0:
+        return "no_data"
+    if reference is None or reference <= 0:
+        return "no_baseline"
+    if gpm > reference * (1.0 + high_pct / 100.0):
+        return "high_flow"
+    if gpm < reference * (1.0 - low_pct / 100.0):
+        return "low_flow"
+    return "ok"
+
+
+def percent_vs_reference(gpm: float | None, reference: float | None) -> float | None:
+    """Percent difference of one run from the reference. Positive is higher."""
+    measured = _positive(gpm)
+    base = _positive(reference)
+    if measured is None or base is None:
+        return None
+    return (measured - base) / base * 100.0
+
+
+def append_flow_history(
+    history: list | None,
+    *,
+    at: str,
+    gpm: float,
+    minutes: float,
+) -> list[dict]:
+    """Keep the last 30 per-run averages. Older rows drop off the front."""
+    rows = [
+        dict(item)
+        for item in list(history or [])
+        if isinstance(item, dict) and _positive(item.get("gpm")) is not None
+    ]
+    rows.append(
+        {
+            "at": at,
+            "gpm": round(float(gpm), 3),
+            "minutes": round(float(minutes), 2),
+        }
+    )
+    return rows[-FLOW_HISTORY_LIMIT:]
+
+
+def trend_status(
+    history: list | None,
+    reference: float | None,
+    *,
+    runs: int = DEFAULT_TREND_RUNS,
+    trend_pct: float = DEFAULT_TREND_PCT,
+) -> tuple[str, float | None]:
+    """Median of the last N runs versus the reference.
+
+    Returns ``(status, drift_pct)``. Status is learning until N runs exist.
+    A drift past ``trend_pct`` is high_trend or low_trend.
+    """
+    gpms: list[float] = []
+    for item in list(history or []):
+        if not isinstance(item, dict):
+            continue
+        value = _positive(item.get("gpm"))
+        if value is not None:
+            gpms.append(value)
+    base = _positive(reference)
+    window = gpms[-max(1, int(runs)) :]
+    if not window or base is None:
+        return ("no_baseline" if base is None else "learning"), None
+    drift = (float(statistics.median(window)) - base) / base * 100.0
+    if len(window) < int(runs):
+        return "learning", drift
+    if drift > trend_pct:
+        return "high_trend", drift
+    if drift < -trend_pct:
+        return "low_trend", drift
+    return "ok", drift
+
+
+def alert_detail(
+    kind: str,
+    *,
+    name: str,
+    gpm: float | None,
+    learned: float | None,
+    source: str = "learned",
+) -> str:
     """One sentence for a notification, a repair, and the event payload."""
     learned_text = "unknown" if not learned else f"{learned:.2f}"
     gpm_text = "unknown" if not gpm else f"{gpm:.2f}"
+    if source in {"learned", "none", ""}:
+        normal = f"Learned normal is {learned_text} gal/min."
+    else:
+        normal = f"Baseline is {learned_text} gal/min."
     if kind == "high_flow":
         return (
-            f"{name} flowed at {gpm_text} gal/min. Learned normal is {learned_text} gal/min. "
+            f"{name} flowed at {gpm_text} gal/min. {normal} "
             "That is high enough to be a broken head or a leak."
         )
     if kind == "low_flow":
         return (
-            f"{name} flowed at {gpm_text} gal/min. Learned normal is {learned_text} gal/min. "
+            f"{name} flowed at {gpm_text} gal/min. {normal} "
             "That is low enough to be a clog, a stuck valve, or low pressure."
         )
     if kind == "main_leak":
@@ -82,3 +204,25 @@ def alert_detail(kind: str, *, name: str, gpm: float | None, learned: float | No
             + " That can be a main-line leak or a valve that did not close."
         )
     return f"{name}: {kind}."
+
+
+def trend_detail(
+    kind: str,
+    *,
+    name: str,
+    drift_pct: float,
+    reference: float,
+    source: str,
+) -> str:
+    """One sentence when the recent median has drifted from the baseline."""
+    direction = "higher" if kind == "high_trend" else "lower"
+    if source == "learned":
+        basis = "the learned flow"
+    elif source == "manual":
+        basis = "the saved baseline"
+    else:
+        basis = "the catch-cup baseline"
+    return (
+        f"{name}'s recent runs are {abs(drift_pct):.0f}% {direction} than {basis} "
+        f"of {reference:.2f} gal/min. A slow change can be a clogging nozzle or a growing leak."
+    )

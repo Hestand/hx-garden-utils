@@ -102,6 +102,8 @@
               "flow_high_pct": "High flow alert",
               "flow_low_pct": "Low flow alert",
               "flow_learn_runs": "Runs before flow alerts",
+              "flow_trend_pct": "Flow trend alert",
+              "flow_trend_runs": "Runs in the flow trend",
               "flow_idle_gpm": "Flow while nothing is running",
               "flow_high_action": "When flow is high",
               "flow_low_action": "When flow is low",
@@ -130,9 +132,11 @@
               "freeze_alert": "On by default. One notice per cold snap, separate from the 40°F watering skip.",
               "freeze_alert_f": "Default 32°F. Advises protecting the backflow preventer and exposed pipes.",
               "hard_freeze_f": "Default 28°F. The message says to shut off and drain the irrigation.",
-              "flow_high_pct": "Default 30% above the learned gallons per minute. A broken head or a leak.",
-              "flow_low_pct": "Default 25% below the learned gallons per minute. A clog, a stuck valve, or low pressure.",
-              "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median.",
+              "flow_high_pct": "Default 30% above the baseline gallons per minute, or the learned rate when no baseline is saved. A broken head or a leak.",
+              "flow_low_pct": "Default 25% below the baseline gallons per minute, or the learned rate when no baseline is saved. A clog, a stuck valve, or low pressure.",
+              "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median when no baseline is saved.",
+              "flow_trend_pct": "Default 10%. The recent median past this line, above or below the baseline, raises a trend alert. It notifies only.",
+              "flow_trend_runs": "Default 5. The trend uses the median of this many latest runs.",
               "flow_idle_gpm": "Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on. A main-line leak.",
               "flow_high_action": "Notify only, or skip that zone until you reset flow learning.",
               "flow_low_action": "Notify only, or skip that zone until you reset flow learning.",
@@ -208,6 +212,8 @@
               "flow_high_pct": "High flow alert",
               "flow_low_pct": "Low flow alert",
               "flow_learn_runs": "Runs before flow alerts",
+              "flow_trend_pct": "Flow trend alert",
+              "flow_trend_runs": "Runs in the flow trend",
               "flow_idle_gpm": "Flow while nothing is running",
               "flow_high_action": "When flow is high",
               "flow_low_action": "When flow is low",
@@ -233,9 +239,11 @@
               "freeze_alert": "On by default. One notice per cold snap, separate from the 40°F watering skip.",
               "freeze_alert_f": "Default 32°F. Advises protecting the backflow preventer and exposed pipes.",
               "hard_freeze_f": "Default 28°F. The message says to shut off and drain the irrigation.",
-              "flow_high_pct": "Default 30% above the learned gallons per minute. A broken head or a leak.",
-              "flow_low_pct": "Default 25% below the learned gallons per minute. A clog, a stuck valve, or low pressure.",
-              "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median.",
+              "flow_high_pct": "Default 30% above the baseline gallons per minute, or the learned rate when no baseline is saved. A broken head or a leak.",
+              "flow_low_pct": "Default 25% below the baseline gallons per minute, or the learned rate when no baseline is saved. A clog, a stuck valve, or low pressure.",
+              "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median when no baseline is saved.",
+              "flow_trend_pct": "Default 10%. The recent median past this line, above or below the baseline, raises a trend alert. It notifies only.",
+              "flow_trend_runs": "Default 5. The trend uses the median of this many latest runs.",
               "flow_idle_gpm": "Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on. A main-line leak.",
               "flow_high_action": "Notify only, or skip that zone until you reset flow learning.",
               "flow_low_action": "Notify only, or skip that zone until you reset flow learning.",
@@ -420,6 +428,8 @@
               "flow_high_pct": "High flow alert",
               "flow_low_pct": "Low flow alert",
               "flow_learn_runs": "Runs before flow alerts",
+              "flow_trend_pct": "Flow trend alert",
+              "flow_trend_runs": "Runs in the flow trend",
               "flow_idle_gpm": "Flow while nothing is running",
               "flow_high_action": "When flow is high",
               "flow_low_action": "When flow is low",
@@ -444,9 +454,11 @@
               "freeze_alert": "On by default. One notice per cold snap, separate from the 40°F watering skip.",
               "freeze_alert_f": "Default 32°F. Advises protecting the backflow preventer and exposed pipes.",
               "hard_freeze_f": "Default 28°F. The message says to shut off and drain the irrigation.",
-              "flow_high_pct": "Default 30% above the learned gallons per minute. A broken head or a leak.",
-              "flow_low_pct": "Default 25% below the learned gallons per minute. A clog, a stuck valve, or low pressure.",
-              "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median.",
+              "flow_high_pct": "Default 30% above the baseline gallons per minute, or the learned rate when no baseline is saved. A broken head or a leak.",
+              "flow_low_pct": "Default 25% below the baseline gallons per minute, or the learned rate when no baseline is saved. A clog, a stuck valve, or low pressure.",
+              "flow_learn_runs": "Default 3. Alerts wait until this many runs are in the median when no baseline is saved.",
+              "flow_trend_pct": "Default 10%. The recent median past this line, above or below the baseline, raises a trend alert. It notifies only.",
+              "flow_trend_runs": "Default 5. The trend uses the median of this many latest runs.",
               "flow_idle_gpm": "Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on. A main-line leak.",
               "flow_high_action": "Notify only, or skip that zone until you reset flow learning.",
               "flow_low_action": "Notify only, or skip that zone until you reset flow learning.",
@@ -792,6 +804,15 @@
       "last_run_gpm": {
         "name": "Last flow rate"
       },
+      "baseline_flow": {
+        "name": "Baseline flow"
+      },
+      "flow_vs_baseline": {
+        "name": "Flow vs baseline"
+      },
+      "flow_trend": {
+        "name": "Flow trend"
+      },
       "water_use": {
         "name": "Water used"
       },
@@ -816,11 +837,17 @@
       },
       "soil_water_level": {
         "name": "Soil water level"
+      },
+      "catch_cup_depth": {
+        "name": "Catch-cup depth"
       }
     },
     "button": {
       "run_now": {
         "name": "Run now"
+      },
+      "catch_cup_test": {
+        "name": "Run catch-cup test"
       },
       "simulate": {
         "name": "Run simulation"
@@ -883,7 +910,19 @@
     },
     "reset_flow_learning": {
       "name": "Reset flow learning",
-      "description": "Clear learned flow, the flow alert, and a skip that is waiting for reset."
+      "description": "Clear learned flow, the flow alert, and a skip that is waiting for reset. The baseline stays unless clear baseline is on."
+    },
+    "run_catch_cup_test": {
+      "name": "Run catch-cup test",
+      "description": "Run each selected zone once for the given minutes. No soak, no runtime cap, and no soil credit until a cup depth is entered. Rain and other safety stops still apply."
+    },
+    "set_catch_cup_result": {
+      "name": "Set catch-cup result",
+      "description": "Save the average cup depth. The precipitation rate is depth divided by minutes, times 60, and it replaces the zone preset. Does not open a valve."
+    },
+    "set_flow_baseline": {
+      "name": "Set flow baseline",
+      "description": "Save a zone's gallons per minute as its permanent baseline. Leave gallons per minute empty to use the last run. Clears the trend history."
     },
     "start_audit": {
       "name": "Start catch-cup audit",
@@ -897,7 +936,11 @@
   "issues": {
     "flow_alert": {
       "title": "Flow alert for {name}",
-      "description": "{detail} Reset flow learning when the zone should run again."
+      "description": "{detail} Reset flow learning when the zone should run again. The baseline stays unless you clear it."
+    },
+    "catch_cup_depths": {
+      "title": "Enter catch-cup depths",
+      "description": "{detail}"
     },
     "freeze_alert": {
       "title": "Freeze in the forecast",

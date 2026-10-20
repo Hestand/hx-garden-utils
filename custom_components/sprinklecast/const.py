@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "sprinklecast"
 NAME = "Sprinklecast"
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 
 # Retired option key. v0.5 stores the automatic-watering switch in the hub
 # store (default off) and drops this option on migration.
@@ -101,6 +101,8 @@ CONF_MOISTURE_LEARN = "moisture_learn"
 CONF_FLOW_HIGH_PCT = "flow_high_pct"
 CONF_FLOW_LOW_PCT = "flow_low_pct"
 CONF_FLOW_LEARN_RUNS = "flow_learn_runs"
+CONF_FLOW_TREND_PCT = "flow_trend_pct"
+CONF_FLOW_TREND_RUNS = "flow_trend_runs"
 CONF_FLOW_IDLE_GPM = "flow_idle_gpm"
 CONF_FLOW_HIGH_ACTION = "flow_high_action"
 CONF_FLOW_LOW_ACTION = "flow_low_action"
@@ -209,6 +211,9 @@ SERVICE_RESET_LEARNING = "reset_learning"
 SERVICE_RESET_FLOW = "reset_flow_learning"
 SERVICE_START_AUDIT = "start_audit"
 SERVICE_SUBMIT_AUDIT = "submit_audit"
+SERVICE_RUN_CATCH_CUP = "run_catch_cup_test"
+SERVICE_SET_CATCH_CUP = "set_catch_cup_result"
+SERVICE_SET_FLOW_BASELINE = "set_flow_baseline"
 
 SERVICES = (
     SERVICE_CALCULATE_PLAN,
@@ -226,6 +231,9 @@ SERVICES = (
     SERVICE_RESET_FLOW,
     SERVICE_START_AUDIT,
     SERVICE_SUBMIT_AUDIT,
+    SERVICE_RUN_CATCH_CUP,
+    SERVICE_SET_CATCH_CUP,
+    SERVICE_SET_FLOW_BASELINE,
 )
 
 FLOW_ACTION_NOTIFY = "notify"

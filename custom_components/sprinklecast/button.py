@@ -1,4 +1,4 @@
-"""Buttons record a plan or replay a simulated week. They do not move a valve."""
+"""Buttons. Run now and the catch-cup test open a zone. Run simulation does not."""
 
 from __future__ import annotations
 
@@ -16,8 +16,9 @@ async def async_setup_entry(
     entry: SmartWaterConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Create one run-now button per zone, and a week button on a simulation hub."""
+    """Create the catch-cup button, one run-now button per zone, and a week button."""
     coordinator = entry.runtime_data
+    async_add_entities([CatchCupTestButton(coordinator)])
     if entry.data.get(CONF_SIMULATION):
         async_add_entities([SimulateButton(coordinator)])
     for subentry in entry.subentries.values():
@@ -27,6 +28,22 @@ async def async_setup_entry(
             [RunNowButton(coordinator, subentry.subentry_id)],
             config_subentry_id=subentry.subentry_id,
         )
+
+
+class CatchCupTestButton(SmartWaterHubEntity, ButtonEntity):
+    """Run every enabled zone for 15 minutes so catch cups can be read."""
+
+    _attr_translation_key = "catch_cup_test"
+    _attr_icon = "mdi:cup-water"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_catch_cup_test"
+
+    async def async_press(self) -> None:
+        """Start the catch-cup sequence. Stop all watering cancels it."""
+        await self.coordinator.async_run_catch_cup_test(None, 15)
 
 
 class SimulateButton(SmartWaterHubEntity, ButtonEntity):

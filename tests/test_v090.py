@@ -185,7 +185,14 @@ async def test_moisture_and_flow_entities_follow_the_configured_sensors(
         )
         is None
     )
-    for suffix in ("flow", "learned_gpm", "last_run_gpm"):
+    for suffix in (
+        "flow",
+        "learned_gpm",
+        "last_run_gpm",
+        "baseline_flow",
+        "flow_vs_baseline",
+        "flow_trend",
+    ):
         assert (
             registry.async_get_entity_id(
                 "sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_{suffix}"

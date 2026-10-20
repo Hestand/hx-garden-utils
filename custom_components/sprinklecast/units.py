@@ -21,6 +21,24 @@ def mm_to_inches(mm: float) -> float:
     return mm / MM_PER_INCH
 
 
+def depth_to_inches(value: float, unit: str | None) -> float:
+    """Convert a precipitation depth in the user's unit to inches."""
+    if unit == "mm":
+        return value / MM_PER_INCH
+    if unit == "cm":
+        return value / 2.54
+    return value
+
+
+def inches_to_depth(inches: float, unit: str | None) -> float:
+    """Convert inches to the user's precipitation unit."""
+    if unit == "mm":
+        return inches * MM_PER_INCH
+    if unit == "cm":
+        return inches * 2.54
+    return inches
+
+
 def inches_to_m(inches: float) -> float:
     """Convert a root depth in inches to meters (FAO Zr)."""
     return inches * M_PER_INCH

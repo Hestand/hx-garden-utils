@@ -64,6 +64,9 @@ class CycleJob:
     soak_after_min: float = 0.0
     manual: bool = False
     zone_cap_min: float | None = None
+    credit_bucket: bool = True
+    uncapped: bool = False
+    catch_cup: bool = False
 
 
 class WateringExecutor:
@@ -80,6 +83,7 @@ class WateringExecutor:
         self.skip_checker: Callable[[str, bool], str | None] | None = None
         self.rain_since: Callable[[datetime], float] | None = None
         self.on_cycle_done: Callable[..., Awaitable[None]] | None = None
+        self.on_sequence_done: Callable[[], Awaitable[None]] | None = None
         self.on_status: Callable[[], None] | None = None
         self.hub_cap_fn: Callable[[], float | None] | None = None
 
@@ -117,35 +121,58 @@ class WateringExecutor:
         zone_used: dict[str, float] = {}
         scales: dict[str, float] = {}
         try:
-            for index, job in enumerate(jobs):
-                scale = scales.get(job.zone_id)
-                if scale is None:
-                    scale = self._rain_scale(job)
-                    scales[job.zone_id] = scale
-                if scale <= 0:
-                    await self._report(job, 0.0, 0.0, None, "Skipped because rain fell after the plan.")
+            await self._run_jobs(jobs, hub_cap, hub_used, zone_used, scales)
+        except asyncio.CancelledError:
+            entity_id = self.store.watering_entity
+            if entity_id:
+                await self._turn(str(entity_id), on=False)
+                self.store.watering_entity = None
+                await self.store.async_save()
+            self.current_zone_id = None
+            self.current_name = None
+            self._poke()
+            raise
+        finally:
+            self._sequence_finished()
+
+    async def _run_jobs(
+        self,
+        jobs: list[CycleJob],
+        hub_cap: float | None,
+        hub_used: float,
+        zone_used: dict[str, float],
+        scales: dict[str, float],
+    ) -> None:
+        for index, job in enumerate(jobs):
+            scale = scales.get(job.zone_id)
+            if scale is None:
+                scale = self._rain_scale(job)
+                scales[job.zone_id] = scale
+            if scale <= 0:
+                await self._report(job, 0.0, 0.0, None, "Skipped because rain fell after the plan.")
+                continue
+            minutes = job.minutes * scale
+            net_mm = job.net_mm * scale
+            if job.start is not None:
+                delay = elapsed_seconds(job.start, self._now(job.start))
+                if delay > 0:
+                    await self._sleep(delay)
+            skip = None
+            if self.skip_checker is not None:
+                skip = self.skip_checker(job.zone_id, job.manual)
+            if skip:
+                await self._report(job, 0.0, 0.0, None, skip)
+                continue
+            if job.finish_by is not None:
+                remaining = elapsed_seconds(job.finish_by, self._now(job.finish_by)) / 60.0
+                if remaining <= 0:
+                    await self._report(job, 0.0, 0.0, None, "The watering window is closed.")
                     continue
-                minutes = job.minutes * scale
-                net_mm = job.net_mm * scale
-                if job.start is not None:
-                    delay = elapsed_seconds(job.start, self._now(job.start))
-                    if delay > 0:
-                        await self._sleep(delay)
-                skip = None
-                if self.skip_checker is not None:
-                    skip = self.skip_checker(job.zone_id, job.manual)
-                if skip:
-                    await self._report(job, 0.0, 0.0, None, skip)
-                    continue
-                if job.finish_by is not None:
-                    remaining = elapsed_seconds(job.finish_by, self._now(job.finish_by)) / 60.0
-                    if remaining <= 0:
-                        await self._report(job, 0.0, 0.0, None, "The watering window is closed.")
-                        continue
-                    if minutes > remaining:
-                        net_mm *= remaining / minutes
-                        minutes = remaining
-                zone_before = zone_used.get(job.zone_id, 0.0)
+                if minutes > remaining:
+                    net_mm *= remaining / minutes
+                    minutes = remaining
+            zone_before = zone_used.get(job.zone_id, 0.0)
+            if not job.uncapped:
                 room = minutes
                 if job.zone_cap_min is not None:
                     room = min(room, job.zone_cap_min - zone_before)
@@ -175,58 +202,63 @@ class WateringExecutor:
                 if minutes > room:
                     net_mm *= room / minutes
                     minutes = room
-                turned_on = await self._turn(job.entity_id, on=True)
-                if not turned_on:
-                    await self._report(
-                        job, 0.0, 0.0, None, f"Could not turn on {job.entity_id}."
-                    )
-                    continue
-                self.store.watering_entity = job.entity_id
-                self.current_zone_id = job.zone_id
-                self.current_name = job.name
+            turned_on = await self._turn(job.entity_id, on=True)
+            if not turned_on:
+                await self._report(
+                    job, 0.0, 0.0, None, f"Could not turn on {job.entity_id}."
+                )
+                continue
+            self.store.watering_entity = job.entity_id
+            self.current_zone_id = job.zone_id
+            self.current_name = job.name
+            await self.store.async_save()
+            self._poke()
+            flow_before = self._flow_gallons(job)
+            gpm_before = self._flow_gpm(job)
+            try:
+                await self._sleep(minutes * 60.0)
+            finally:
+                await self._turn(job.entity_id, on=False)
+                if self.store.watering_entity == job.entity_id:
+                    self.store.watering_entity = None
+                self.current_zone_id = None
+                self.current_name = None
                 await self.store.async_save()
                 self._poke()
-                flow_before = self._flow_gallons(job)
-                gpm_before = self._flow_gpm(job)
-                try:
-                    await self._sleep(minutes * 60.0)
-                finally:
-                    await self._turn(job.entity_id, on=False)
-                    if self.store.watering_entity == job.entity_id:
-                        self.store.watering_entity = None
-                    self.current_zone_id = None
-                    self.current_name = None
-                    await self.store.async_save()
-                    self._poke()
-                hub_used += minutes
-                zone_used[job.zone_id] = zone_before + minutes
-                flow_after = self._flow_gallons(job)
-                gallons = None
-                gpm = None
-                if flow_before is not None and flow_after is not None and flow_after > flow_before:
-                    gallons = flow_after - flow_before
-                    if minutes > 0:
-                        gpm = gallons / minutes
-                else:
-                    gpm_after = self._flow_gpm(job)
-                    pair = [value for value in (gpm_before, gpm_after) if value is not None]
-                    if pair:
-                        gpm = sum(pair) / len(pair)
-                        gallons = gpm * minutes
-                credited = self._credited_mm(job, minutes, net_mm, gallons)
-                await self._report(job, minutes, credited, gallons, "ok", gpm)
-                if job.soak_after_min > 0 and index < len(jobs) - 1:
-                    await self._sleep(job.soak_after_min * 60.0)
-        except asyncio.CancelledError:
-            entity_id = self.store.watering_entity
-            if entity_id:
-                await self._turn(str(entity_id), on=False)
-                self.store.watering_entity = None
-                await self.store.async_save()
-            self.current_zone_id = None
-            self.current_name = None
-            self._poke()
-            raise
+            hub_used += minutes
+            zone_used[job.zone_id] = zone_before + minutes
+            flow_after = self._flow_gallons(job)
+            gallons = None
+            gpm = None
+            if flow_before is not None and flow_after is not None and flow_after > flow_before:
+                gallons = flow_after - flow_before
+                if minutes > 0:
+                    gpm = gallons / minutes
+            else:
+                gpm_after = self._flow_gpm(job)
+                pair = [value for value in (gpm_before, gpm_after) if value is not None]
+                if pair:
+                    gpm = sum(pair) / len(pair)
+                    gallons = gpm * minutes
+            credited = self._credited_mm(job, minutes, net_mm, gallons)
+            await self._report(job, minutes, credited, gallons, "ok", gpm)
+            if job.soak_after_min > 0 and index < len(jobs) - 1:
+                await self._sleep(job.soak_after_min * 60.0)
+
+    def _sequence_finished(self) -> None:
+        """Tell the coordinator the sequence ended, including after a cancel."""
+        callback = self.on_sequence_done
+        if callback is None:
+            return
+        self.hass.async_create_task(self._call_sequence_done(callback))
+
+    async def _call_sequence_done(
+        self, callback: Callable[[], Awaitable[None]]
+    ) -> None:
+        try:
+            await callback()
+        except Exception:  # noqa: BLE001 - a reminder must not break the next run
+            _LOGGER.exception("Sprinklecast could not finish the watering sequence")
 
     def _hub_cap(self) -> float | None:
         """All-zones valve budget for this sequence. None means no hub total."""
@@ -288,6 +320,8 @@ class WateringExecutor:
         planned_net_mm: float,
         gallons: float | None,
     ) -> float:
+        if not job.credit_bucket:
+            return 0.0
         if (
             gallons is not None
             and gallons > 0
@@ -319,6 +353,7 @@ class WateringExecutor:
             gallons=gallons,
             result=result,
             gpm=gpm,
+            catch_cup=job.catch_cup,
         )
 
     def _poke(self) -> None:

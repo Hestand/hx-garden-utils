@@ -163,9 +163,14 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
     assert f"{entry.entry_id}_{zone_id}_moisture" not in unique_ids
     assert f"{entry.entry_id}_{zone_id}_learned_gpm" not in unique_ids
     assert f"{entry.entry_id}_{zone_id}_last_run_gpm" not in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_baseline_flow" not in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_flow_vs_baseline" not in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_flow_trend" not in unique_ids
     assert f"{entry.entry_id}_{zone_id}_adjustment" in unique_ids
     assert f"{entry.entry_id}_{zone_id}_soil_water_level" in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_catch_cup_depth" in unique_ids
     assert f"{entry.entry_id}_{zone_id}_run_now" in unique_ids
+    assert f"{entry.entry_id}_catch_cup_test" in unique_ids
 
     await hass.services.async_call(
         DOMAIN,

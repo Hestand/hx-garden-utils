@@ -112,6 +112,8 @@ from .const import (
     CONF_FLOW_LEARN_RUNS,
     CONF_FLOW_LOW_ACTION,
     CONF_FLOW_LOW_PCT,
+    CONF_FLOW_TREND_PCT,
+    CONF_FLOW_TREND_RUNS,
     CONF_WEEKLY_BUDGET_GAL,
     CONF_WEEKLY_SUMMARY,
     EVENT_BUDGET_ALERT,
@@ -140,7 +142,7 @@ from .const import (
 )
 from .cycle_soak import plan_cycles
 from .dormancy import MAINTENANCE_MM, classify, maintenance_due
-from .audit import audit_result
+from .audit import audit_result, rate_from_average_depth
 from .et import ETInputs, daily_et0, extraterrestrial_radiation_mj, hargreaves_et0_mm
 from .forecast_rain import (
     DEFAULT_FORECAST_DEFER_DAYS,
@@ -162,10 +164,18 @@ from .flow_learn import (
     DEFAULT_IDLE_GPM,
     DEFAULT_LEARN_RUNS,
     DEFAULT_LOW_PCT,
+    DEFAULT_TREND_PCT,
+    DEFAULT_TREND_RUNS,
     accept_sample,
     alert_detail,
+    append_flow_history,
+    compare_to_reference,
+    percent_vs_reference,
+    reference_flow,
     robust_gpm,
     run_status,
+    trend_detail,
+    trend_status,
 )
 from .learn import relative_full, should_learn, update_awc_factor
 from .moisture import apply_moisture, deficit_from_reading, reading_percent
@@ -262,6 +272,15 @@ class ZoneSnapshot:
     learn_confidence: float = 0.0
     learned_gpm: float | None = None
     last_run_gpm: float | None = None
+    baseline_gpm: float | None = None
+    baseline_gpm_at: str | None = None
+    baseline_source: str = "none"
+    flow_reference_gpm: float | None = None
+    flow_vs_baseline_pct: float | None = None
+    flow_trend_pct: float | None = None
+    flow_trend_status: str = "no_baseline"
+    catch_cup: dict[str, Any] | None = None
+    catch_cup_pending: dict[str, Any] | None = None
     water_total_gal: float = 0.0
     water_today_gal: float = 0.0
     water_week_gal: float = 0.0
@@ -384,6 +403,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         self._last_observation: Observation | None = None
         # A main-leak stop must not run while this lock is held. Credit needs it.
         self._pending_flow_stop = False
+        self._catch_cup_completed: set[str] = set()
         self._forecast_expected_mm = 0.0
         self._forecast_probability: float | None = None
         self._forecast_has_probability = False
@@ -723,6 +743,219 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             await self._publish(force_balance=False, force_notify=False)
         )
 
+    async def async_run_catch_cup_test(
+        self, zone_ids: list[str] | None, minutes: float = 15
+    ) -> None:
+        """Run each selected zone once, for exactly ``minutes``, with no soak.
+
+        This is manual. It is not part of the morning plan. The bucket is not
+        credited until a cup depth is entered. Rain and the other safety stops
+        still apply. A nightly runtime cap does not.
+        """
+        minutes = float(minutes)
+        if minutes <= 0:
+            raise HomeAssistantError("Catch-cup minutes must be greater than 0.")
+        chosen = self._catch_cup_zone_ids(zone_ids)
+        if not chosen:
+            raise HomeAssistantError("No enabled zone is available for a catch-cup test.")
+        now = dt_util.now(self._timezone())
+        jobs: list[CycleJob] = []
+        skipped: list[str] = []
+        for zone_id in chosen:
+            subentry = self.config_entry.subentries.get(zone_id)
+            if subentry is None or subentry.subentry_type != SUBENTRY_ZONE:
+                raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
+            data = dict(subentry.data)
+            entity_id = str(data.get(CONF_VALVE_ENTITY) or "")
+            if not entity_id or entity_id.startswith("simulation."):
+                skipped.append(f"{subentry.title}: no on/off entity")
+                continue
+            reason = self.live_skip(zone_id, True)
+            if reason:
+                skipped.append(f"{subentry.title}: {reason}")
+                await self._write_run(
+                    zone_id, minutes=0, net_mm=0, gallons=None, result=reason
+                )
+                continue
+            precip = _optional_float(data, CONF_PRECIPITATION_RATE) or 0.0
+            jobs.append(
+                self._cycle_job(
+                    zone_id=zone_id,
+                    name=subentry.title,
+                    data=data,
+                    start=None,
+                    minutes=minutes,
+                    net_mm=0.0,
+                    zone_net_mm=0.0,
+                    precip=precip,
+                    finish_by=None,
+                    marked_at=now,
+                    soak_after_min=0.0,
+                    manual=True,
+                    credit_bucket=False,
+                    uncapped=True,
+                    catch_cup=True,
+                )
+            )
+        if not jobs:
+            detail = "; ".join(skipped) or "No zone can run a catch-cup test."
+            raise HomeAssistantError(detail)
+        if self.executor is None:
+            raise HomeAssistantError("Sprinklecast executor is not ready.")
+        await self.executor.start(jobs)
+
+    def _catch_cup_zone_ids(self, zone_ids: list[str] | None) -> list[str]:
+        """Explicit zones, or every enabled zone when the caller passed none."""
+        if zone_ids is not None:
+            return list(zone_ids)
+        chosen: list[str] = []
+        for subentry in self.config_entry.subentries.values():
+            if subentry.subentry_type != SUBENTRY_ZONE:
+                continue
+            state = self.store.zone(subentry.subentry_id)
+            if not bool(state.get("enabled", True)):
+                continue
+            chosen.append(subentry.subentry_id)
+        return chosen
+
+    async def async_catch_cup_finished(self) -> None:
+        """Remind the user to enter cup depths after a metered test."""
+        from homeassistant.helpers import issue_registry as ir
+
+        ran = list(self._catch_cup_completed)
+        self._catch_cup_completed = set()
+        if not ran or not self._options().get(CONF_FLOW_SENSOR):
+            return
+        names: list[str] = []
+        for zone_id in ran:
+            subentry = self.config_entry.subentries.get(zone_id)
+            names.append(subentry.title if subentry is not None else zone_id)
+        detail = (
+            "Enter the average catch-cup depth for "
+            + ", ".join(names)
+            + ". Use Catch-cup depth or sprinklecast.set_catch_cup_result. "
+            "That saves each zone's precipitation rate. It does not open a valve."
+        )
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"catch_cup_{self.config_entry.entry_id}",
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="catch_cup_depths",
+            translation_placeholders={"detail": detail},
+        )
+        self.hass.async_create_task(self._notify("Sprinklecast catch-cup test", detail))
+
+    async def async_set_catch_cup_result(
+        self,
+        zone_id: str,
+        depth_in: float,
+        minutes: float | None = None,
+    ) -> dict[str, Any]:
+        """Save a measured cup depth as this zone's precipitation rate.
+
+        The bucket is credited by the measured depth. Editing the depth credits
+        only the change from the last entry.
+        """
+        if depth_in <= 0:
+            raise HomeAssistantError("Catch-cup depth must be greater than 0.")
+        subentry = self.config_entry.subentries.get(zone_id)
+        if subentry is None:
+            raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
+        state = self.store.zone(zone_id)
+        pending = state.get("catch_cup_pending") or {}
+        previous = state.get("catch_cup") if isinstance(state.get("catch_cup"), dict) else {}
+        if minutes is None:
+            minutes = pending.get("minutes") or previous.get("minutes") or 15
+        used = float(minutes)
+        if used <= 0:
+            raise HomeAssistantError("Catch-cup minutes must be greater than 0.")
+        try:
+            rate = round(rate_from_average_depth(depth_in, used), 4)
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        new_mm = inches_to_mm(depth_in)
+        old_mm = float(previous.get("credited_mm") or 0.0)
+        delta = new_mm - old_mm
+        data = dict(subentry.data)
+        try:
+            taw = self._limits(data, self.store.et0_mm, dt_util.now(self._timezone()).month).taw_mm
+        except (KeyError, ValueError):
+            taw = None
+        deficit = float(state.get("deficit_mm") or 0.0) - delta
+        if taw is not None and taw > 0:
+            deficit = min(taw, max(0.0, deficit))
+        else:
+            deficit = max(0.0, deficit)
+        now_iso = dt_util.now(self._timezone()).isoformat()
+        state["deficit_mm"] = deficit
+        if delta > 0:
+            state["last_watered"] = dt_util.now(self._timezone()).date().isoformat()
+        state["catch_cup"] = {
+            "at": now_iso,
+            "minutes": round(used, 2),
+            "depth_in": round(float(depth_in), 4),
+            "precipitation_rate_in_hr": rate,
+            "credited_mm": round(new_mm, 3),
+        }
+        state["catch_cup_pending"] = None
+        state["measured_precipitation_rate_in_hr"] = rate
+        await self.store.async_save()
+        self._clear_catch_cup_issue_if_done()
+        data[CONF_PRECIPITATION_RATE] = rate
+        self.hass.config_entries.async_update_subentry(self.config_entry, subentry, data=data)
+        return {
+            "precipitation_rate_in_hr": rate,
+            "depth_in": round(float(depth_in), 4),
+            "minutes": round(used, 2),
+            "credited_mm": round(new_mm, 3),
+        }
+
+    def _clear_catch_cup_issue_if_done(self) -> None:
+        from homeassistant.helpers import issue_registry as ir
+
+        for subentry in self.config_entry.subentries.values():
+            if subentry.subentry_type != SUBENTRY_ZONE:
+                continue
+            if self.store.zone(subentry.subentry_id).get("catch_cup_pending"):
+                return
+        ir.async_delete_issue(
+            self.hass, DOMAIN, f"catch_cup_{self.config_entry.entry_id}"
+        )
+
+    async def async_set_flow_baseline(self, zone_id: str, gpm: float | None) -> None:
+        """Save a permanent gallons-per-minute baseline. Clears the trend history."""
+        from homeassistant.helpers import issue_registry as ir
+
+        subentry = self.config_entry.subentries.get(zone_id)
+        if subentry is None:
+            raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
+        state = self.store.zone(zone_id)
+        used = gpm if gpm is not None else state.get("last_run_gpm")
+        try:
+            value = float(used)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            value = 0.0
+        if value <= 0:
+            raise HomeAssistantError(
+                f"{subentry.title} has no flow reading to save as a baseline."
+            )
+        now_iso = dt_util.now(self._timezone()).isoformat()
+        state["baseline_gpm"] = round(value, 3)
+        state["baseline_gpm_at"] = now_iso
+        state["baseline_source"] = "manual"
+        state["flow_history"] = []
+        state["flow_alert"] = None
+        state["flow_trend_alert"] = None
+        state["flow_locked"] = False
+        for kind in ("high_flow", "low_flow", "high_trend", "low_trend"):
+            ir.async_delete_issue(self.hass, DOMAIN, f"flow_{zone_id}_{kind}")
+        self.store.flow_locked = any(
+            bool(self.store.zone(item).get("flow_locked")) for item in self.store.zones
+        )
+        await self._save_and_refresh_snapshot()
+
     async def async_reset_learning(self, zone_id: str) -> None:
         """Return the moisture factor to 1 and clear its confidence."""
         state = self.store.zone(zone_id)
@@ -741,20 +974,22 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         gallons: float | None,
         result: str,
         gpm: float | None = None,
+        catch_cup: bool = False,
     ) -> None:
         """Credit one finished cycle. Called by the executor outside the build lock."""
-        alert = None
+        alerts: list[dict[str, Any]] = []
         async with self._lock:
-            alert = self._write_run_locked(
+            alerts = self._write_run_locked(
                 zone_id,
                 minutes=minutes,
                 net_mm=net_mm,
                 gallons=gallons,
                 result=result,
                 gpm=gpm,
+                catch_cup=catch_cup,
             )
             await self.store.async_save()
-        if alert is not None:
+        for alert in alerts:
             self._raise_flow_alert(alert)
         self._maybe_budget_alert()
         self.hass.async_create_task(self._refresh_after_cycle())
@@ -1209,43 +1444,131 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         state: dict[str, Any],
         data: dict[str, Any],
         gpm: float,
-    ) -> dict[str, Any] | None:
+        *,
+        catch_cup: bool = False,
+        minutes: float = 0.0,
+    ) -> list[dict[str, Any]]:
+        """Learn this run and compare it with the saved baseline when one exists."""
         options = self._options()
         high = float(options.get(CONF_FLOW_HIGH_PCT, DEFAULT_HIGH_PCT))
         low = float(options.get(CONF_FLOW_LOW_PCT, DEFAULT_LOW_PCT))
         minimum = int(options.get(CONF_FLOW_LEARN_RUNS, DEFAULT_LEARN_RUNS))
+        trend_pct = float(options.get(CONF_FLOW_TREND_PCT, DEFAULT_TREND_PCT))
+        trend_runs = int(options.get(CONF_FLOW_TREND_RUNS, DEFAULT_TREND_RUNS))
         samples = [float(value) for value in list(state.get("gpm_samples") or [])]
-        status = run_status(
-            gpm, samples, high_pct=high, low_pct=low, minimum_runs=minimum
+        now_iso = dt_util.now(self._timezone()).isoformat()
+        subentry = self.config_entry.subentries.get(zone_id)
+        name = subentry.title if subentry is not None else zone_id
+        _ = data
+        if catch_cup:
+            self._store_learned(state, samples, gpm, minimum)
+            state["last_run_gpm"] = round(gpm, 3)
+            state["baseline_gpm"] = round(gpm, 3)
+            state["baseline_gpm_at"] = now_iso
+            state["baseline_source"] = "catch_cup"
+            state["flow_history"] = append_flow_history(
+                [], at=now_iso, gpm=gpm, minutes=minutes
+            )
+            state["flow_alert"] = None
+            state["flow_trend_alert"] = None
+            return []
+
+        saved = self._saved_baseline(state)
+        if saved is not None:
+            reference: float | None = saved
+            source = str(state.get("baseline_source") or "catch_cup")
+            status = compare_to_reference(gpm, reference, high_pct=high, low_pct=low)
+        else:
+            reference = robust_gpm(samples)
+            source = "learned"
+            status = run_status(
+                gpm, samples, high_pct=high, low_pct=low, minimum_runs=minimum
+            )
+        self._store_learned(state, samples, gpm, minimum)
+        state["last_run_gpm"] = round(gpm, 3)
+        state["flow_history"] = append_flow_history(
+            state.get("flow_history"), at=now_iso, gpm=gpm, minutes=minutes
         )
-        learned_before = robust_gpm(samples)
+        alerts: list[dict[str, Any]] = []
+        if status not in {"high_flow", "low_flow"}:
+            if status == "ok":
+                state["flow_alert"] = None
+        else:
+            action_key = (
+                CONF_FLOW_HIGH_ACTION if status == "high_flow" else CONF_FLOW_LOW_ACTION
+            )
+            action = str(options.get(action_key, "notify"))
+            state["flow_alert"] = status
+            if action == FLOW_ACTION_STOP:
+                state["flow_locked"] = True
+            alerts.append(
+                {
+                    "kind": status,
+                    "zone_id": zone_id,
+                    "name": name,
+                    "gpm": round(gpm, 3),
+                    "learned_gpm": None if reference is None else round(float(reference), 3),
+                    "source": source,
+                    "action": action,
+                    "detail": alert_detail(
+                        status, name=name, gpm=gpm, learned=reference, source=source
+                    ),
+                }
+            )
+        trend_reference, trend_source = reference_flow(state)
+        kind, drift = trend_status(
+            state.get("flow_history"),
+            trend_reference,
+            runs=trend_runs,
+            trend_pct=trend_pct,
+        )
+        state["flow_trend_status"] = kind
+        state["flow_trend_pct"] = None if drift is None else round(drift, 1)
+        if saved is not None and kind in {"high_trend", "low_trend"} and trend_reference:
+            state["flow_trend_alert"] = kind
+            alerts.append(
+                {
+                    "kind": kind,
+                    "zone_id": zone_id,
+                    "name": name,
+                    "gpm": round(gpm, 3),
+                    "learned_gpm": round(float(trend_reference), 3),
+                    "source": trend_source,
+                    "action": "notify",
+                    "detail": trend_detail(
+                        kind,
+                        name=name,
+                        drift_pct=float(drift or 0.0),
+                        reference=float(trend_reference),
+                        source=trend_source,
+                    ),
+                }
+            )
+        elif kind == "ok":
+            state["flow_trend_alert"] = None
+        return alerts
+
+    def _store_learned(
+        self,
+        state: dict[str, Any],
+        samples: list[float],
+        gpm: float,
+        minimum: int,
+    ) -> None:
         state["gpm_samples"] = accept_sample(samples, gpm, minimum_runs=minimum)
         learned_now = robust_gpm(list(state["gpm_samples"]))
         state["learned_gpm"] = (
             learned_now if len(state["gpm_samples"]) >= minimum else None
         )
-        state["last_run_gpm"] = round(gpm, 3)
-        if status not in {"high_flow", "low_flow"}:
-            if status == "ok":
-                state["flow_alert"] = None
+
+    def _saved_baseline(self, state: dict[str, Any]) -> float | None:
+        try:
+            value = float(state.get("baseline_gpm"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
             return None
-        action_key = CONF_FLOW_HIGH_ACTION if status == "high_flow" else CONF_FLOW_LOW_ACTION
-        action = str(options.get(action_key, "notify"))
-        subentry = self.config_entry.subentries.get(zone_id)
-        name = subentry.title if subentry is not None else zone_id
-        state["flow_alert"] = status
-        if action == FLOW_ACTION_STOP:
-            state["flow_locked"] = True
-        _ = data
-        return {
-            "kind": status,
-            "zone_id": zone_id,
-            "name": name,
-            "gpm": round(gpm, 3),
-            "learned_gpm": None if learned_before is None else round(learned_before, 3),
-            "action": action,
-            "detail": alert_detail(status, name=name, gpm=gpm, learned=learned_before),
-        }
+        if value <= 0:
+            return None
+        return value
 
     def _raise_flow_alert(self, alert: dict[str, Any]) -> None:
         """Repair, event, and optional notify. Stop-and-skip is stored on the zone."""
@@ -1399,8 +1722,13 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             flow_gpm=_volume_gpm(state, data),
         )
 
-    async def async_reset_flow(self, zone_id: str | None) -> None:
-        """Clear learned flow, the alert, and the skip that a stop action set."""
+    async def async_reset_flow(
+        self, zone_id: str | None, *, clear_baseline: bool = False
+    ) -> None:
+        """Clear learned flow, the alert, and the skip that a stop action set.
+
+        The catch-cup baseline stays unless ``clear_baseline`` is true.
+        """
         from homeassistant.helpers import issue_registry as ir
 
         ids = [zone_id] if zone_id else list(self.store.zones)
@@ -1410,8 +1738,14 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             state["learned_gpm"] = None
             state["last_run_gpm"] = None
             state["flow_alert"] = None
+            state["flow_trend_alert"] = None
             state["flow_locked"] = False
-            for kind in ("high_flow", "low_flow", "main_leak"):
+            if clear_baseline:
+                state["baseline_gpm"] = None
+                state["baseline_gpm_at"] = None
+                state["baseline_source"] = None
+                state["flow_history"] = []
+            for kind in ("high_flow", "low_flow", "main_leak", "high_trend", "low_trend"):
                 ir.async_delete_issue(self.hass, DOMAIN, f"flow_{item}_{kind}")
         if zone_id is None:
             self.store.flow_locked = False
@@ -2011,6 +2345,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         marked_at: datetime,
         soak_after_min: float,
         manual: bool,
+        credit_bucket: bool = True,
+        uncapped: bool = False,
+        catch_cup: bool = False,
     ) -> CycleJob:
         return CycleJob(
             zone_id=zone_id,
@@ -2029,7 +2366,10 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             marked_at=marked_at,
             soak_after_min=soak_after_min,
             manual=manual,
-            zone_cap_min=self.zone_run_cap(data),
+            zone_cap_min=None if uncapped else self.zone_run_cap(data),
+            credit_bucket=credit_bucket,
+            uncapped=uncapped,
+            catch_cup=catch_cup,
         )
 
     async def _write_run(
@@ -2056,7 +2396,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         gallons: float | None,
         result: str,
         gpm: float | None = None,
-    ) -> dict[str, Any] | None:
+        catch_cup: bool = False,
+    ) -> list[dict[str, Any]]:
         state = self.store.zone(zone_id)
         subentry = self.config_entry.subentries.get(zone_id)
         data = dict(subentry.data) if subentry is not None else {}
@@ -2084,9 +2425,22 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             state["water_total_gal"] = round(
                 float(state.get("water_total_gal") or 0.0) + applied, 3
             )
-        alert = None
+        alerts: list[dict[str, Any]] = []
+        if catch_cup and result == "ok" and minutes > 0:
+            state["catch_cup_pending"] = {
+                "minutes": round(float(minutes), 2),
+                "at": dt_util.now(self._timezone()).isoformat(),
+            }
+            self._catch_cup_completed.add(zone_id)
         if gpm is not None and gpm > 0 and result == "ok":
-            alert = self._learn_gpm(zone_id, state, data, gpm)
+            alerts = self._learn_gpm(
+                zone_id,
+                state,
+                data,
+                gpm,
+                catch_cup=catch_cup,
+                minutes=minutes,
+            )
         state["last_run"] = {
             "at": dt_util.now(self._timezone()).isoformat(),
             "minutes": round(minutes, 2),
@@ -2098,7 +2452,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         if result == "ok":
             remember_run(state, dict(state["last_run"]))
         state["last_run_now"] = f"{result}: {minutes:.0f} min, {net_mm:.1f} mm"
-        return alert
+        return alerts
 
     def _note_temp_history(self, now: datetime, today: str) -> None:
         """Store one daily mean Fahrenheit for the dormancy window."""
@@ -2288,6 +2642,38 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             forecast_defer_reason=self._defer_reason_for(state, float(state["deficit_mm"]), now),
         )
 
+    def _flow_baseline_fields(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Baseline, the percent gap, and the rolling trend for one zone."""
+        reference, source = reference_flow(state)
+        saved = self._saved_baseline(state)
+        options = self._options()
+        trend_runs = int(options.get(CONF_FLOW_TREND_RUNS, DEFAULT_TREND_RUNS))
+        trend_pct = float(options.get(CONF_FLOW_TREND_PCT, DEFAULT_TREND_PCT))
+        kind, drift = trend_status(
+            state.get("flow_history"),
+            reference,
+            runs=trend_runs,
+            trend_pct=trend_pct,
+        )
+        gap = percent_vs_reference(state.get("last_run_gpm"), reference)
+        catch = state.get("catch_cup") if isinstance(state.get("catch_cup"), dict) else None
+        pending = (
+            state.get("catch_cup_pending")
+            if isinstance(state.get("catch_cup_pending"), dict)
+            else None
+        )
+        return {
+            "baseline_gpm": saved,
+            "baseline_gpm_at": state.get("baseline_gpm_at") if saved is not None else None,
+            "baseline_source": source,
+            "flow_reference_gpm": reference,
+            "flow_vs_baseline_pct": None if gap is None else round(gap, 1),
+            "flow_trend_pct": None if drift is None else round(drift, 1),
+            "flow_trend_status": kind,
+            "catch_cup": catch,
+            "catch_cup_pending": pending,
+        }
+
     def _measurement_fields(
         self,
         state: dict[str, Any],
@@ -2356,6 +2742,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             "learn_confidence": float(state.get("learn_confidence") or 0.0),
             "learned_gpm": state.get("learned_gpm"),
             "last_run_gpm": state.get("last_run_gpm"),
+            **self._flow_baseline_fields(state),
             "water_total_gal": float(state.get("water_total_gal") or 0.0),
             "water_today_gal": period_gallons(state.get("water_days"), today, span="day"),
             "water_week_gal": week_gal,

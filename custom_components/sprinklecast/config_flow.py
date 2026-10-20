@@ -58,6 +58,8 @@ from .const import (
     CONF_FLOW_IDLE_GPM,
     CONF_FLOW_KIND,
     CONF_FLOW_LEARN_RUNS,
+    CONF_FLOW_TREND_PCT,
+    CONF_FLOW_TREND_RUNS,
     CONF_FLOW_LOW_ACTION,
     CONF_FLOW_LOW_PCT,
     CONF_FLOW_LEAK_RATIO,
@@ -171,6 +173,8 @@ from .flow_learn import (
     DEFAULT_IDLE_GPM,
     DEFAULT_LEARN_RUNS,
     DEFAULT_LOW_PCT,
+    DEFAULT_TREND_PCT,
+    DEFAULT_TREND_RUNS,
 )
 from .presets import preset_placeholders
 from .simulate import BUCKETS, DEFAULT_BUCKET, DEFAULT_SCENARIO, SCENARIOS
@@ -266,6 +270,8 @@ _LOCATION_KEYS = (
     CONF_FLOW_HIGH_PCT,
     CONF_FLOW_LOW_PCT,
     CONF_FLOW_LEARN_RUNS,
+    CONF_FLOW_TREND_PCT,
+    CONF_FLOW_TREND_RUNS,
     CONF_FLOW_HIGH_ACTION,
     CONF_FLOW_LOW_ACTION,
     CONF_COST_PER_1000_GAL,
@@ -460,6 +466,8 @@ def _location_fields() -> dict[Any, Any]:
         vol.Required(CONF_FLOW_HIGH_PCT, default=DEFAULT_HIGH_PCT): _number(5, 200, 1, "%"),
         vol.Required(CONF_FLOW_LOW_PCT, default=DEFAULT_LOW_PCT): _number(5, 90, 1, "%"),
         vol.Required(CONF_FLOW_LEARN_RUNS, default=DEFAULT_LEARN_RUNS): _number(1, 30, 1),
+        vol.Required(CONF_FLOW_TREND_PCT, default=DEFAULT_TREND_PCT): _number(1, 50, 1, "%"),
+        vol.Required(CONF_FLOW_TREND_RUNS, default=DEFAULT_TREND_RUNS): _number(3, 30, 1),
         vol.Required(CONF_FLOW_HIGH_ACTION, default=FLOW_ACTION_NOTIFY): _select(
             FLOW_ACTIONS, "flow_action"
         ),

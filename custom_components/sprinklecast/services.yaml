@@ -318,7 +318,10 @@ reset_learning:
 
 reset_flow_learning:
   name: Reset flow learning
-  description: Clear learned flow, the flow alert, and a skip that is waiting for reset. Leave the zone empty to reset every zone on the hub.
+  description: >-
+    Clear learned flow, the flow alert, and a skip that is waiting for reset.
+    The catch-cup baseline stays unless clear baseline is on. Leave the zone
+    empty to reset every zone on the hub.
   fields:
     hub:
       name: Hub
@@ -330,6 +333,123 @@ reset_flow_learning:
       description: Zone name. Empty resets every zone and a main-line lock.
       selector:
         text:
+    clear_baseline:
+      name: Clear baseline
+      description: Also delete the saved baseline flow and the trend history. Off by default.
+      default: false
+      selector:
+        boolean:
+
+run_catch_cup_test:
+  name: Run catch-cup test
+  description: >-
+    Run each selected zone once, for exactly the minutes you choose (default
+    15). One zone at a time, no cycle-and-soak, no runtime cap, and no soil
+    credit until you enter the cup depth. Rain, freeze, wind, and a wet soil
+    sensor still stop a zone. Leave the zone empty to test every enabled zone.
+    This is manual and is not part of the morning plan. Stop all watering cancels it.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name, if you have more than one.
+      selector:
+        text:
+    zone:
+      name: Zone
+      description: Zone name, or a list of zone names. Empty runs every enabled zone.
+      selector:
+        text:
+    minutes:
+      name: Minutes
+      description: How long each zone stays on. Default 15.
+      default: 15
+      selector:
+        number:
+          min: 1
+          max: 180
+          unit_of_measurement: min
+
+set_catch_cup_result:
+  name: Set catch-cup result
+  description: >-
+    Enter the average depth the cups caught. The precipitation rate is that
+    depth divided by the minutes, times 60, and it replaces the zone's rate.
+    The soil is credited by that depth. Editing the number credits only the
+    change. Does not open a valve.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name, if you have more than one.
+      selector:
+        text:
+    zone:
+      name: Zone
+      description: Zone name.
+      required: true
+      selector:
+        text:
+    depth_in:
+      name: Depth in inches
+      description: Average cup depth in inches. Set only one depth field.
+      selector:
+        number:
+          min: 0.01
+          max: 5
+          step: 0.01
+          unit_of_measurement: in
+    depth_mm:
+      name: Depth in millimeters
+      description: Average cup depth in millimeters. Set only one depth field.
+      selector:
+        number:
+          min: 0.1
+          max: 127
+          step: 0.1
+          unit_of_measurement: mm
+    depth:
+      name: Depth
+      description: Average cup depth in Home Assistant's precipitation unit.
+      selector:
+        number:
+          min: 0.01
+          max: 127
+          step: 0.01
+    minutes:
+      name: Minutes
+      description: How long the zone ran. Empty uses the test that just finished, or 15.
+      selector:
+        number:
+          min: 1
+          max: 180
+          unit_of_measurement: min
+
+set_flow_baseline:
+  name: Set flow baseline
+  description: >-
+    Save a permanent gallons-per-minute baseline for a zone. Leave gallons per
+    minute empty to use that zone's last run. This clears the trend history so
+    the next runs are compared with the new number. Run a catch-cup test again
+    after you change nozzles, or call this.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name, if you have more than one.
+      selector:
+        text:
+    zone:
+      name: Zone
+      description: Zone name. Empty sets every zone on the hub that has a flow reading.
+      selector:
+        text:
+    gpm:
+      name: Gallons per minute
+      description: The baseline. Empty uses the last measured run.
+      selector:
+        number:
+          min: 0.01
+          max: 200
+          step: 0.01
+          unit_of_measurement: gal/min
 
 start_audit:
   name: Start catch-cup audit

@@ -99,10 +99,20 @@ async def async_setup_entry(
                     FlowSensor(coordinator, zone_id),
                     LearnedGpmSensor(coordinator, zone_id),
                     LastRunGpmSensor(coordinator, zone_id),
+                    BaselineFlowSensor(coordinator, zone_id),
+                    FlowVsBaselineSensor(coordinator, zone_id),
+                    FlowTrendSensor(coordinator, zone_id),
                 ]
             )
         else:
-            for suffix in ("flow", "learned_gpm", "last_run_gpm"):
+            for suffix in (
+                "flow",
+                "learned_gpm",
+                "last_run_gpm",
+                "baseline_flow",
+                "flow_vs_baseline",
+                "flow_trend",
+            ):
                 _drop_sensor(hass, f"{prefix}_{suffix}")
         async_add_entities(zone_sensors, config_subentry_id=zone_id)
 
@@ -755,6 +765,111 @@ class LastRunGpmSensor(_ZoneSensor):
         if zone is None:
             return None
         return zone.last_run_gpm
+
+
+class BaselineFlowSensor(_ZoneSensor):
+    """Permanent catch-cup baseline, or the learned rate when no test has been run."""
+
+    _attr_translation_key = "baseline_flow"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
+    _attr_native_unit_of_measurement = UnitOfVolumeFlowRate.GALLONS_PER_MINUTE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:speedometer-medium"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the baseline-flow sensor."""
+        super().__init__(coordinator, zone_id, "baseline_flow")
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the baseline, or the learned rate, or none."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.flow_reference_gpm
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """When the baseline was saved, and whether it is learned or measured."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {
+            "date": zone.baseline_gpm_at,
+            "source": zone.baseline_source,
+        }
+
+
+class FlowVsBaselineSensor(_ZoneSensor):
+    """Percent difference of the last run from the baseline."""
+
+    _attr_translation_key = "flow_vs_baseline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:percent"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the flow-versus-baseline sensor."""
+        super().__init__(coordinator, zone_id, "flow_vs_baseline")
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the percent gap. Positive means this run was higher."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.flow_vs_baseline_pct
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """The reference this percent was compared with."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {
+            "source": zone.baseline_source,
+            "reference_gpm": zone.flow_reference_gpm,
+            "last_run_gpm": zone.last_run_gpm,
+        }
+
+
+class FlowTrendSensor(_ZoneSensor):
+    """Percent drift of the recent median from the baseline."""
+
+    _attr_translation_key = "flow_trend"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:chart-timeline-variant"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Create the flow-trend sensor."""
+        super().__init__(coordinator, zone_id, "flow_trend")
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the median drift. None until a reference exists."""
+        zone = self._zone()
+        if zone is None:
+            return None
+        return zone.flow_trend_pct
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Whether the recent median is still learning or past the trend line."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {
+            "status": zone.flow_trend_status,
+            "source": zone.baseline_source,
+            "reference_gpm": zone.flow_reference_gpm,
+        }
 
 
 class ZoneWaterUseSensor(_ZoneSensor):

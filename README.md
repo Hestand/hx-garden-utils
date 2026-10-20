@@ -4,7 +4,7 @@
 
 Work in progress, not ready for general use.
 
-Water-balance planner and zone controller for Home Assistant (`sprinklecast` 0.13.0).
+Water-balance planner and zone controller for Home Assistant (`sprinklecast` 0.14.0).
 
 It estimates reference evapotranspiration, tracks a soil-water deficit for each zone, and builds a cycle-and-soak plan for the next morning. The plan is made at the plan hour (default 23:00). A new hub turns **Dynamic start time** on: the run aims to finish at that day's local sunrise, and it never opens before **Don't start before** (default 04:00). If that is still too early, it starts then and may run past sunrise, but it ends by the finish time (default 09:00). Turn Dynamic start time off to open at the start time (default 05:00) instead. **Automatic watering is off after a new install.** An upgrade keeps that switch as it was, unless the old Mode was Off. Turn the hub's **Automatic watering** switch on when you want it to open valves. Until then the plan is only sensors and an optional notification. Run now is a manual action and runs even while that switch is off. A simulation hub still plays an example week and never calls a real on/off entity. The controller calls `switch`, `valve`, or `input_boolean` services only. It does not call a controller API.
 
@@ -27,6 +27,8 @@ The screens use plain names. The technical term is here so a manual or a forum p
 | Allowed dry-out | MAD, management allowed depletion | The fraction of soil water that can be used before watering. |
 | Water the soil can hold | AWC, TAW | Inches of water an inch of soil can store, and the total in the root zone. |
 | Distribution uniformity | DU_lq | From a catch-cup test: the driest quarter of cups divided by the average cup. |
+| Catch-cup depth | Precipitation rate | The average depth the cups caught. Sprinklecast turns that into inches per hour and stores it on the zone. |
+| Baseline flow | | The gallons per minute from a catch-cup test, kept until you test again. Until then it shows the learned flow and says so. |
 | Evening plan hour | Plan hour | When today's water loss is saved and the morning plan is built. Default 23:00. |
 | Dynamic start time | | On for a new hub. The morning aims to finish at local sunrise. The start is sunrise minus every cycle and soak. |
 | Don't start before | Earliest start | Hard limit. Watering never starts earlier than this. Default 04:00. |
@@ -39,7 +41,7 @@ Requires Home Assistant **2025.3** or newer (config subentries). Tested on **202
 
 1. HACS → Integrations → ⋮ → Custom repositories.
 2. Add `https://github.com/Hestand/hx-garden-utils` as category **Integration**.
-3. Download **Sprinklecast** (release `v0.13.0`), then restart Home Assistant.
+3. Download **Sprinklecast** (release `v0.14.0`), then restart Home Assistant.
 
 `hacs.json` is included. This is not in the default HACS store.
 
@@ -65,7 +67,7 @@ Your config entry, zones, stored soil and flow history, and entity IDs stay. Do 
 2. While HACS still shows **Smart Water**, use HACS → Integrations → Smart Water → ⋮ → Remove. That deletes `config/custom_components/smart_water`. Config entries, `.storage`, and the entity registry stay. If the repository already shows Sprinklecast, skip HACS Remove and delete `config/custom_components/smart_water` by hand with the File editor or Samba.
 3. HACS → Integrations → ⋮ → Custom repositories. Remove `https://github.com/Hestand/hx-garden-utils` if it is still listed.
 4. Add `https://github.com/Hestand/hx-garden-utils` again as category **Integration**.
-5. Download **Sprinklecast** (release `v0.13.0`).
+5. Download **Sprinklecast** (release `v0.14.0`).
 6. Restart Home Assistant.
 7. Settings → Devices & services → Add integration → **Sprinklecast** → **Import my Smart Water setup**. No YAML is required. That copies data, options, zone subentries, and the `.storage` file (`smart_water.<entry id>` becomes `sprinklecast.<new id>`), including each zone's soil water and history and the Automatic watering switch. Devices and entity registry rows move. Entity IDs stay the same. The old config entry is removed.
 8. If you added `sprinklecast:` to `configuration.yaml` so an older build would start, remove that key after the import. An empty `sprinklecast:` is accepted and does nothing else.
@@ -76,6 +78,16 @@ Your config entry, zones, stored soil and flow history, and entity IDs stay. Do 
 The hub **Mode** option and the Mode sensor are gone. **Automatic watering** is the only on/off for valves. If Mode was Off, automatic watering is stored off. Notify only and Auto leave that switch as it was. **Send plan notifications** is on when a notify service was set, and the evening plan is sent even while automatic watering is off. The recent-rain skip is gone. Measured rain still fills the soil bucket. A wet rain sensor, rain right now, and a confident forecast still pause or defer watering.
 
 New entity: `calendar.<hub>_watering` (name **Watering**), for example `calendar.water_test_watering`. Removed entity: the Mode sensor (`sensor.<hub>_mode` or a renamed id). Its registry row is deleted.
+
+### Already on Sprinklecast 0.13.0
+
+Update to `v0.14.0` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
+
+Nothing is imported again. Config entry version stays 10. Learned flow, soil water, and the automatic switch stay as they are.
+
+A catch-cup baseline is empty until you run one. Until then, flow alerts keep using the learned rate, and **Baseline flow** says the source is learned. Put cups out and press **Run catch-cup test** (or call `sprinklecast.run_catch_cup_test`) when you want a permanent baseline. After you change nozzles, run that test again.
+
+If you have not yet turned **Automatic watering** back on after 0.12.0, or set **Soil water level** after a bucket reset, do that too. See the 0.12.0 notes below.
 
 ### Already on Sprinklecast 0.12.0
 
@@ -91,7 +103,7 @@ Remove `sprinklecast:` from `configuration.yaml` if you added it to start 0.12.0
 
 ### Upgrading from 0.5.x, 0.4.x, 0.3.x, 0.2.x, or 0.1.x
 
-Download 0.13.0 and restart. A Sprinklecast entry stays on config entry version 10. A Smart Water entry follows the steps above. 0.11.1 lists the next watering days on the schedule sensor and the dashboard card: one day for each allowed weekday, however far out, instead of seven calendar rows that are mostly not dry enough. Each of those days is the full morning plan. A day past the weather forecast sets `estimated`; the date and time stay exact. The bucket is refilled in the projection, so the second and third days follow the water that was already applied. The config entry moves to version 9 and writes **Dynamic start time** off, so an existing hub keeps opening at its start time until you turn the option on. A new hub defaults that option on. Clay, clay loam, and compact silt loam now soak 30 minutes unless the zone stored its own soak; a blank Soak field uses that preset. Bug-fix releases bump the patch number (0.10.0, then 0.10.1). Releases with new features bump the middle number (0.10, then 0.11). 1.0.0 is reserved for the true release. 0.10.1 keeps a short run on the configured start time. Soak time between cycles does not move that start earlier. A run whose valve time cannot finish by the finish time may still open as early as the earliest start, and the rest waits. The dashboard card shows the next watering as a date and time, such as Thu Nov 5, 5:00 AM. 0.10.0 keeps the morning window on the wall clock in Home Assistant's time zone, including the mornings when daylight saving starts or ends. A 05:00 start stays 05:00 local. Next watering is an exact local date and time, such as Sun Nov 1, 5:00 AM. Whether that date is past this week stays an `estimated` attribute and is not written into the text. The projection looks out up to a year, using the forecast and then the recent water-loss average, so a deep bed still gets a date. A disabled zone, or a zone that stays dormant for that whole year, stays unknown and the note says why. The hub's next watering is the earliest enabled zone. 0.9.0 projects the next watering out to about 60 days, so the date stays filled when nothing is due this week. The flow meter moves to the hub: one sensor, and a required choice of whole-home or irrigation-only. A whole-home meter does not alert while nothing is running. An existing per-zone flow sensor is copied onto the hub as irrigation-only, and the zone copy is removed. You are not asked to run setup again. Soil moisture level shows the sensor's own percent. That entity, and the flow entities, are created only when the sensor is set. The config entry moves to version 8. 0.8.1 renames the sensors and settings into plain English. Entity ids and history stay the same, because the unique ids did not change. Reference water loss and other technical sensors move to the diagnostic section, so the device page leads with soil water, the next watering, the last run, and water used. 0.8.0 replaces the sunrise deadline with a morning window: start at **05:00**, finish by **09:00**, and start no earlier than **04:00**. A sequence that does not fit 05:00–09:00 may start earlier, down to 04:00, and the rest stays in the bucket for the next allowed day. An allowed day is the morning the valves open. Existing hubs pick up these times on restart. They are not asked to run setup again, zone data is not rewritten, and the stored bucket (storage version 1) is kept. **Automatic watering stays off.** 0.7.2 dated each schedule row by the morning the valves open. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
+Download 0.14.0 and restart. A Sprinklecast entry stays on config entry version 10. A Smart Water entry follows the steps above. 0.11.1 lists the next watering days on the schedule sensor and the dashboard card: one day for each allowed weekday, however far out, instead of seven calendar rows that are mostly not dry enough. Each of those days is the full morning plan. A day past the weather forecast sets `estimated`; the date and time stay exact. The bucket is refilled in the projection, so the second and third days follow the water that was already applied. The config entry moves to version 9 and writes **Dynamic start time** off, so an existing hub keeps opening at its start time until you turn the option on. A new hub defaults that option on. Clay, clay loam, and compact silt loam now soak 30 minutes unless the zone stored its own soak; a blank Soak field uses that preset. Bug-fix releases bump the patch number (0.10.0, then 0.10.1). Releases with new features bump the middle number (0.10, then 0.11). 1.0.0 is reserved for the true release. 0.10.1 keeps a short run on the configured start time. Soak time between cycles does not move that start earlier. A run whose valve time cannot finish by the finish time may still open as early as the earliest start, and the rest waits. The dashboard card shows the next watering as a date and time, such as Thu Nov 5, 5:00 AM. 0.10.0 keeps the morning window on the wall clock in Home Assistant's time zone, including the mornings when daylight saving starts or ends. A 05:00 start stays 05:00 local. Next watering is an exact local date and time, such as Sun Nov 1, 5:00 AM. Whether that date is past this week stays an `estimated` attribute and is not written into the text. The projection looks out up to a year, using the forecast and then the recent water-loss average, so a deep bed still gets a date. A disabled zone, or a zone that stays dormant for that whole year, stays unknown and the note says why. The hub's next watering is the earliest enabled zone. 0.9.0 projects the next watering out to about 60 days, so the date stays filled when nothing is due this week. The flow meter moves to the hub: one sensor, and a required choice of whole-home or irrigation-only. A whole-home meter does not alert while nothing is running. An existing per-zone flow sensor is copied onto the hub as irrigation-only, and the zone copy is removed. You are not asked to run setup again. Soil moisture level shows the sensor's own percent. That entity, and the flow entities, are created only when the sensor is set. The config entry moves to version 8. 0.8.1 renames the sensors and settings into plain English. Entity ids and history stay the same, because the unique ids did not change. Reference water loss and other technical sensors move to the diagnostic section, so the device page leads with soil water, the next watering, the last run, and water used. 0.8.0 replaces the sunrise deadline with a morning window: start at **05:00**, finish by **09:00**, and start no earlier than **04:00**. A sequence that does not fit 05:00–09:00 may start earlier, down to 04:00, and the rest stays in the bucket for the next allowed day. An allowed day is the morning the valves open. Existing hubs pick up these times on restart. They are not asked to run setup again, zone data is not rewritten, and the stored bucket (storage version 1) is kept. **Automatic watering stays off.** 0.7.2 dated each schedule row by the morning the valves open. 0.7.1 fixes forecast temperatures: a weather entity that reports °F (or °C) no longer crashes setup on the freeze check. New hubs ask how many zones to add during setup. An existing hub is left as it is. **Automatic watering stays off** until you turn the switch on, including when an older hub had dry-run off. A hub that already chose its watering days keeps those days. The old all-zones runtime cap becomes the per-zone default (a stored 60 stays 60 minutes per zone). The new hub nightly total stays off. A simulation hub is a new entry from the first menu, or an existing simulation hub keeps working and still does not call a real entity.
 
 0.7 caps each zone on its own, can wait for confident forecast rain, warns before a freeze, and includes a dashboard card. Flow alerts still notify only until you change that. The weekly summary is off. Cost and the weekly gallon budget stay empty until you set them.
 
@@ -151,7 +163,8 @@ The first step is a menu: **Live hub** or **Simulation hub**. The live form is t
 | Blackout hours | Optional. The shared timeline stays outside this local hour range. |
 | Drip ignores weekdays | Off by default. Buried drip can skip the weekday check. The blackout still clips the shared timeline. |
 | Climate sensors | Optional temperature, humidity, wind, pressure, solar radiation, UV, and rain amount. |
-| High / low flow | Defaults **+30%** and **−25%** from the learned gallons per minute, after **3** runs. Each alert can notify only, or skip that zone until you reset flow learning. |
+| High / low flow | Defaults **+30%** and **−25%** from the baseline gallons per minute. With no baseline yet, from the learned rate after **3** runs. Each alert can notify only, or skip that zone until you reset flow learning. |
+| Flow trend | Default **±10%** from the baseline, using the median of the last **5** runs. Notify only. |
 | Idle flow | Default **0.5 gal/min** (or about 1 gallon on a volume total) while every zone is off. Notify only, or stop and skip every zone until reset. |
 | Cost per 1,000 gal | Optional. Adds a water-cost sensor in dollars. |
 | Weekly gallon budget | Optional. One alert per week when use goes over it. |
@@ -346,17 +359,24 @@ Valve-on time is 249 minutes. No zone is over 60. Clock order, local time on 14 
 
 ## Flow
 
-The hub has one flow meter. While a zone is running, the measured flow is that zone's. House use is not subtracted. Each zone can learn its normal gallons per minute from that meter while it runs. The estimate is the median of the last 12 runs. A run more than twice the median, or under 0.4 times it, is reported and left out of the median. Alerts start after 3 runs (change that on the hub). A whole-home meter hides the idle-flow alert. An irrigation-only meter keeps it.
+The hub has one flow meter. While a zone is running, the measured flow is that zone's. House use is not subtracted. A whole-home meter hides the idle-flow alert. An irrigation-only meter keeps it.
+
+Each zone keeps two flow numbers. **Baseline flow** is the average gallons per minute from a catch-cup test (one zone, steady, usually 15 minutes). It is stored and kept across restarts and upgrades. **Learned flow rate** is still the median of the last 12 runs. A run more than twice that median, or under 0.4 times it, is left out of the median. Until a catch-cup test has been run, Baseline flow shows the learned rate and its source attribute says `learned`. After a test it says `catch_cup`, with the date. `set_flow_baseline` says `manual`.
+
+A single run is compared with the baseline, not with the previous run, so a slow clog or a slow leak is not absorbed into the normal. The high and low percents are the same settings as before (default +30% and −25%). With no baseline yet, those alerts still wait for the learned median (default 3 runs). The last 30 per-run averages are kept. The median of the last 5 (change that on the hub) is **Flow trend**. It alerts when that median is more than 10% off the baseline. A trend alert notifies only. It does not stop the zone.
 
 | Alert | Default | What it means |
 | --- | --- | --- |
-| High flow | +30% | Broken head or a leak in that zone. |
-| Low flow | −25% | Clog, stuck valve, or low pressure. |
-| Idle flow | 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on | Main-line leak. |
+| High flow | +30% vs baseline | Broken head or a leak in that zone. |
+| Low flow | −25% vs baseline | Clog, stuck valve, or low pressure. |
+| Flow trend | ±10% vs baseline, median of the last 5 runs | A nozzle clogging slowly, or a leak growing slowly. |
+| Idle flow | 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on | Main-line leak. Whole-home meters do not raise this. |
 
-Each alert is **Notify only** or **Stop and skip until reset**. Notify is the default. Stop on a zone skips that zone. Stop on idle flow skips every zone. `sprinklecast.reset_flow_learning` clears the samples, the alert, and the skip. Leave the zone empty to reset the hub. The event is `smart_water_flow_alert`. A repair is raised with the same sentence. A notify target, if set, gets it too.
+High flow and low flow are **Notify only** or **Stop and skip until reset**. Notify is the default. Stop on a zone skips that zone. Stop on idle flow skips every zone. The trend alert is notify only. `sprinklecast.reset_flow_learning` clears the samples, the alert, and the skip. It does **not** clear the baseline unless you turn on clear baseline. Leave the zone empty to reset the hub. The event is `smart_water_flow_alert`. A repair is raised with the same sentence. A notify target, if set, gets it too.
 
-Sensors, only when a hub flow meter is set: **Flow check**, **Learned flow rate**, and **Last flow rate** (gal/min). Flow check can read `learning`, `ok`, `high_flow`, `low_flow`, or `main_leak`. With no area, gallons use the learned rate once it exists. An entered rate still wins over flow and area. Area still wins over GPM for the gallon estimate.
+After you change nozzles, run the catch-cup test again, or call `sprinklecast.set_flow_baseline`. That replaces the baseline and clears the trend history so the old nozzles are not the comparison.
+
+Sensors, only when a hub flow meter is set: **Flow check**, **Learned flow rate**, **Last flow rate**, **Baseline flow**, **Flow vs baseline** (percent), and **Flow trend** (percent). Flow check can read `learning`, `ok`, `high_flow`, `low_flow`, or `main_leak`. With no area, gallons use the learned rate once it exists. An entered rate still wins over flow and area. Area still wins over GPM for the gallon estimate.
 
 ## Water use
 
@@ -413,7 +433,10 @@ ET0 uses FAO-56 Penman-Monteith when humidity and wind are available. Daily sola
 | `run_now` | Runs that zone's cycle-and-soak now, even when automatic watering is off. Credits the bucket from the time it actually ran. |
 | `stop_all` | Turns off the entity this hub turned on. |
 | `reset_learning` | Sets that zone's moisture factor back to 1 and clears its confidence. |
-| `reset_flow_learning` | Clears learned flow, the alert, and a skip that is waiting for reset. An empty zone resets the whole hub. |
+| `reset_flow_learning` | Clears learned flow, the alert, and a skip that is waiting for reset. The baseline stays unless clear baseline is on. An empty zone resets the whole hub. |
+| `run_catch_cup_test` | Runs each selected zone once for the minutes you pass (default 15). Empty zone means every enabled zone. No soak, no cap, no soil credit until you enter the depth. |
+| `set_catch_cup_result` | Zone, depth, and optional minutes. Stores the precipitation rate (depth / minutes × 60) and credits the soil by that depth. |
+| `set_flow_baseline` | Saves gallons per minute as the permanent baseline. Empty gallons per minute uses the last run. Clears the trend history. |
 | `start_audit` | Runs one zone for the minutes you pass, as a manual run. Freeze, wind, rain, moisture, and the zone cap still apply. |
 | `submit_audit` | Cup readings in inches, or millilitres plus a cup diameter. Stores the measured rate and scheduling efficiency. |
 | `simulate` | Plays a weather week through the planner and returns it. Does not change the stored deficit and does not call an on/off entity. |
@@ -422,7 +445,9 @@ A zone is usable when Home Assistant already exposes it as a valve, switch, or i
 
 ## Entities
 
-Per zone, on the device page: soil water (percent full, read-only), **Soil water level** (a number, 0–100%, step 1), water needed, next watering, why this plan, today's run, last run, plant activity, water used, water saved, a watering-amount number (0–300%), a run-now button, and an enabled switch. Setting Soil water level writes the water still needed as that percent of the water the soil can hold, saves it, and rebuilds the plan. The value you set is today's soil water. The next plan hour applies the following day's water loss. The watering point is diagnostic. Soil moisture level is diagnostic and exists only when that zone has a moisture sensor. Flow check, learned flow rate, and last flow rate exist only when the hub has a flow meter.
+Per zone, on the device page: soil water (percent full, read-only), **Soil water level** (a number, 0–100%, step 1), **Catch-cup depth** (a number, inches or millimeters), water needed, next watering, why this plan, today's run, last run, plant activity, water used, water saved, a watering-amount number (0–300%), a run-now button, and an enabled switch. Setting Soil water level writes the water still needed as that percent of the water the soil can hold, saves it, and rebuilds the plan. The value you set is today's soil water. The next plan hour applies the following day's water loss. Catch-cup depth stores the measured average and the date, minutes, and rate as attributes. The watering point is diagnostic. Soil moisture level is diagnostic and exists only when that zone has a moisture sensor. Flow check, learned flow rate, last flow rate, baseline flow, flow vs baseline, and flow trend exist only when the hub has a flow meter.
+
+The hub has **Run catch-cup test**. It runs every enabled zone, one at a time, for 15 minutes.
 
 Hub: today's plan, rain today, next watering, watering schedule, watering now, water used, water saved, water cost when a price is set, the Automatic watering switch, and a Watering calendar (`calendar.<hub>_watering`). Water loss today (reference lawn) is diagnostic. A simulation hub also has a Sample week sensor and a Run simulation button. Entity ids are the ones created with the old names; renaming the label does not change them. The Mode sensor is removed.
 
@@ -455,6 +480,18 @@ entities:
 `format: datetime` is the entities-card option. It applies to the hub Next watering sensor and to each zone's Next watering sensor.
 
 If the card does not appear, add a dashboard resource by hand: **Settings → Dashboards → Resources → Add resource**, URL `/sprinklecast_static/sprinklecast-card.js`, type **JavaScript module**. The markdown card above still works and does not need the custom card.
+
+## Catch-cup test
+
+Put cups out in the zone, between the heads, in the overlap and in the gaps. Then press **Run catch-cup test**, or call `sprinklecast.run_catch_cup_test`.
+
+Each selected zone runs once, for exactly the minutes you choose. The default is 15, and the default zones are every enabled zone. One zone at a time. There is no cycle-and-soak split, no skip for the nightly runtime cap, and no soil credit while the valve is open. Rain right now, a wet rain sensor, freeze, wind, and a wet soil sensor still skip that zone. **Stop all watering** cancels the sequence. It is manual only. The morning plan never starts it.
+
+When the zone turns off, read the cups and average the depth. Set **Catch-cup depth** (inches or millimeters, whichever Home Assistant uses), or call `sprinklecast.set_catch_cup_result` with the zone, the depth, and the minutes if you need to override them. The precipitation rate is `depth / minutes × 60` in inches per hour. That rate is saved on the zone and replaces the sprinkler preset. The date, minutes, and depth stay on the number as attributes. The soil is credited by the depth you entered. If you correct the number, only the difference is credited.
+
+If the hub has a flow meter, the average gallons per minute of that steady run is saved as **Baseline flow**, with the date. A repair reminds you to enter the cup depths. That baseline is what later runs are compared with. Run the test again after you change nozzles, or call `sprinklecast.set_flow_baseline`.
+
+`sprinklecast.start_audit` is the older one-zone test. It still applies the runtime cap and wants a precipitation rate first. Use it with `submit_audit` when you have at least four cups and want distribution uniformity as well as the rate. The hub button does not calculate uniformity. It uses the one average depth.
 
 ## Catch-cup audit
 

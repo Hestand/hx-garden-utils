@@ -44,6 +44,9 @@ from .const import (
     SERVICE_RESET_LEARNING,
     SERVICE_SIMULATE,
     SERVICE_SKIP_ZONE,
+    SERVICE_RUN_CATCH_CUP,
+    SERVICE_SET_CATCH_CUP,
+    SERVICE_SET_FLOW_BASELINE,
     SERVICE_START_AUDIT,
     SERVICE_STOP_ALL,
     SERVICE_SUBMIT_AUDIT,
@@ -52,7 +55,7 @@ from .const import (
 from .simulate import BUCKETS, SCENARIOS
 from .coordinator import SmartWaterCoordinator
 from .presets import resolved_root_depth_in
-from .units import inches_to_mm
+from .units import depth_to_inches, inches_to_mm
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -523,9 +526,10 @@ def async_setup_services(hass: HomeAssistant) -> None:
         """Clear learned flow and a stop-until-reset skip. Omit the zone to clear the hub."""
         zone_name = call.data.get("zone")
         hub = call.data.get("hub")
+        clear_baseline = bool(call.data.get("clear_baseline", False))
         if zone_name:
             _entry, coordinator, zone_id = _find_zone(hass, zone_name, hub)
-            await coordinator.async_reset_flow(zone_id)
+            await coordinator.async_reset_flow(zone_id, clear_baseline=clear_baseline)
             return
         targets = [
             coordinator
@@ -535,7 +539,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         if not targets:
             raise ServiceValidationError("No Sprinklecast hub is loaded.")
         for coordinator in targets:
-            await coordinator.async_reset_flow(None)
+            await coordinator.async_reset_flow(None, clear_baseline=clear_baseline)
 
     _register(
         DOMAIN,
@@ -545,6 +549,117 @@ def async_setup_services(hass: HomeAssistant) -> None:
             {
                 vol.Optional("hub"): str,
                 vol.Optional("zone"): str,
+                vol.Optional("clear_baseline", default=False): bool,
+            }
+        ),
+    )
+
+    async def run_catch_cup(call: ServiceCall) -> None:
+        """Run selected zones one at a time for a catch-cup test."""
+        minutes = float(call.data.get("minutes", 15))
+        hub = call.data.get("hub")
+        names = _as_list(call.data.get("zone"))
+        grouped: dict[Any, list[str]] = {}
+        if names:
+            for name in names:
+                _entry, coordinator, zone_id = _find_zone(hass, name, hub)
+                grouped.setdefault(coordinator, []).append(zone_id)
+        else:
+            targets = [
+                coordinator
+                for entry, coordinator in _coordinators(hass)
+                if _hub_matches(entry, hub)
+            ]
+            if not targets:
+                raise ServiceValidationError("No Sprinklecast hub is loaded.")
+            if len(targets) > 1:
+                raise ServiceValidationError(
+                    "More than one Sprinklecast hub is loaded. Pass the hub name or a zone."
+                )
+            grouped[targets[0]] = []
+        for coordinator, zone_ids in grouped.items():
+            try:
+                await coordinator.async_run_catch_cup_test(
+                    zone_ids or None, minutes
+                )
+            except HomeAssistantError as err:
+                raise ServiceValidationError(str(err)) from err
+
+    async def set_catch_cup(call: ServiceCall) -> dict[str, Any]:
+        """Store one average cup depth as the zone's precipitation rate."""
+        _entry, coordinator, zone_id = _find_zone(
+            hass, call.data["zone"], call.data.get("hub")
+        )
+        try:
+            depth_in = _catch_depth_in(hass, call.data)
+        except ServiceValidationError:
+            raise
+        try:
+            return await coordinator.async_set_catch_cup_result(
+                zone_id, depth_in, call.data.get("minutes")
+            )
+        except HomeAssistantError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def set_flow_baseline(call: ServiceCall) -> None:
+        """Save the current or given gallons per minute as the permanent baseline."""
+        gpm = call.data.get("gpm")
+        grouped: dict[Any, list[str]] = {}
+        for _entry, coordinator, zone_id in _zones_for_call(hass, call.data):
+            grouped.setdefault(coordinator, []).append(zone_id)
+        errors: list[str] = []
+        for coordinator, zone_ids in grouped.items():
+            for zone_id in zone_ids:
+                try:
+                    await coordinator.async_set_flow_baseline(
+                        zone_id, None if gpm is None else float(gpm)
+                    )
+                except HomeAssistantError as err:
+                    errors.append(str(err))
+        if errors and len(errors) == sum(len(ids) for ids in grouped.values()):
+            raise ServiceValidationError("; ".join(errors))
+
+    minutes = vol.All(vol.Coerce(float), vol.Range(min=1, max=180))
+    _register(
+        DOMAIN,
+        SERVICE_RUN_CATCH_CUP,
+        run_catch_cup,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Optional("zone"): vol.Any(str, [str]),
+                vol.Optional("minutes", default=15): minutes,
+            }
+        ),
+    )
+    _register(
+        DOMAIN,
+        SERVICE_SET_CATCH_CUP,
+        set_catch_cup,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Required("zone"): str,
+                vol.Optional("depth_in"): vol.All(vol.Coerce(float), vol.Range(min=0.01, max=5)),
+                vol.Optional("depth_mm"): vol.All(
+                    vol.Coerce(float), vol.Range(min=0.1, max=127)
+                ),
+                vol.Optional("depth"): vol.All(vol.Coerce(float), vol.Range(min=0.01, max=127)),
+                vol.Optional("minutes"): minutes,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    _register(
+        DOMAIN,
+        SERVICE_SET_FLOW_BASELINE,
+        set_flow_baseline,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Optional("zone"): vol.Any(str, [str]),
+                vol.Optional("entity_id"): vol.Any(str, [str]),
+                vol.Optional("gpm"): vol.All(vol.Coerce(float), vol.Range(min=0.01, max=200)),
             }
         ),
     )
@@ -613,6 +728,21 @@ def async_setup_services(hass: HomeAssistant) -> None:
         supports_response=SupportsResponse.OPTIONAL,
     )
     _LOGGER.debug("Registered Sprinklecast services")
+
+
+def _catch_depth_in(hass: HomeAssistant, data: dict[str, Any]) -> float:
+    """One cup depth, in inches. Exactly one of the depth fields is set."""
+    kinds = [
+        name for name in ("depth_in", "depth_mm", "depth") if data.get(name) is not None
+    ]
+    if len(kinds) != 1:
+        raise ServiceValidationError("Provide one depth: depth_in, depth_mm, or depth.")
+    if "depth_in" in kinds:
+        return float(data["depth_in"])
+    if "depth_mm" in kinds:
+        return float(data["depth_mm"]) / 25.4
+    unit = hass.config.units.accumulated_precipitation_unit
+    return depth_to_inches(float(data["depth"]), str(unit) if unit else "in")
 
 
 def _cup_readings(value: Any) -> list[float]:
