@@ -185,8 +185,6 @@ async def test_config_flow_rejects_a_missing_or_unknown_unit(hass: HomeAssistant
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"next_step_id": "live"}
     )
-    hass.states.async_set("weather.home", "sunny", _weather(precipitation_unit=None))
-    # async_set drops None attributes, so replace the state without that unit.
     hass.states.async_set(
         "weather.home",
         "sunny",
@@ -198,7 +196,13 @@ async def test_config_flow_rejects_a_missing_or_unknown_unit(hass: HomeAssistant
     )
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        {"name": "Garden", CONF_WEATHER_ENTITY: "weather.home", "morning": {}, "location": {}},
+        {
+            "name": "Garden",
+            CONF_WEATHER_ENTITY: "weather.home",
+            "sensors": {},
+            "morning": {},
+            "location": {},
+        },
     )
     assert result["errors"]["base"] == "bad_unit"
     assert "precipitation" in result["description_placeholders"]["detail"].casefold()
