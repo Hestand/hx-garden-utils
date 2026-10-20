@@ -33,6 +33,7 @@ from homeassistant.data_entry_flow import section
 from homeassistant.helpers import selector
 from homeassistant.util import dt as dt_util
 
+from .unit_guard import sensor_problem, weather_problems
 from .const import (
     CONF_ALLOWED_WEEKDAYS,
     CONF_AREA_SQFT,
@@ -130,6 +131,7 @@ from .const import (
     DEFAULT_FREEZE_SKIP_F,
     DEFAULT_MAX_RUN_MIN,
     DEFAULT_FLOW_KIND,
+    FLOW_KIND_RATE,
     DEFAULT_FLOW_LEAK_RATIO,
     DEFAULT_FLOW_LOW_RATIO,
     DEFAULT_MOISTURE_KIND,
@@ -334,6 +336,44 @@ def _number(
             unit_of_measurement=unit,
         )
     return selector.NumberSelector(config)
+
+
+def _unit_detail(
+    hass: HomeAssistant,
+    flat: dict[str, Any],
+    *,
+    weather: str | None = None,
+) -> str | None:
+    """Sentences for selected entities whose units are missing or unknown."""
+    sentences: list[str] = []
+    if weather and not _blank(weather):
+        sentences.extend(weather_problems(hass, str(weather)))
+    fields = (
+        (CONF_TEMPERATURE_SENSOR, "temperature", "Temperature sensor"),
+        (CONF_HUMIDITY_SENSOR, "humidity", "Humidity sensor"),
+        (CONF_WIND_SENSOR, "wind", "Wind sensor"),
+        (CONF_PRESSURE_SENSOR, "pressure", "Pressure sensor"),
+        (CONF_SOLAR_SENSOR, "solar", "Solar radiation sensor"),
+        (CONF_UV_SENSOR, "uv", "UV index sensor"),
+        (CONF_RAIN_AMOUNT_SENSOR, "depth", "Rain amount sensor"),
+        (CONF_MOISTURE_SENSOR, "moisture", "Soil moisture sensor"),
+    )
+    for key, kind, label in fields:
+        entity_id = flat.get(key)
+        if _blank(entity_id):
+            continue
+        sentence = sensor_problem(hass, str(entity_id), kind, label)
+        if sentence:
+            sentences.append(sentence)
+    flow_entity = flat.get(CONF_FLOW_SENSOR)
+    if not _blank(flow_entity):
+        kind = "rate" if flat.get(CONF_FLOW_KIND) == FLOW_KIND_RATE else "volume"
+        sentence = sensor_problem(hass, str(flow_entity), kind, "Flow sensor")
+        if sentence:
+            sentences.append(sentence)
+    if not sentences:
+        return None
+    return " ".join(sentences)
 
 
 def _blank(value: Any) -> bool:
@@ -870,6 +910,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         """Name, optional weather, and collapsed sensor and schedule sections."""
         found = discover(_entity_hints(self.hass))
         errors: dict[str, str] = {}
+        detail = ""
         if user_input is not None:
             flat = _flatten(user_input, _HUB_SECTIONS)
             if _blank(flat.get(CONF_LATITUDE)) != _blank(flat.get(CONF_LONGITUDE)):
@@ -881,7 +922,13 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
             elif _flow_choice_missing(flat):
                 errors["base"] = "flow_scope"
             else:
-                return self._create(flat)
+                detail = _unit_detail(
+                    self.hass, flat, weather=flat.get(CONF_WEATHER_ENTITY)
+                ) or ""
+                if detail:
+                    errors["base"] = "bad_unit"
+                else:
+                    return self._create(flat)
         suggested: dict[str, Any] = dict(user_input or {})
         if not suggested:
             if found.weather:
@@ -923,6 +970,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
                 suggested,
             ),
             errors=errors,
+            description_placeholders={"detail": detail},
             last_step=False,
         )
 
@@ -1103,6 +1151,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
         """Change the hub name. Weather can be cleared when a temperature sensor exists."""
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
+        detail = ""
         simulating = bool(entry.data.get(CONF_SIMULATION))
         if user_input is not None:
             weather = user_input.get(CONF_WEATHER_ENTITY)
@@ -1110,7 +1159,11 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
                 weather, entry.options.get(CONF_TEMPERATURE_SENSOR)
             ):
                 errors["base"] = "need_weather"
-            else:
+            elif not _blank(weather):
+                detail = _unit_detail(self.hass, {}, weather=weather) or ""
+                if detail:
+                    errors["base"] = "bad_unit"
+            if not errors:
                 data = {
                     key: value
                     for key, value in entry.data.items()
@@ -1135,6 +1188,7 @@ class SmartWaterConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reconfigure",
             data_schema=self.add_suggested_values_to_schema(vol.Schema(schema), suggested),
             errors=errors,
+            description_placeholders={"detail": detail},
         )
 
 
@@ -1148,6 +1202,7 @@ class SmartWaterOptionsFlow(OptionsFlow):
         current = dict(self.config_entry.options)
         simulating = bool(self.config_entry.data.get(CONF_SIMULATION))
         errors: dict[str, str] = {}
+        detail = ""
         if user_input is not None:
             flat = _flatten(user_input, _HUB_SECTIONS)
             if _blank(flat.get(CONF_LATITUDE)) != _blank(flat.get(CONF_LONGITUDE)):
@@ -1160,6 +1215,10 @@ class SmartWaterOptionsFlow(OptionsFlow):
             elif _flow_choice_missing(flat):
                 errors["base"] = "flow_scope"
             else:
+                detail = _unit_detail(self.hass, flat) or ""
+                if detail:
+                    errors["base"] = "bad_unit"
+            if not errors:
                 data = _drop_blanks(flat)
                 data.pop("dry_run", None)
                 data.pop("schedule_preset", None)
@@ -1200,6 +1259,7 @@ class SmartWaterOptionsFlow(OptionsFlow):
                 suggested,
             ),
             errors=errors,
+            description_placeholders={"detail": detail},
             last_step=True,
         )
 
@@ -1261,9 +1321,14 @@ class ZoneSubentryFlow(ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         """Collapsed overrides. An empty section keeps the preset."""
         errors: dict[str, str] = {}
+        detail = ""
         if user_input is not None:
             flat = _flatten(user_input, _ZONE_SECTIONS)
             errors = _rate_errors(str(self._quick[CONF_SPRINKLER_TYPE]), flat)
+            if not errors:
+                detail = _unit_detail(self.hass, flat) or ""
+                if detail:
+                    errors["base"] = "bad_unit"
             if not errors:
                 self._quick.update(flat)
                 return self._finish()
@@ -1290,6 +1355,7 @@ class ZoneSubentryFlow(ConfigSubentryFlow):
             month=dt_util.now().month,
             sun_exposure=str(context.get(CONF_SUN_EXPOSURE, "full_sun")),
         )
+        placeholders["detail"] = detail
         return self.async_show_form(
             step_id="advanced",
             data_schema=self.add_suggested_values_to_schema(

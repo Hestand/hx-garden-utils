@@ -122,6 +122,20 @@ def _sections() -> dict[str, dict[str, Any]]:
     return {"sensors": {}, "morning": {}, "location": {}}
 
 
+def _accept_weather(hass: HomeAssistant, entity_id: str = "weather.home") -> None:
+    """A weather entity whose declared units are in the accepted list."""
+    hass.states.async_set(
+        entity_id,
+        "sunny",
+        {
+            "temperature": 20,
+            "temperature_unit": "°C",
+            "precipitation_unit": "mm",
+            "wind_speed_unit": "m/s",
+        },
+    )
+
+
 async def _finish_with_no_zones(
     hass: HomeAssistant, result: dict[str, Any]
 ) -> dict[str, Any]:
@@ -192,6 +206,7 @@ async def test_user_flow_forms_serialize(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.FORM
     assert result["errors"]["base"] == "need_weather"
 
+    _accept_weather(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
@@ -245,6 +260,9 @@ async def test_user_flow_http_post_is_ok(hass: HomeAssistant, hass_client) -> No
 
 async def test_temperature_sensor_can_replace_weather(hass: HomeAssistant) -> None:
     """A hub with only a temperature sensor is enough."""
+    hass.states.async_set(
+        "sensor.tempest_air_temperature", "30", {"unit_of_measurement": "°C"}
+    )
     result = await _open_live(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -628,6 +646,7 @@ async def test_hub_flow_adds_zones_and_keeps_later_picks(
     hass: HomeAssistant,
 ) -> None:
     """Later zones start from the previous zone, and the submitted picks are saved."""
+    _accept_weather(hass)
     result = await _open_live(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -695,6 +714,7 @@ async def test_hub_flow_adds_zones_and_keeps_later_picks(
 
 async def test_duplicate_zone_name_is_rejected(hass: HomeAssistant) -> None:
     """A second zone cannot reuse the first zone's name."""
+    _accept_weather(hass)
     result = await _open_live(hass)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
@@ -780,6 +800,8 @@ async def test_flow_meter_is_on_the_hub_and_requires_a_choice(
     hass: HomeAssistant,
 ) -> None:
     """The hub form asks for one meter and which kind of meter it is."""
+    _accept_weather(hass)
+    hass.states.async_set("sensor.main_flow", "100", {"unit_of_measurement": "gal"})
     result = await _open_live(hass)
     fields = _serialize(result)
     assert _field(fields, "flow_meter")["expanded"] is True

@@ -95,3 +95,5 @@ def test_entity_selectors_name_their_units() -> None:
     walk(data["options"])
     walk(data["config_subentries"])
     assert seen == keys
+    blob = json.dumps(data)
+    assert "is read as" not in blob

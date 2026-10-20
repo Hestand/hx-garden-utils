@@ -50,5 +50,12 @@ def test_unit_conversions() -> None:
     daily, instant = solar_parts(800, "W/m²")
     assert daily is None
     assert instant == pytest.approx(800)
-    # A UV index is not a radiation total.
+    # A UV index is not a radiation total, and a missing unit is not assumed.
     assert solar_parts(8, None) == (None, None)
+    assert temperature_c(20, None) is None
+    assert temperature_c(20, "K") is None
+    assert depth_mm(2, None) is None
+    assert depth_mm(1, "cm") is None
+    assert speed_m_s(1, None) is None
+    assert pressure_kpa(1013, None) is None
+    assert pressure_kpa(1013, "hPa") == pytest.approx(101.3)

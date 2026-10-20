@@ -12,11 +12,30 @@ from sprinklecast.moisture import apply_moisture, deficit_from_reading, reading_
 
 def test_relative_moisture_and_a_fraction() -> None:
     assert deficit_from_reading(
-        reading=50, kind="relative", taw_mm=40, zr_m=0.15, field_capacity_vwc=None
+        reading=50,
+        kind="relative",
+        taw_mm=40,
+        zr_m=0.15,
+        field_capacity_vwc=None,
+        unit="%",
     ) == pytest.approx(20)
     assert deficit_from_reading(
-        reading=0.25, kind="relative", taw_mm=40, zr_m=0.15, field_capacity_vwc=None
+        reading=0.25,
+        kind="relative",
+        taw_mm=40,
+        zr_m=0.15,
+        field_capacity_vwc=None,
+        unit="fraction",
     ) == pytest.approx(30)
+    with pytest.raises(ValueError):
+        deficit_from_reading(
+            reading=0.25,
+            kind="relative",
+            taw_mm=40,
+            zr_m=0.15,
+            field_capacity_vwc=None,
+            unit=None,
+        )
 
 
 def test_volumetric_moisture_uses_field_capacity() -> None:
@@ -27,6 +46,7 @@ def test_volumetric_moisture_uses_field_capacity() -> None:
         taw_mm=40,
         zr_m=0.1524,
         field_capacity_vwc=0.30,
+        unit="fraction",
     )
     assert deficit == pytest.approx(15.24)
     percent = deficit_from_reading(
@@ -35,15 +55,18 @@ def test_volumetric_moisture_uses_field_capacity() -> None:
         taw_mm=40,
         zr_m=0.1524,
         field_capacity_vwc=30,
+        unit="%",
     )
     assert percent == pytest.approx(15.24)
 
 
 def test_reading_percent_keeps_a_percent_and_scales_a_fraction() -> None:
-    assert reading_percent(0.42, None) == pytest.approx(42)
+    assert reading_percent(0.42, None) is None
+    assert reading_percent(0.42, "fraction") == pytest.approx(42)
     assert reading_percent(35, "%") == pytest.approx(35)
-    assert reading_percent(35, None) == pytest.approx(35)
+    assert reading_percent(35, None) is None
     assert reading_percent(35, "percent") == pytest.approx(35)
+    assert reading_percent(0.4, "%") == pytest.approx(0.4)
 
 
 def test_correct_blends_and_override_replaces() -> None:

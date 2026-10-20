@@ -24,7 +24,7 @@
           "send_plan_notifications": "Send plan notifications"
         },
         "data_description": {
-          "weather_entity": "Optional when a temperature sensor is set. Used for the forecast and for any sensor you leave empty.\nCommon names: Weather, Forecast, Home, OpenWeatherMap, Met.no, AccuWeather, National Weather Service, Tempest, WeatherFlow.\nUnits: temperature °C, °F, F, degF, ºF (°F, F, degF, and ºF are converted automatically; any other unit, or none, is read as °C). Precipitation mm, in, inch, inches (in, inch, and inches are converted automatically; any other unit, or none, is read as mm). Wind m/s, mph, mi/h, km/h, kph, kmh, kn, kt, knots (mph, mi/h, km/h, kph, kmh, kn, kt, and knots are converted automatically; a missing unit, or any other spelling, is read as m/s). Humidity on the weather entity is % (required). The humidity unit is not read, and a 0–1 fraction is not converted. Pressure is not read from the weather entity.",
+          "weather_entity": "Optional when a temperature sensor is set. Used for the forecast and for any sensor you leave empty.\nCommon names: Weather, Forecast, Home, OpenWeatherMap, Met.no, AccuWeather, National Weather Service, Tempest, WeatherFlow.\nUnits: temperature °C, C, degC, ºC, °F, F, degF, ºF (°F, F, degF, and ºF are converted automatically). Precipitation mm, in, inch, inches (in, inch, and inches are converted automatically). Wind m/s, mph, mi/h, km/h, kph, kmh, kn, kt, knots (mph, mi/h, km/h, kph, kmh, kn, kt, and knots are converted automatically). If the temperature, precipitation, or wind unit is missing or not in that list, that part shows a warning and is ignored. Humidity on the weather entity is percent, because a Home Assistant weather entity reports humidity in % and has no humidity unit. Pressure is not read from the weather entity.",
           "name": "The name shown for this hub or zone.",
           "send_plan_notifications": "On when a notify service is set. Sends the evening plan even when automatic watering is off, so you can see what it would do. Freeze, flow, and budget notices are separate."
         },
@@ -44,14 +44,14 @@
               "wind_height_m": "Wind sensor height"
             },
             "data_description": {
-              "temperature_sensor": "Required only if you leave the weather entity empty.\nCommon names: Temperature, Outdoor temperature, Air temperature, Ambient temperature (Tempest, Ecowitt, Ambient Weather).\nDevice class: temperature.\nUnits: °C, °F, F, degF, ºF (°F, F, degF, and ºF are converted automatically; any other unit, or none, is read as °C).",
-              "pressure_sensor": "Station pressure, not sea-level pressure.\nCommon names: Station pressure, Pressure, Barometric pressure, Atmospheric pressure (Tempest Station pressure, Ecowitt, Ambient Weather). Prefer station pressure when both station and sea-level exist.\nDevice class: pressure or atmospheric_pressure.\nUnits: hPa, mbar, mb, kPa, inHg, inhg, psi, mmHg, Pa (converted automatically). A missing unit is read as hPa. Any other spelling is also read as hPa.",
-              "uv_sensor": "Used only when the solar sensor is empty. About 100 watts per square meter per UV index.\nCommon names: UV index, UV, Ultraviolet index (Tempest UV index).\nDevice class: uv_index.\nUnits: UV index (required, a number). W/m² and lx are not converted. The unit is not read.",
-              "rain_amount_sensor": "Preferred over the weather forecast. Daily total matches Tempest rain today.\nCommon names: Rain today, Precipitation, Daily rain, Rain accumulation, Rain rate (Tempest Rain today, Ecowitt rainfall).\nDevice class: precipitation.\nUnits: mm, in, inch, inches (in, inch, and inches are converted automatically; any other unit, or none, is read as mm). When the rain kind is rate, that depth is per hour. in/h is not a depth unit, so a rate in in/h is read as mm/h.",
+              "temperature_sensor": "Required only if you leave the weather entity empty.\nCommon names: Temperature, Outdoor temperature, Air temperature, Ambient temperature (Tempest, Ecowitt, Ambient Weather).\nDevice class: temperature.\nUnits: °C, C, degC, ºC, °F, F, degF, ºF (°F, F, degF, and ºF are converted automatically). Any other unit, or a missing unit, shows a warning and this sensor is ignored.",
+              "pressure_sensor": "Station pressure, not sea-level pressure.\nCommon names: Station pressure, Pressure, Barometric pressure, Atmospheric pressure (Tempest Station pressure, Ecowitt, Ambient Weather). Prefer station pressure when both station and sea-level exist.\nDevice class: pressure or atmospheric_pressure.\nUnits: hPa, mbar, mb, kPa, inHg, psi, mmHg, Pa (converted automatically). Any other unit, or a missing unit, shows a warning and this sensor is ignored.",
+              "uv_sensor": "Used only when the solar sensor is empty. About 100 watts per square meter per UV index.\nCommon names: UV index, UV, Ultraviolet index (Tempest UV index).\nDevice class: uv_index.\nUnits: UV index, UV, UVI, index (required). W/m² and lx are not accepted. A missing unit or any other unit shows a warning and this sensor is ignored.",
+              "rain_amount_sensor": "Preferred over the weather forecast. Daily total matches Tempest rain today.\nCommon names: Rain today, Precipitation, Daily rain, Rain accumulation, Rain rate (Tempest Rain today, Ecowitt rainfall).\nDevice class: precipitation.\nUnits: mm, in, inch, inches (in, inch, and inches are converted automatically). Any other unit, or a missing unit, shows a warning and this sensor is ignored. When the rain kind is rate, that depth is per hour. in/h is not accepted.",
               "rain_kind": "Daily total replaces the day's rain. Cumulative adds increases and ignores the first sample. Rate is mm/h, integrated between updates.",
-              "humidity_sensor": "Optional. A local humidity sensor is used before the weather entity.\nCommon names: Humidity, Relative humidity, Outdoor humidity, RH (Tempest, Ecowitt, Ambient Weather).\nDevice class: humidity.\nUnits: % (required). The unit is not read, and a 0–1 fraction is not converted.",
-              "wind_sensor": "Optional. Wind speed for the water-loss estimate and the wind skip.\nCommon names: Wind speed, Wind, Sustained wind, Wind average (Tempest Wind speed or Wind average, Ecowitt).\nDevice class: wind_speed.\nUnits: m/s, mph, mi/h, km/h, kph, kmh, kn, kt, knots (mph, mi/h, km/h, kph, kmh, kn, kt, and knots are converted automatically; a missing unit, or any other spelling, is read as m/s).",
-              "solar_radiation_sensor": "Optional. A daily total or a live watts-per-square-meter reading. Used before the UV index.\nCommon names: Solar radiation, Irradiance, Solar irradiance, Global horizontal irradiance (GHI), Shortwave radiation (Tempest Solar radiation). Illuminance, lux, and brightness are not the same and are ignored.\nDevice class: irradiance or solar_irradiance.\nUnits: W/m², W/m2, Wm2, W/m^2 (live irradiance), or any unit containing MJ (daily total). Other units, including lx and a missing unit, are ignored.",
+              "humidity_sensor": "Optional. A local humidity sensor is used before the weather entity.\nCommon names: Humidity, Relative humidity, Outdoor humidity, RH (Tempest, Ecowitt, Ambient Weather).\nDevice class: humidity.\nUnits: % (required). A 0–1 fraction is not accepted. A missing unit or any other unit shows a warning and this sensor is ignored.",
+              "wind_sensor": "Optional. Wind speed for the water-loss estimate and the wind skip.\nCommon names: Wind speed, Wind, Sustained wind, Wind average (Tempest Wind speed or Wind average, Ecowitt).\nDevice class: wind_speed.\nUnits: m/s, mph, mi/h, km/h, kph, kmh, kn, kt, knots (mph, mi/h, km/h, kph, kmh, kn, kt, and knots are converted automatically). Any other unit, or a missing unit, shows a warning and this sensor is ignored.",
+              "solar_radiation_sensor": "Optional. A daily total or a live watts-per-square-meter reading. Used before the UV index.\nCommon names: Solar radiation, Irradiance, Solar irradiance, Global horizontal irradiance (GHI), Shortwave radiation (Tempest Solar radiation). Illuminance, lux, and brightness are not the same and are ignored.\nDevice class: irradiance or solar_irradiance.\nUnits: W/m², W/m2, Wm2, W/m^2 (live irradiance), or any unit containing MJ (daily total). Any other unit, including lx, or a missing unit, shows a warning and this sensor is ignored.",
               "wind_height_m": "How high the wind sensor is mounted. The estimate adjusts that speed to 2 meters."
             }
           },
@@ -66,7 +66,7 @@
               "flow_idle_action": "When flow is seen with every zone off"
             },
             "data_description": {
-              "flow_sensor": "Optional. One sensor for every zone. Volume total or a flow rate. Water used while a zone is running is counted for that zone.\nCommon names: Flow rate, Water flow, Flow, Water total, Water usage, Irrigation flow (Flume, Moen Flo, Phyn, Rachio, Hydrawise, Ecowitt).\nDevice class: water, volume, or volume_flow_rate.\nUnits: gal, L, liter, liters, litre, litres, m³, m3, m^3, ft³, ft3, ft^3, cuft for a volume total (non-gallon units are converted automatically; a missing unit is read as gal). gal/min, L/min, lpm, m³/h, m3/h, m^3/h, gal/h, gph for a flow rate (those non-gal/min units are converted automatically; a missing unit is read as gal/min). Set Flow sensor kind to match.",
+              "flow_sensor": "Optional. One sensor for every zone. Volume total or a flow rate. Water used while a zone is running is counted for that zone.\nCommon names: Flow rate, Water flow, Flow, Water total, Water usage, Irrigation flow (Flume, Moen Flo, Phyn, Rachio, Hydrawise, Ecowitt).\nDevice class: water, volume, or volume_flow_rate.\nUnits: gal, gallon, gallons, L, liter, liters, litre, litres, m³, m3, m^3, ft³, ft3, ft^3, cuft for a volume total (non-gallon units are converted automatically). gal/min, gpm, L/min, lpm, m³/h, m3/h, m^3/h, gal/h, gph for a flow rate (non-gal/min units are converted automatically). A missing unit or any other unit shows a warning and this sensor is ignored. Set Flow sensor kind to match.",
               "flow_kind": "Volume total counts up. Flow rate is gallons or liters per minute.",
               "flow_scope": "Required when a flow sensor is set. Whole-home does not alert while the house is using water. Irrigation-only alerts when water moves and no zone is running.",
               "flow_idle_gpm": "Shown only for an irrigation-only meter. Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on.",
@@ -285,7 +285,7 @@
           "weather_entity": "Weather entity"
         },
         "data_description": {
-          "weather_entity": "Leave empty to remove it. A temperature sensor must remain.\nCommon names: Weather, Forecast, Home, OpenWeatherMap, Met.no, AccuWeather, National Weather Service, Tempest, WeatherFlow.\nUnits: temperature °C, °F, F, degF, ºF (°F, F, degF, and ºF are converted automatically; any other unit, or none, is read as °C). Precipitation mm, in, inch, inches (in, inch, and inches are converted automatically; any other unit, or none, is read as mm). Wind m/s, mph, mi/h, km/h, kph, kmh, kn, kt, knots (mph, mi/h, km/h, kph, kmh, kn, kt, and knots are converted automatically; a missing unit, or any other spelling, is read as m/s). Humidity on the weather entity is % (required). The humidity unit is not read, and a 0–1 fraction is not converted. Pressure is not read from the weather entity.",
+          "weather_entity": "Leave empty to remove it. A temperature sensor must remain.\nCommon names: Weather, Forecast, Home, OpenWeatherMap, Met.no, AccuWeather, National Weather Service, Tempest, WeatherFlow.\nUnits: temperature °C, C, degC, ºC, °F, F, degF, ºF (°F, F, degF, and ºF are converted automatically). Precipitation mm, in, inch, inches (in, inch, and inches are converted automatically). Wind m/s, mph, mi/h, km/h, kph, kmh, kn, kt, knots (mph, mi/h, km/h, kph, kmh, kn, kt, and knots are converted automatically). If the temperature, precipitation, or wind unit is missing or not in that list, that part shows a warning and is ignored. Humidity on the weather entity is percent, because a Home Assistant weather entity reports humidity in % and has no humidity unit. Pressure is not read from the weather entity.",
           "name": "The name shown for this hub or zone."
         }
       },
@@ -331,6 +331,7 @@
       "latitude_pair": "Set both latitude and longitude, or leave both empty.",
       "need_weather": "Pick a weather entity or a temperature sensor.",
       "flow_scope": "A flow meter needs a choice: whole-home or irrigation-only.",
+      "bad_unit": "{detail}",
       "name_exists": "A zone with this name already exists."
     },
     "abort": {
@@ -371,15 +372,15 @@
               "wind_height_m": "Wind sensor height"
             },
             "data_description": {
-              "uv_sensor": "Used only when the solar sensor is empty. About 100 watts per square meter per UV index.\nCommon names: UV index, UV, Ultraviolet index (Tempest UV index).\nDevice class: uv_index.\nUnits: UV index (required, a number). W/m² and lx are not converted. The unit is not read.",
+              "uv_sensor": "Used only when the solar sensor is empty. About 100 watts per square meter per UV index.\nCommon names: UV index, UV, Ultraviolet index (Tempest UV index).\nDevice class: uv_index.\nUnits: UV index, UV, UVI, index (required). W/m² and lx are not accepted. A missing unit or any other unit shows a warning and this sensor is ignored.",
               "rain_kind": "Daily total replaces the day's rain. Cumulative adds increases and ignores the first sample. Rate is mm/h, integrated between updates.",
-              "humidity_sensor": "Optional. A local humidity sensor is used before the weather entity.\nCommon names: Humidity, Relative humidity, Outdoor humidity, RH (Tempest, Ecowitt, Ambient Weather).\nDevice class: humidity.\nUnits: % (required). The unit is not read, and a 0–1 fraction is not converted.",
-              "wind_sensor": "Optional. Wind speed for the water-loss estimate and the wind skip.\nCommon names: Wind speed, Wind, Sustained wind, Wind average (Tempest Wind speed or Wind average, Ecowitt).\nDevice class: wind_speed.\nUnits: m/s, mph, mi/h, km/h, kph, kmh, kn, kt, knots (mph, mi/h, km/h, kph, kmh, kn, kt, and knots are converted automatically; a missing unit, or any other spelling, is read as m/s).",
-              "solar_radiation_sensor": "Optional. A daily total or a live watts-per-square-meter reading. Used before the UV index.\nCommon names: Solar radiation, Irradiance, Solar irradiance, Global horizontal irradiance (GHI), Shortwave radiation (Tempest Solar radiation). Illuminance, lux, and brightness are not the same and are ignored.\nDevice class: irradiance or solar_irradiance.\nUnits: W/m², W/m2, Wm2, W/m^2 (live irradiance), or any unit containing MJ (daily total). Other units, including lx and a missing unit, are ignored.",
+              "humidity_sensor": "Optional. A local humidity sensor is used before the weather entity.\nCommon names: Humidity, Relative humidity, Outdoor humidity, RH (Tempest, Ecowitt, Ambient Weather).\nDevice class: humidity.\nUnits: % (required). A 0–1 fraction is not accepted. A missing unit or any other unit shows a warning and this sensor is ignored.",
+              "wind_sensor": "Optional. Wind speed for the water-loss estimate and the wind skip.\nCommon names: Wind speed, Wind, Sustained wind, Wind average (Tempest Wind speed or Wind average, Ecowitt).\nDevice class: wind_speed.\nUnits: m/s, mph, mi/h, km/h, kph, kmh, kn, kt, knots (mph, mi/h, km/h, kph, kmh, kn, kt, and knots are converted automatically). Any other unit, or a missing unit, shows a warning and this sensor is ignored.",
+              "solar_radiation_sensor": "Optional. A daily total or a live watts-per-square-meter reading. Used before the UV index.\nCommon names: Solar radiation, Irradiance, Solar irradiance, Global horizontal irradiance (GHI), Shortwave radiation (Tempest Solar radiation). Illuminance, lux, and brightness are not the same and are ignored.\nDevice class: irradiance or solar_irradiance.\nUnits: W/m², W/m2, Wm2, W/m^2 (live irradiance), or any unit containing MJ (daily total). Any other unit, including lx, or a missing unit, shows a warning and this sensor is ignored.",
               "wind_height_m": "How high the wind sensor is mounted. The estimate adjusts that speed to 2 meters.",
-              "temperature_sensor": "Used before the weather entity. Required only if you leave the weather entity empty.\nCommon names: Temperature, Outdoor temperature, Air temperature, Ambient temperature (Tempest, Ecowitt, Ambient Weather).\nDevice class: temperature.\nUnits: °C, °F, F, degF, ºF (°F, F, degF, and ºF are converted automatically; any other unit, or none, is read as °C).",
-              "pressure_sensor": "Station pressure, not sea-level pressure.\nCommon names: Station pressure, Pressure, Barometric pressure, Atmospheric pressure (Tempest Station pressure, Ecowitt, Ambient Weather). Prefer station pressure when both station and sea-level exist.\nDevice class: pressure or atmospheric_pressure.\nUnits: hPa, mbar, mb, kPa, inHg, inhg, psi, mmHg, Pa (converted automatically). A missing unit is read as hPa. Any other spelling is also read as hPa.",
-              "rain_amount_sensor": "Preferred over the weather forecast. A daily total matches a rain-today sensor.\nCommon names: Rain today, Precipitation, Daily rain, Rain accumulation, Rain rate (Tempest Rain today, Ecowitt rainfall).\nDevice class: precipitation.\nUnits: mm, in, inch, inches (in, inch, and inches are converted automatically; any other unit, or none, is read as mm). When the rain kind is rate, that depth is per hour. in/h is not a depth unit, so a rate in in/h is read as mm/h."
+              "temperature_sensor": "Used before the weather entity. Required only if you leave the weather entity empty.\nCommon names: Temperature, Outdoor temperature, Air temperature, Ambient temperature (Tempest, Ecowitt, Ambient Weather).\nDevice class: temperature.\nUnits: °C, C, degC, ºC, °F, F, degF, ºF (°F, F, degF, and ºF are converted automatically). Any other unit, or a missing unit, shows a warning and this sensor is ignored.",
+              "pressure_sensor": "Station pressure, not sea-level pressure.\nCommon names: Station pressure, Pressure, Barometric pressure, Atmospheric pressure (Tempest Station pressure, Ecowitt, Ambient Weather). Prefer station pressure when both station and sea-level exist.\nDevice class: pressure or atmospheric_pressure.\nUnits: hPa, mbar, mb, kPa, inHg, psi, mmHg, Pa (converted automatically). Any other unit, or a missing unit, shows a warning and this sensor is ignored.",
+              "rain_amount_sensor": "Preferred over the weather forecast. A daily total matches a rain-today sensor.\nCommon names: Rain today, Precipitation, Daily rain, Rain accumulation, Rain rate (Tempest Rain today, Ecowitt rainfall).\nDevice class: precipitation.\nUnits: mm, in, inch, inches (in, inch, and inches are converted automatically). Any other unit, or a missing unit, shows a warning and this sensor is ignored. When the rain kind is rate, that depth is per hour. in/h is not accepted."
             }
           },
           "flow_meter": {
@@ -393,7 +394,7 @@
               "flow_idle_action": "When flow is seen with every zone off"
             },
             "data_description": {
-              "flow_sensor": "Optional. One sensor for every zone. Volume total or a flow rate. Water used while a zone is running is counted for that zone.\nCommon names: Flow rate, Water flow, Flow, Water total, Water usage, Irrigation flow (Flume, Moen Flo, Phyn, Rachio, Hydrawise, Ecowitt).\nDevice class: water, volume, or volume_flow_rate.\nUnits: gal, L, liter, liters, litre, litres, m³, m3, m^3, ft³, ft3, ft^3, cuft for a volume total (non-gallon units are converted automatically; a missing unit is read as gal). gal/min, L/min, lpm, m³/h, m3/h, m^3/h, gal/h, gph for a flow rate (those non-gal/min units are converted automatically; a missing unit is read as gal/min). Set Flow sensor kind to match.",
+              "flow_sensor": "Optional. One sensor for every zone. Volume total or a flow rate. Water used while a zone is running is counted for that zone.\nCommon names: Flow rate, Water flow, Flow, Water total, Water usage, Irrigation flow (Flume, Moen Flo, Phyn, Rachio, Hydrawise, Ecowitt).\nDevice class: water, volume, or volume_flow_rate.\nUnits: gal, gallon, gallons, L, liter, liters, litre, litres, m³, m3, m^3, ft³, ft3, ft^3, cuft for a volume total (non-gallon units are converted automatically). gal/min, gpm, L/min, lpm, m³/h, m3/h, m^3/h, gal/h, gph for a flow rate (non-gal/min units are converted automatically). A missing unit or any other unit shows a warning and this sensor is ignored. Set Flow sensor kind to match.",
               "flow_kind": "Volume total counts up. Flow rate is gallons or liters per minute.",
               "flow_scope": "Required when a flow sensor is set. Whole-home does not alert while the house is using water. Irrigation-only alerts when water moves and no zone is running.",
               "flow_idle_gpm": "Shown only for an irrigation-only meter. Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on.",
@@ -494,7 +495,8 @@
           }
         },
         "error": {
-          "flow_scope": "A flow meter needs a choice: whole-home or irrigation-only."
+          "flow_scope": "A flow meter needs a choice: whole-home or irrigation-only.",
+          "bad_unit": "{detail}"
         }
       }
     }
@@ -617,7 +619,7 @@
                 "moisture_kind": "Percent of the water the soil can hold (0–100, or a 0–1 fraction). A volumetric reading also needs the full-soil number.",
                 "flow_low_ratio": "Delivered ÷ expected below this, after the run window, is low flow. Default 0.5. Uses the hub flow meter.",
                 "flow_leak_ratio": "Delivered ÷ expected above this is a leak. Default 1.5. Unscheduled delivery of at least 1 gallon is also a leak.",
-                "moisture_sensor": "Optional sensor that reports how full the soil is.\nCommon names: Soil moisture, Moisture, Soil humidity, VWC, Volumetric water content (Ecowitt, Vegetronix).\nDevice class: moisture.\nUnits: %, percent, pct, or a 0–1 fraction. %, percent, and pct are already a percent. A reading of 1.5 or less whose unit is not one of those is multiplied by 100 for the soil moisture level. For the soil bucket, a relative reading from 0 through 1 is a fraction and any other number is a percent from 0 to 100 (that step does not read the unit). Volumetric water content above 1.5 is divided by 100. A volumetric reading of 1.5 or below is a fraction of volume. The full-soil reading uses that same split.",
+                "moisture_sensor": "Optional sensor that reports how full the soil is.\nCommon names: Soil moisture, Moisture, Soil humidity, VWC, Volumetric water content (Ecowitt, Vegetronix).\nDevice class: moisture.\nUnits: %, percent, pct, or a fraction unit (fraction, ratio, 0-1, m³/m³, m3/m3, m^3/m^3, cm³/cm³, cm3/cm3, v/v). A 0–1 number is accepted only when the unit is a fraction unit. The full-soil reading uses that same unit. Any other unit, or a missing unit, shows a warning and this sensor is ignored.",
                 "moisture_weight": "How strongly a once-a-day correction follows the sensor. 1 follows it fully.",
                 "field_capacity_vwc": "The volumetric reading when this soil is full. Used only for a volumetric sensor.",
                 "rain_sensor": "Optional on/off sensor. On means it is raining and watering waits.\nCommon names: Raining, Rain, Rain sensor, Wet, Precipitation (Tempest, Ecowitt, Hydrawise, Rachio).\nDevice class: moisture.\nUnits: none. State on means it is raining. Off, unknown, and unavailable do not skip."
@@ -628,7 +630,8 @@
       },
       "error": {
         "name_exists": "A zone with this name already exists.",
-        "precipitation_rate": "Enter a precipitation rate, or both flow and area. Bubblers need one of those. Other sprinklers can leave both blank."
+        "precipitation_rate": "Enter a precipitation rate, or both flow and area. Bubblers need one of those. Other sprinklers can leave both blank.",
+        "bad_unit": "{detail}"
       },
       "abort": {
         "reconfigure_successful": "Zone updated."
@@ -934,6 +937,10 @@
     }
   },
   "issues": {
+    "unknown_unit": {
+      "title": "{field} unit is not accepted",
+      "description": "{entity} reports {unit}. Accepted units: {accepted}. Sprinklecast is ignoring this reading until the unit is one of those."
+    },
     "flow_alert": {
       "title": "Flow alert for {name}",
       "description": "{detail} Reset flow learning when the zone should run again. The baseline stays unless you clear it."

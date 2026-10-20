@@ -177,7 +177,7 @@ from .flow_learn import (
     trend_detail,
     trend_status,
 )
-from .learn import relative_full, should_learn, update_awc_factor
+from .learn import should_learn, update_awc_factor
 from .moisture import apply_moisture, deficit_from_reading, reading_percent
 from .observe import (
     note_rain,
@@ -212,8 +212,10 @@ from .usage import (
     period_gallons,
     saved_gallons,
 )
+from .unit_guard import audit_entry
 from .units import (
     depth_mm,
+    humidity_percent,
     inches_to_mm,
     pressure_kpa,
     rate_gpm,
@@ -222,6 +224,7 @@ from .units import (
     speed_mph,
     temperature_c,
     temperature_f,
+    uv_index_value,
     volume_gallons,
 )
 
@@ -407,6 +410,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         self._forecast_expected_mm = 0.0
         self._forecast_probability: float | None = None
         self._forecast_has_probability = False
+        self._open_unit_issues: set[str] = set()
 
     @callback
     def async_track_plan_time(self) -> None:
@@ -1038,6 +1042,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         longitude_f = None if longitude is None else float(longitude)
         error: str | None = None
 
+        self._sync_unit_issues()
         self._accumulate_day(now, today)
         self._note_temp_history(now, today)
         observation = self._overlay_observed(await self._async_observation(now))
@@ -1208,31 +1213,86 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             jobs,
         )
 
+    def _sync_unit_issues(self) -> None:
+        """Open one repair per field with a bad unit, and clear it when fixed."""
+        from homeassistant.helpers import issue_registry as ir
+
+        bad, leave = audit_entry(self.hass, self.config_entry)
+        prefix = f"unit_{self.config_entry.entry_id}_"
+        registry = ir.async_get(self.hass)
+        current = {
+            issue_id
+            for (domain, issue_id) in registry.issues
+            if domain == DOMAIN and issue_id.startswith(prefix)
+        }
+        wanted = {prefix + key for key in bad}
+        for issue_id in current - wanted:
+            key = issue_id[len(prefix) :]
+            if key in leave:
+                continue
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+            self._open_unit_issues.discard(issue_id)
+        for key, problem in bad.items():
+            issue_id = prefix + key
+            if issue_id not in self._open_unit_issues:
+                _LOGGER.warning(
+                    "Sprinklecast ignored %s (%s): unit %s is not accepted. Accepted: %s",
+                    problem.field,
+                    problem.entity_id,
+                    problem.reported,
+                    problem.accepted,
+                )
+                self._open_unit_issues.add(issue_id)
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="unknown_unit",
+                translation_placeholders={
+                    "field": problem.field,
+                    "entity": problem.entity_id,
+                    "unit": problem.reported,
+                    "accepted": problem.accepted,
+                },
+            )
+
     def _accumulate_day(self, now: datetime, today: str) -> None:
         """Fold entity samples into today's temperature, rain, solar, and flow."""
         options = self._options()
         track = self.store.weather_for(today)
         temp, temp_unit = _state_float(self.hass, options.get(CONF_TEMPERATURE_SENSOR))
         if temp is not None:
-            note_temperature(track, temperature_c(temp, temp_unit))
+            converted = temperature_c(temp, temp_unit)
+            if converted is not None:
+                note_temperature(track, converted)
         rain, rain_unit = _state_float(self.hass, options.get(CONF_RAIN_AMOUNT_SENSOR))
         if rain is not None:
-            note_rain(
-                track,
-                kind=str(options.get(CONF_RAIN_KIND, DEFAULT_RAIN_KIND)),
-                value_mm=depth_mm(rain, rain_unit),
-                at=now,
-            )
-            track["precip_source"] = "sensor"
+            rain_mm = depth_mm(rain, rain_unit)
+            if rain_mm is not None:
+                note_rain(
+                    track,
+                    kind=str(options.get(CONF_RAIN_KIND, DEFAULT_RAIN_KIND)),
+                    value_mm=rain_mm,
+                    at=now,
+                )
+                track["precip_source"] = "sensor"
         solar, solar_unit = _state_float(self.hass, options.get(CONF_SOLAR_SENSOR))
+        solar_used = False
         if solar is not None:
-            _rs, watts = solar_parts(solar, solar_unit)
+            daily_mj, watts = solar_parts(solar, solar_unit)
             if watts is not None:
                 note_solar_w(track, watts, now)
-            elif _rs is not None:
-                track["solar_mj"] = max(float(track["solar_mj"]), _rs)
-        elif (uv := _state_float(self.hass, options.get(CONF_UV_SENSOR))[0]) is not None:
-            note_solar_w(track, uv_index_to_w_m2(uv), now)
+                solar_used = True
+            elif daily_mj is not None:
+                track["solar_mj"] = max(float(track["solar_mj"]), daily_mj)
+                solar_used = True
+        if not solar_used:
+            uv, uv_unit = _state_float(self.hass, options.get(CONF_UV_SENSOR))
+            uv_value = None if uv is None else uv_index_value(uv, uv_unit)
+            if uv_value is not None:
+                note_solar_w(track, uv_index_to_w_m2(uv_value), now)
 
     def _overlay_observed(self, observation: Observation) -> Observation:
         """Prefer accumulated entity data, then the weather entity."""
@@ -1331,7 +1391,10 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         reading, unit = _state_float(self.hass, data.get(CONF_MOISTURE_SENSOR))
         if reading is None:
             return
-        state["moisture_pct"] = reading_percent(reading, unit)
+        percent = reading_percent(reading, unit)
+        if percent is None:
+            return
+        state["moisture_pct"] = percent
         mode = str(data.get(CONF_MOISTURE_MODE, DEFAULT_MOISTURE_MODE))
         try:
             sensor_mm = deficit_from_reading(
@@ -1340,6 +1403,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 taw_mm=limits.taw_mm * awc_factor,
                 zr_m=limits.zr_m,
                 field_capacity_vwc=_optional_float(data, CONF_FIELD_CAPACITY),
+                unit=unit,
             )
         except ValueError as err:
             _LOGGER.debug("Moisture reading skipped: %s", err)
@@ -1374,6 +1438,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             return
         kind = str(options.get(CONF_FLOW_KIND, DEFAULT_FLOW_KIND))
         reading = volume_gallons(value, unit) if kind != "rate" else rate_gpm(value, unit)
+        if reading is None:
+            return
         running = None
         if self.executor is not None and self.executor.current_zone_id:
             running = self.executor.current_zone_id
@@ -2475,7 +2541,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         options = self._options()
         sensor, unit = _state_float(self.hass, options.get(CONF_TEMPERATURE_SENSOR))
         if sensor is not None:
-            return temperature_c(sensor, unit)
+            converted = temperature_c(sensor, unit)
+            if converted is not None:
+                return converted
         entity_id = self.config_entry.data.get(CONF_WEATHER_ENTITY)
         state = self.hass.states.get(entity_id) if entity_id else None
         if state is None or state.attributes.get("temperature") is None:
@@ -2500,8 +2568,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
     def _moisture_full(self, data: dict[str, Any]) -> float | None:
         if not data.get(CONF_MOISTURE_SENSOR):
             return None
-        reading, _unit = _state_float(self.hass, data.get(CONF_MOISTURE_SENSOR))
-        if reading is None:
+        reading, unit = _state_float(self.hass, data.get(CONF_MOISTURE_SENSOR))
+        if reading is None or reading_percent(reading, unit) is None:
             return None
         kind = str(data.get(CONF_MOISTURE_KIND, DEFAULT_MOISTURE_KIND))
         if kind != "relative":
@@ -2509,7 +2577,10 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             if not capacity:
                 return None
             return min(1.0, max(0.0, reading / capacity))
-        return relative_full(reading)
+        percent = reading_percent(reading, unit)
+        if percent is None:
+            return None
+        return min(1.0, max(0.0, percent / 100.0))
 
     def _moisture_skip_full(self, data: dict[str, Any], month: int) -> float | None:
         override = _optional_float(data, CONF_MOISTURE_SKIP_PCT)
@@ -3154,12 +3225,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 continue
             local = dt_util.as_local(parsed)
             if row.get("wind_speed") is not None:
-                hourly_wind.append(
-                    (
-                        local,
-                        speed_mph(speed_m_s(float(row["wind_speed"]), wind_unit)),
-                    )
-                )
+                speed = speed_m_s(float(row["wind_speed"]), wind_unit)
+                if speed is not None:
+                    hourly_wind.append((local, speed_mph(speed)))
             if row.get("precipitation") is not None or row.get("precipitation_probability") is not None:
                 hourly_precip.append(
                     (
@@ -3170,7 +3238,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 )
             if row.get("temperature") is not None:
                 low_f = _forecast_temperature_f(float(row["temperature"]), temp_unit)
-                forecast_lows.append((local, low_f))
+                if low_f is not None:
+                    forecast_lows.append((local, low_f))
         daily_precip: list[tuple[datetime, float, float | None]] = []
         for row in forecast:
             stamp = row.get("datetime")
@@ -3181,9 +3250,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             if row.get("precipitation") is not None or row.get("precipitation_probability") is not None:
                 daily_precip.append((local, _row_precip(row, precip_unit), _row_probability(row)))
             if row.get("templow") is not None:
-                forecast_lows.append(
-                    (local, _forecast_temperature_f(float(row["templow"]), temp_unit))
-                )
+                low_f = _forecast_temperature_f(float(row["templow"]), temp_unit)
+                if low_f is not None:
+                    forecast_lows.append((local, low_f))
             high_c = _row_temp(row, "temperature", temp_unit)
             low_c = _row_temp(row, "templow", temp_unit)
             if high_c is not None or low_c is not None:
@@ -3199,15 +3268,19 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             if current is not None:
                 t_max = temperature_c(float(current), temp_unit)
                 t_min = t_max
-        humidity, _unit = _state_float(self.hass, options.get(CONF_HUMIDITY_SENSOR))
+        humidity, humidity_unit = _state_float(self.hass, options.get(CONF_HUMIDITY_SENSOR))
+        if humidity is not None:
+            humidity = humidity_percent(humidity, humidity_unit)
         if humidity is None and attributes.get("humidity") is not None:
+            # Home Assistant weather entities report humidity in percent and
+            # do not publish a humidity unit attribute.
             humidity = float(attributes["humidity"])
         wind, wind_sensor_unit = _state_float(self.hass, options.get(CONF_WIND_SENSOR))
         if wind is not None:
             wind = speed_m_s(wind, wind_sensor_unit)
-        elif attributes.get("wind_speed") is not None:
+        if wind is None and attributes.get("wind_speed") is not None:
             wind = speed_m_s(float(attributes["wind_speed"]), wind_unit)
-        elif today_row and today_row.get("wind_speed") is not None:
+        if wind is None and today_row and today_row.get("wind_speed") is not None:
             wind = speed_m_s(float(today_row["wind_speed"]), wind_unit)
         pressure, pressure_unit = _state_float(
             self.hass, options.get(CONF_PRESSURE_SENSOR)
@@ -3337,14 +3410,17 @@ def _row_temp(row: dict[str, Any] | None, key: str, unit: str | None) -> float |
     return temperature_c(float(row[key]), unit)
 
 
-def _forecast_temperature_f(value: float, unit: str | None) -> float:
+def _forecast_temperature_f(value: float, unit: str | None) -> float | None:
     """Convert a forecast temperature to Fahrenheit.
 
     ``temperature_f`` takes Celsius only. Forecast rows are in the weather
-    entity's unit, so convert to Celsius first. Passing the unit straight
-    into ``temperature_f`` raises TypeError and the hub never finishes setup.
+    entity's unit, so convert to Celsius first. A missing or unknown unit
+    is ignored instead of being treated as Celsius.
     """
-    return temperature_f(temperature_c(value, unit))
+    celsius = temperature_c(value, unit)
+    if celsius is None:
+        return None
+    return temperature_f(celsius)
 
 
 def _row_probability(row: dict[str, Any] | None) -> float | None:
@@ -3360,7 +3436,10 @@ def _row_probability(row: dict[str, Any] | None) -> float | None:
 def _row_precip(row: dict[str, Any] | None, unit: str | None) -> float:
     if not row or row.get("precipitation") is None:
         return 0.0
-    return depth_mm(float(row["precipitation"]), unit)
+    depth = depth_mm(float(row["precipitation"]), unit)
+    if depth is None:
+        return 0.0
+    return depth
 
 
 type SmartWaterConfigEntry = ConfigEntry[SmartWaterCoordinator]
