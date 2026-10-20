@@ -1,6 +1,7 @@
 """User-facing names stay plain, and the English catalog matches strings.json."""
 
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / "custom_components" / "sprinklecast"
@@ -53,3 +54,44 @@ def test_config_fields_have_a_description() -> None:
     walk(data["config"])
     walk(data["options"])
     walk(data["config_subentries"])
+
+
+def test_entity_selectors_name_their_units() -> None:
+    """Every entity selector description says which units the code accepts."""
+    root = Path(__file__).resolve().parents[1] / "custom_components" / "sprinklecast"
+    flow = (root / "config_flow.py").read_text()
+    const = (root / "const.py").read_text()
+    assigned = dict(re.findall(r'^(CONF_[A-Z0-9_]+)\s*=\s*"([^"]+)"', const, re.M))
+    found = re.findall(
+        r"(CONF_[A-Z0-9_]+)\)\s*(?:\]\s*)?(?::|=)\s*"
+        r"(_SENSOR|_BINARY|_WEATHER|_ON_OFF)\b",
+        flow,
+    )
+    assert found, "no entity selectors found in config_flow.py"
+    keys = set()
+    for name, _kind in found:
+        assert name in assigned, name
+        keys.add(assigned[name])
+
+    data = _load("strings.json")
+    seen: set[str] = set()
+
+    def walk(node: object) -> None:
+        if not isinstance(node, dict):
+            return
+        labels = node.get("data")
+        if isinstance(labels, dict):
+            described = node.get("data_description") or {}
+            for key in labels:
+                if key not in keys:
+                    continue
+                text = described.get(key)
+                assert isinstance(text, str) and "Units:" in text, key
+                seen.add(key)
+        for value in node.values():
+            walk(value)
+
+    walk(data["config"])
+    walk(data["options"])
+    walk(data["config_subentries"])
+    assert seen == keys
