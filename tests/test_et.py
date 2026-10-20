@@ -82,6 +82,22 @@ def test_hargreaves_and_penman_for_central_texas_october() -> None:
     )
     assert fallback.method == "hargreaves"
     assert fallback.et0_mm == pytest.approx(hargreaves, abs=0.001)
+    named = daily_et0(
+        ETInputs(
+            t_max_c=28.0,
+            t_min_c=16.0,
+            latitude_deg=31.46,
+            day_of_year=288,
+            elevation_m=219,
+        ),
+        missing=(
+            "Humidity sensor (sensor.outdoor_humidity)",
+            "Wind sensor (sensor.outdoor_wind)",
+        ),
+    )
+    assert "sensor.outdoor_humidity" in named.detail
+    assert "sensor.outdoor_wind" in named.detail
+    assert "were missing" in named.detail
 
 
 def test_measured_radiation_is_used_when_a_daily_total_is_supplied() -> None:

@@ -92,6 +92,16 @@ def _registry_unit(hass: HomeAssistant, entity_id: str) -> str | None:
     return str(entry.unit_of_measurement)
 
 
+def entity_not_ready(hass: HomeAssistant, entity_id: str) -> bool:
+    """True when the entity is missing, unknown, or unavailable.
+
+    That is not a unit error and not a completed ET0 input. The integration
+    waits and reads the value when a real state arrives.
+    """
+    state = hass.states.get(entity_id)
+    return state is None or state.state in _NOT_READY
+
+
 def sensor_unit(hass: HomeAssistant, entity_id: str) -> tuple[str | None, bool]:
     """Return ``(unit, decisive)``.
 
@@ -99,7 +109,7 @@ def sensor_unit(hass: HomeAssistant, entity_id: str) -> tuple[str | None, bool]:
     opens nor clears a repair. A real state with a missing unit is decisive.
     """
     state = hass.states.get(entity_id)
-    if state is None or state.state in _NOT_READY:
+    if entity_not_ready(hass, entity_id) or state is None:
         return None, False
     raw = state.attributes.get("unit_of_measurement")
     if raw not in (None, ""):

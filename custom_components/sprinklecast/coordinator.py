@@ -149,7 +149,13 @@ from .const import (
 from .cycle_soak import plan_cycles
 from .dormancy import MAINTENANCE_MM, classify, maintenance_due
 from .audit import audit_result, rate_from_average_depth
-from .et import ETInputs, daily_et0, extraterrestrial_radiation_mj, hargreaves_et0_mm
+from .et import (
+    ETInputs,
+    METHOD_HARGREAVES,
+    daily_et0,
+    extraterrestrial_radiation_mj,
+    hargreaves_et0_mm,
+)
 from .forecast_rain import (
     DEFAULT_FORECAST_DEFER_DAYS,
     DEFAULT_FORECAST_HOURS,
@@ -222,6 +228,7 @@ from .unit_guard import (
     RAIN_ON_OFF_DOMAINS,
     audit_entry,
     configured_unit_entities,
+    entity_not_ready,
     sensor_unit,
 )
 from .units import (
@@ -236,6 +243,7 @@ from .units import (
     speed_mph,
     temperature_c,
     temperature_f,
+    unit_ok,
     uv_index_value,
     volume_gallons,
 )
@@ -456,6 +464,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         self._forecast_has_probability = False
         self._open_unit_issues: set[str] = set()
         self._units_ready = False
+        # Today's ET0 was not saved because a configured input was not ready.
+        self._et_waiting = False
 
     @callback
     def async_track_plan_time(self) -> None:
@@ -483,8 +493,11 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
 
             @callback
             def _units_changed(_event: Event) -> None:
-                if self._units_ready:
-                    self._sync_unit_issues()
+                if not self._units_ready:
+                    return
+                self._sync_unit_issues()
+                if self._should_recompute_et():
+                    self.hass.async_create_task(self.async_request_refresh())
 
             self.config_entry.async_on_unload(
                 async_track_state_change_event(self.hass, entity_ids, _units_changed)
@@ -497,6 +510,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         def _ready(_now: datetime) -> None:
             self._units_ready = True
             self._sync_unit_issues()
+            self.hass.async_create_task(self.async_request_refresh())
 
         @callback
         def _started(_event: Event) -> None:
@@ -1134,22 +1148,36 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         self._last_observation = observation
         if observation.error:
             error = observation.error
-        et_result = daily_et0(observation.inputs) if observation.inputs else None
-        et0 = None if et_result is None else et_result.et0_mm
-        if et_result is not None and et0 is not None:
-            self.store.et0_mm = et0
-            self.store.et0_method = et_result.method
-            self.store.et0_detail = et_result.detail
-            self.store.et0_date = today
-            history = [
-                item
-                for item in self.store.et0_history
-                if isinstance(item, dict) and item.get("date") != today
-            ]
-            history.append({"date": today, "mm": round(float(et0), 3)})
-            self.store.et0_history = history[-14:]
-        elif et_result is not None and et_result.detail:
-            error = error or et_result.detail
+        # A restart used to save Hargreaves ET0 before humidity and wind had
+        # loaded, then keep that number, the plan, and the projection all day.
+        # Wait until startup grace has passed and every configured input has a
+        # real state. Until then the last saved ET0 stays in place.
+        inputs = observation.inputs
+        commit_et = inputs is not None and not self._et_blocked()
+        et_result = None
+        et0 = None
+        if commit_et and inputs is not None:
+            et_result = daily_et0(
+                inputs, missing=self._missing_penman_names(inputs)
+            )
+            et0 = et_result.et0_mm
+            if et0 is not None:
+                self._et_waiting = False
+                self.store.et0_mm = et0
+                self.store.et0_method = et_result.method
+                self.store.et0_detail = et_result.detail
+                self.store.et0_date = today
+                history = [
+                    item
+                    for item in self.store.et0_history
+                    if isinstance(item, dict) and item.get("date") != today
+                ]
+                history.append({"date": today, "mm": round(float(et0), 3)})
+                self.store.et0_history = history[-14:]
+            elif et_result.detail:
+                error = error or et_result.detail
+        elif self._et_blocked():
+            self._et_waiting = True
 
         zone_ids = [
             subentry.subentry_id
@@ -1177,7 +1205,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             state = self.store.zone(subentry_id)
             data = dict(subentry.data)
             try:
-                limits = self._limits(data, et0, now.month)
+                limits = self._limits(data, et0_for_plan, now.month)
             except (KeyError, ValueError) as err:
                 error = f"{subentry.title}: {err}"
                 continue
@@ -1297,6 +1325,108 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             ),
             jobs,
         )
+
+    def _configured_et_entities(self) -> list[tuple[str, str]]:
+        """Unit kind and entity id for inputs that must exist before ET0 is saved."""
+        options = self._options()
+        rows: list[tuple[str, str]] = []
+        for key, kind in (
+            (CONF_TEMPERATURE_SENSOR, "temperature"),
+            (CONF_HUMIDITY_SENSOR, "humidity"),
+            (CONF_WIND_SENSOR, "wind"),
+            (CONF_PRESSURE_SENSOR, "pressure"),
+            (CONF_SOLAR_SENSOR, "solar"),
+        ):
+            entity_id = options.get(key)
+            if entity_id:
+                rows.append((kind, str(entity_id)))
+        # UV stands in for solar only when no solar sensor is configured.
+        if not options.get(CONF_SOLAR_SENSOR):
+            uv = options.get(CONF_UV_SENSOR)
+            if uv:
+                rows.append(("uv", str(uv)))
+        return rows
+
+    def _et_blocked(self) -> bool:
+        """True while startup grace or a configured input has no real state."""
+        if not self._units_ready:
+            return True
+        for _kind, entity_id in self._configured_et_entities():
+            if entity_not_ready(self.hass, entity_id):
+                return True
+        weather = self.config_entry.data.get(CONF_WEATHER_ENTITY)
+        if (
+            weather
+            and not self.config_entry.data.get(CONF_SIMULATION)
+            and entity_not_ready(self.hass, str(weather))
+        ):
+            return True
+        return False
+
+    def _usable_sensor(self, entity_id: str, kind: str) -> bool:
+        if entity_not_ready(self.hass, entity_id):
+            return False
+        unit, decisive = sensor_unit(self.hass, entity_id)
+        return decisive and unit_ok(kind, unit)
+
+    def _weather_has(self, attribute: str) -> bool:
+        weather_id = self.config_entry.data.get(CONF_WEATHER_ENTITY)
+        if not weather_id or entity_not_ready(self.hass, str(weather_id)):
+            return False
+        state = self.hass.states.get(str(weather_id))
+        return state is not None and state.attributes.get(attribute) is not None
+
+    def _penman_inputs_present(self) -> bool:
+        """Humidity and wind can be read from a configured sensor or the weather entity."""
+        options = self._options()
+        humidity_id = options.get(CONF_HUMIDITY_SENSOR)
+        wind_id = options.get(CONF_WIND_SENSOR)
+        humidity_ok = (
+            self._usable_sensor(str(humidity_id), "humidity")
+            if humidity_id
+            else self._weather_has("humidity")
+        )
+        wind_ok = (
+            self._usable_sensor(str(wind_id), "wind")
+            if wind_id
+            else self._weather_has("wind_speed")
+        )
+        return humidity_ok and wind_ok
+
+    def _should_recompute_et(self) -> bool:
+        """Refresh when a late sensor completes the inputs or upgrades the fallback."""
+        if self._et_blocked():
+            return False
+        if self._et_waiting:
+            return True
+        if self.store.et0_method != METHOD_HARGREAVES:
+            return False
+        return self._penman_inputs_present()
+
+    def _missing_penman_names(self, inputs: ETInputs) -> tuple[str, ...]:
+        """Configured sensors that left humidity or wind empty, for the ET0 detail."""
+        options = self._options()
+        missing: list[str] = []
+        has_humidity = (
+            inputs.rh_mean_pct is not None
+            or inputs.rh_max_pct is not None
+            or inputs.rh_min_pct is not None
+        )
+        if not has_humidity:
+            entity_id = options.get(CONF_HUMIDITY_SENSOR)
+            missing.append(
+                f"Humidity sensor ({entity_id})"
+                if entity_id
+                else "Humidity sensor (not configured)"
+            )
+        if inputs.wind_m_s is None:
+            entity_id = options.get(CONF_WIND_SENSOR)
+            missing.append(
+                f"Wind sensor ({entity_id})"
+                if entity_id
+                else "Wind sensor (not configured)"
+            )
+        return tuple(missing)
 
     def _sync_unit_issues(self) -> None:
         """Open one repair per field with a bad unit, and clear it when fixed."""

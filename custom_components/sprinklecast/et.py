@@ -250,8 +250,23 @@ def _ordered_temps(
     return t_max_c, t_min_c
 
 
-def daily_et0(inputs: ETInputs) -> ETResult:
-    """Select Penman-Monteith or Hargreaves and return ET0 for one day."""
+def _missing_clause(missing: tuple[str, ...]) -> str:
+    """Name the humidity and wind inputs that kept Penman-Monteith from running."""
+    if not missing:
+        return "Humidity or wind was missing"
+    if len(missing) == 1:
+        return f"{missing[0]} was missing"
+    if len(missing) == 2:
+        return f"{missing[0]} and {missing[1]} were missing"
+    return f"{', '.join(missing[:-1])}, and {missing[-1]} were missing"
+
+
+def daily_et0(inputs: ETInputs, *, missing: tuple[str, ...] = ()) -> ETResult:
+    """Select Penman-Monteith or Hargreaves and return ET0 for one day.
+
+    ``missing`` names the configured sensors that had no usable humidity or
+    wind reading. The Hargreaves detail quotes those names.
+    """
     temps = _ordered_temps(inputs.t_max_c, inputs.t_min_c)
     if (
         temps is None
@@ -328,8 +343,8 @@ def daily_et0(inputs: ETInputs) -> ETResult:
         METHOD_HARGREAVES,
         RADIATION_ESTIMATED,
         (
-            "Hargreaves fallback from temperature. Humidity or wind was missing, "
-            "so Penman-Monteith was not used."
+            "Hargreaves fallback from temperature. "
+            f"{_missing_clause(missing)}, so Penman-Monteith was not used."
             + solar_note
         ),
     )
