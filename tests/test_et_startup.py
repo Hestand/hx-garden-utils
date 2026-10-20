@@ -198,7 +198,9 @@ async def test_restart_waits_for_sensors_and_keeps_the_same_plan(
 
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
     await hass.async_block_till_done()
-    async_fire_time_changed(hass, dt_util.utcnow() + UNIT_STARTUP_GRACE)
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + UNIT_STARTUP_GRACE + timedelta(seconds=1)
+    )
     await hass.async_block_till_done()
     still = _snapshot(entry)
     assert still["method"] == "penman_monteith"
