@@ -77,6 +77,7 @@ from .const import (
     CONF_PRESSURE_SENSOR,
     CONF_RAIN_AMOUNT_SENSOR,
     CONF_RAIN_KIND,
+    CONF_RAIN_RATE_MIN,
     CONF_RAIN_SENSOR,
     CONF_ROUND_MINUTES,
     CONF_SCENARIO,
@@ -212,12 +213,13 @@ from .usage import (
     period_gallons,
     saved_gallons,
 )
-from .unit_guard import audit_entry
+from .unit_guard import RAIN_ON_OFF_DOMAINS, audit_entry, sensor_unit
 from .units import (
     depth_mm,
     humidity_percent,
     inches_to_mm,
     pressure_kpa,
+    rain_rate_mm_h,
     rate_gpm,
     solar_parts,
     speed_m_s,
@@ -367,14 +369,44 @@ def _state_float(
     return value, unit
 
 
-def _is_wet(hass: HomeAssistant, entity_id: str | None) -> bool:
-    """True only when the binary sensor is explicitly on."""
+def _rain_threshold(data: dict[str, Any]) -> float:
+    """Minimum rate that counts as raining, in the sensor's own units."""
+    value = _optional_float(data, CONF_RAIN_RATE_MIN)
+    if value is None or value < 0:
+        return 0.0
+    return value
+
+
+def _is_wet(
+    hass: HomeAssistant, entity_id: str | None, threshold: float = 0.0
+) -> bool:
+    """True when an on/off sensor is on, or a rain rate is above the threshold.
+
+    A numeric sensor with a missing or unrecognized rate unit is not raining.
+    """
     if not entity_id:
         return False
+    domain = entity_id.partition(".")[0]
     state = hass.states.get(entity_id)
-    if state is None:
+    if domain in RAIN_ON_OFF_DOMAINS:
+        return state is not None and state.state == "on"
+    if domain != "sensor" or state is None:
         return False
-    return state.state == "on"
+    if state.state in {"unknown", "unavailable", "none", ""}:
+        return False
+    try:
+        value = float(state.state)
+    except (TypeError, ValueError):
+        return False
+    raw = state.attributes.get("unit_of_measurement")
+    unit = None if raw in (None, "") else str(raw)
+    if unit is None:
+        unit, _decisive = sensor_unit(hass, entity_id)
+    rate = rain_rate_mm_h(value, unit)
+    limit = rain_rate_mm_h(threshold, unit)
+    if rate is None or limit is None:
+        return False
+    return rate > limit
 
 
 class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
@@ -1886,7 +1918,11 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             options.get(CONF_START_TIME, DEFAULT_START_TIME),
             options.get(CONF_FINISH_TIME, DEFAULT_FINISH_TIME),
         )
-        hub_wet = _is_wet(self.hass, options.get(CONF_RAIN_SENSOR) or None)
+        hub_wet = _is_wet(
+            self.hass,
+            options.get(CONF_RAIN_SENSOR) or None,
+            _rain_threshold(options),
+        )
         self._remember_forecast(observation, now)
         requests = []
         areas: dict[str, float | None] = {}
@@ -2271,9 +2307,21 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             )
         reason = safety_reason(
             SkipInputs(
-                hub_rain_wet=_is_wet(self.hass, options.get(CONF_RAIN_SENSOR) or None),
-                rain_sensor_wet=_is_wet(self.hass, data.get(CONF_RAIN_SENSOR) or None),
-                currently_raining=_is_wet(self.hass, options.get(CONF_RAIN_SENSOR) or None),
+                hub_rain_wet=_is_wet(
+                    self.hass,
+                    options.get(CONF_RAIN_SENSOR) or None,
+                    _rain_threshold(options),
+                ),
+                rain_sensor_wet=_is_wet(
+                    self.hass,
+                    data.get(CONF_RAIN_SENSOR) or None,
+                    _rain_threshold(data),
+                ),
+                currently_raining=_is_wet(
+                    self.hass,
+                    options.get(CONF_RAIN_SENSOR) or None,
+                    _rain_threshold(options),
+                ),
                 temp_f=temp_f,
                 forecast_low_f=forecast_low_f,
                 freeze_f=freeze,
@@ -2684,7 +2732,11 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             et0_mm=et0,
             month=month,
             enabled=bool(state.get("enabled", True)),
-            rain_sensor_wet=_is_wet(self.hass, data.get(CONF_RAIN_SENSOR) or None),
+            rain_sensor_wet=_is_wet(
+                self.hass,
+                data.get(CONF_RAIN_SENSOR) or None,
+                _rain_threshold(data),
+            ),
             skipped_until=state.get("skipped_until"),
             adjustment_pct=float(state.get("adjustment_pct", DEFAULT_ADJUSTMENT_PCT)),
             drip_ignores_schedule=drip_ignores,

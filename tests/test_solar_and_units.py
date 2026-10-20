@@ -10,6 +10,7 @@ from sprinklecast.solar import next_sunrise, sunrise_utc
 from sprinklecast.units import (
     depth_mm,
     pressure_kpa,
+    rain_rate_mm_h,
     solar_parts,
     speed_m_s,
     temperature_c,
@@ -59,3 +60,11 @@ def test_unit_conversions() -> None:
     assert speed_m_s(1, None) is None
     assert pressure_kpa(1013, None) is None
     assert pressure_kpa(1013, "hPa") == pytest.approx(101.3)
+    assert rain_rate_mm_h(1, "in/h") == pytest.approx(25.4)
+    assert rain_rate_mm_h(1, "inches/hr") == pytest.approx(25.4)
+    assert rain_rate_mm_h(2, "mm/h") == pytest.approx(2.0)
+    assert rain_rate_mm_h(2, "MM/HR") == pytest.approx(2.0)
+    assert rain_rate_mm_h(2, None) is None
+    assert rain_rate_mm_h(5, "mm") is None
+    assert rain_rate_mm_h(1, "in") is None
+    assert rain_rate_mm_h(1, "gal/min") is None

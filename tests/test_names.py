@@ -64,7 +64,7 @@ def test_entity_selectors_name_their_units() -> None:
     assigned = dict(re.findall(r'^(CONF_[A-Z0-9_]+)\s*=\s*"([^"]+)"', const, re.M))
     found = re.findall(
         r"(CONF_[A-Z0-9_]+)\)\s*(?:\]\s*)?(?::|=)\s*"
-        r"(_SENSOR|_BINARY|_WEATHER|_ON_OFF)\b",
+        r"(_SENSOR|_BINARY|_WEATHER|_ON_OFF|_RAIN)\b",
         flow,
     )
     assert found, "no entity selectors found in config_flow.py"

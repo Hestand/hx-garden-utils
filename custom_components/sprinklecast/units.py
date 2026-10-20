@@ -57,6 +57,10 @@ VOLUME_UNITS = (
     "m³, m3, m^3, ft³, ft3, ft^3, cuft"
 )
 RATE_UNITS = "gal/min, gpm, L/min, lpm, m³/h, m3/h, m^3/h, gal/h, gph"
+RAIN_RATE_UNITS = (
+    "in/h, in/hr, in/hour, inch/h, inch/hr, inch/hour, "
+    "inches/h, inches/hr, inches/hour, mm/h, mm/hr, mm/hour"
+)
 MOISTURE_UNITS = (
     "%, percent, pct, fraction, ratio, 0-1, m³/m³, m3/m3, m^3/m^3, "
     "cm³/cm³, cm3/cm3, v/v"
@@ -78,6 +82,18 @@ _RATE_GPM = {"gal/min", "gpm", "gallon/min", "gallons/min"}
 _RATE_LPM = {"l/min", "lpm"}
 _RATE_M3H = {"m3/h", "m^3/h"}
 _RATE_GPH = {"gal/h", "gph"}
+_RAIN_IN_H = {
+    "in/h",
+    "in/hr",
+    "in/hour",
+    "inch/h",
+    "inch/hr",
+    "inch/hour",
+    "inches/h",
+    "inches/hr",
+    "inches/hour",
+}
+_RAIN_MM_H = {"mm/h", "mm/hr", "mm/hour"}
 _SOLAR_W = {"w/m2", "wm2", "w/m^2"}
 _UV = {"uv index", "uv", "uvi", "index"}
 _MOISTURE_PERCENT = {"%", "percent", "pct"}
@@ -101,6 +117,7 @@ _ACCEPTED = {
     "depth": DEPTH_UNITS,
     "volume": VOLUME_UNITS,
     "rate": RATE_UNITS,
+    "rain_rate": RAIN_RATE_UNITS,
     "moisture": MOISTURE_UNITS,
 }
 
@@ -148,6 +165,9 @@ def unit_ok(kind: str, unit: str | None) -> bool:
         return _compact(unit) in _VOLUME_GAL | _VOLUME_L | _VOLUME_M3 | _VOLUME_FT3
     if kind == "rate":
         return _compact(unit) in _RATE_GPM | _RATE_LPM | _RATE_M3H | _RATE_GPH
+    if kind == "rain_rate":
+        token = _compact(unit)
+        return token in _RAIN_IN_H or token in _RAIN_MM_H
     if kind == "moisture":
         token = _compact(unit)
         return token in _MOISTURE_PERCENT or token in _MOISTURE_FRACTION
@@ -237,6 +257,19 @@ def volume_gallons(value: float, unit: str | None) -> float | None:
         return value * 7.48052
     if token in _VOLUME_GAL:
         return value
+    return None
+
+
+def rain_rate_mm_h(value: float, unit: str | None) -> float | None:
+    """Convert a rain intensity to millimeters per hour.
+
+    A depth (mm, in) is not a rate. A missing or unknown unit is ignored.
+    """
+    token = _compact(unit)
+    if token in _RAIN_MM_H:
+        return value
+    if token in _RAIN_IN_H:
+        return inches_to_mm(value)
     return None
 
 

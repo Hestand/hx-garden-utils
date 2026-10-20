@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "sprinklecast"
 NAME = "Sprinklecast"
-VERSION = "0.14.2"
+VERSION = "0.14.3"
 
 # Retired option key. v0.5 stores the automatic-watering switch in the hub
 # store (default off) and drops this option on migration.
@@ -23,6 +23,8 @@ CONF_LATITUDE = "latitude"
 CONF_LONGITUDE = "longitude"
 CONF_NOTIFY_TARGET = "notify_target"
 CONF_RAIN_SENSOR = "rain_sensor"
+# Optional minimum rain rate, in the sensor's own units. Above this is raining.
+CONF_RAIN_RATE_MIN = "rain_rate_min"
 CONF_RAIN_AMOUNT_SENSOR = "rain_amount_sensor"
 CONF_RAIN_KIND = "rain_kind"
 CONF_UV_SENSOR = "uv_sensor"

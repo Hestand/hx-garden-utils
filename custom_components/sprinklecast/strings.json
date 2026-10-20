@@ -82,6 +82,7 @@
               "longitude": "Longitude override",
               "notify_target": "Notify service",
               "rain_sensor": "Rain sensor",
+              "rain_rate_min": "Rain rate threshold",
               "plan_hour": "Evening plan hour",
               "forecast_skip_mm": "Skip when forecast rain is at least",
               "max_daily_runtime_min": "Max minutes this morning",
@@ -144,7 +145,8 @@
               "cost_per_1000_gal": "Optional. Adds a cost sensor in dollars for the water dashboard.",
               "weekly_budget_gal": "Optional. Fires one alert per week when use goes over this.",
               "weekly_summary": "Off by default. On Monday, at or after the plan hour, sends one summary.",
-              "rain_sensor": "Optional on/off sensor. On means it is raining and watering waits.\nCommon names: Raining, Rain, Rain sensor, Wet, Precipitation (Tempest, Ecowitt, Hydrawise, Rachio).\nDevice class: moisture.\nUnits: none. State on means it is raining. Off, unknown, and unavailable do not skip.",
+              "rain_sensor": "Optional. An on/off sensor that is on, or a rain-rate reading above the threshold, means it is raining and watering waits. Off, unknown, and unavailable do not skip.\nCommon names (on/off): Raining, Rain sensor, Is raining, Rain detected.\nCommon names (rate): Rain rate, Rain intensity, Precipitation intensity, Precipitation rate.\nDevice class: moisture for on/off; precipitation_intensity for a rate.\nUnits: none for on/off; in/h or mm/h for rate (converted automatically). Accepted rate units: in/h, in/hr, in/hour, inch/h, inch/hr, inch/hour, inches/h, inches/hr, inches/hour, mm/h, mm/hr, mm/hour. Any other unit on a numeric sensor, or a missing unit, shows a warning and this sensor is ignored.",
+              "rain_rate_min": "Numeric rain-rate sensors only. A rate above this counts as raining. The default is 0, in the same unit as the sensor, so any positive rate counts. An on/off sensor ignores this.",
               "plan_hour": "The evening hour when today's water loss is saved and the morning plan is built. Default 23.",
               "max_daily_runtime_min": "Optional limit on valve-on minutes for every zone together this morning."
             }
@@ -192,6 +194,7 @@
               "longitude": "Longitude override",
               "notify_target": "Notify service",
               "rain_sensor": "Rain sensor",
+              "rain_rate_min": "Rain rate threshold",
               "plan_hour": "Evening plan hour",
               "forecast_skip_mm": "Skip when forecast rain is at least",
               "max_daily_runtime_min": "Max minutes this morning",
@@ -251,7 +254,8 @@
               "cost_per_1000_gal": "Optional. Adds a cost sensor in dollars for the water dashboard.",
               "weekly_budget_gal": "Optional. Fires one alert per week when use goes over this.",
               "weekly_summary": "Off by default. On Monday, at or after the plan hour, sends one summary.",
-              "rain_sensor": "Optional on/off sensor. On means it is raining and watering waits.\nCommon names: Raining, Rain, Rain sensor, Wet, Precipitation (Tempest, Ecowitt, Hydrawise, Rachio).\nDevice class: moisture.\nUnits: none. State on means it is raining. Off, unknown, and unavailable do not skip.",
+              "rain_sensor": "Optional. An on/off sensor that is on, or a rain-rate reading above the threshold, means it is raining and watering waits. Off, unknown, and unavailable do not skip.\nCommon names (on/off): Raining, Rain sensor, Is raining, Rain detected.\nCommon names (rate): Rain rate, Rain intensity, Precipitation intensity, Precipitation rate.\nDevice class: moisture for on/off; precipitation_intensity for a rate.\nUnits: none for on/off; in/h or mm/h for rate (converted automatically). Accepted rate units: in/h, in/hr, in/hour, inch/h, inch/hr, inch/hour, inches/h, inches/hr, inches/hour, mm/h, mm/hr, mm/hour. Any other unit on a numeric sensor, or a missing unit, shows a warning and this sensor is ignored.",
+              "rain_rate_min": "Numeric rain-rate sensors only. A rate above this counts as raining. The default is 0, in the same unit as the sensor, so any positive rate counts. An on/off sensor ignores this.",
               "plan_hour": "The evening hour when today's water loss is saved and the morning plan is built. Default 23.",
               "max_daily_runtime_min": "Optional limit on valve-on minutes for every zone together this morning.",
               "round_minutes": "On keeps every cycle a whole minute. Off keeps tenths of a minute.",
@@ -409,6 +413,7 @@
               "longitude": "Longitude override",
               "notify_target": "Notify service",
               "rain_sensor": "Rain sensor",
+              "rain_rate_min": "Rain rate threshold",
               "plan_hour": "Evening plan hour",
               "forecast_skip_mm": "Skip when forecast rain is at least",
               "max_daily_runtime_min": "Max minutes this morning",
@@ -467,7 +472,8 @@
               "cost_per_1000_gal": "Optional. Adds a cost sensor in dollars for the water dashboard.",
               "weekly_budget_gal": "Optional. Fires one alert per week when use goes over this.",
               "weekly_summary": "Off by default. On Monday, at or after the plan hour, sends one summary.",
-              "rain_sensor": "Optional on/off sensor. On means it is raining and watering waits.\nCommon names: Raining, Rain, Rain sensor, Wet, Precipitation (Tempest, Ecowitt, Hydrawise, Rachio).\nDevice class: moisture.\nUnits: none. State on means it is raining. Off, unknown, and unavailable do not skip.",
+              "rain_sensor": "Optional. An on/off sensor that is on, or a rain-rate reading above the threshold, means it is raining and watering waits. Off, unknown, and unavailable do not skip.\nCommon names (on/off): Raining, Rain sensor, Is raining, Rain detected.\nCommon names (rate): Rain rate, Rain intensity, Precipitation intensity, Precipitation rate.\nDevice class: moisture for on/off; precipitation_intensity for a rate.\nUnits: none for on/off; in/h or mm/h for rate (converted automatically). Accepted rate units: in/h, in/hr, in/hour, inch/h, inch/hr, inch/hour, inches/h, inches/hr, inches/hour, mm/h, mm/hr, mm/hour. Any other unit on a numeric sensor, or a missing unit, shows a warning and this sensor is ignored.",
+              "rain_rate_min": "Numeric rain-rate sensors only. A rate above this counts as raining. The default is 0, in the same unit as the sensor, so any positive rate counts. An on/off sensor ignores this.",
               "plan_hour": "The evening hour when today's water loss is saved and the morning plan is built. Default 23.",
               "max_daily_runtime_min": "Optional limit on valve-on minutes for every zone together this morning.",
               "round_minutes": "On keeps every cycle a whole minute. Off keeps tenths of a minute.",
@@ -611,7 +617,8 @@
                 "field_capacity_vwc": "Full-soil reading",
                 "flow_low_ratio": "Low-flow ratio",
                 "flow_leak_ratio": "Leak ratio",
-                "rain_sensor": "Rain sensor"
+                "rain_sensor": "Rain sensor",
+                "rain_rate_min": "Rain rate threshold"
               },
               "data_description": {
                 "priority": "Lower numbers run first when two zones are both ready.",
@@ -622,7 +629,8 @@
                 "moisture_sensor": "Optional sensor that reports how full the soil is.\nCommon names: Soil moisture, Moisture, Soil humidity, VWC, Volumetric water content (Ecowitt, Vegetronix).\nDevice class: moisture.\nUnits: %, percent, pct, or a fraction unit (fraction, ratio, 0-1, m³/m³, m3/m3, m^3/m^3, cm³/cm³, cm3/cm3, v/v). A 0–1 number is accepted only when the unit is a fraction unit. The full-soil reading uses that same unit. Any other unit, or a missing unit, shows a warning and this sensor is ignored.",
                 "moisture_weight": "How strongly a once-a-day correction follows the sensor. 1 follows it fully.",
                 "field_capacity_vwc": "The volumetric reading when this soil is full. Used only for a volumetric sensor.",
-                "rain_sensor": "Optional on/off sensor. On means it is raining and watering waits.\nCommon names: Raining, Rain, Rain sensor, Wet, Precipitation (Tempest, Ecowitt, Hydrawise, Rachio).\nDevice class: moisture.\nUnits: none. State on means it is raining. Off, unknown, and unavailable do not skip."
+                "rain_sensor": "Optional. An on/off sensor that is on, or a rain-rate reading above the threshold, means it is raining and watering waits. Off, unknown, and unavailable do not skip.\nCommon names (on/off): Raining, Rain sensor, Is raining, Rain detected.\nCommon names (rate): Rain rate, Rain intensity, Precipitation intensity, Precipitation rate.\nDevice class: moisture for on/off; precipitation_intensity for a rate.\nUnits: none for on/off; in/h or mm/h for rate (converted automatically). Accepted rate units: in/h, in/hr, in/hour, inch/h, inch/hr, inch/hour, inches/h, inches/hr, inches/hour, mm/h, mm/hr, mm/hour. Any other unit on a numeric sensor, or a missing unit, shows a warning and this sensor is ignored.",
+                "rain_rate_min": "Numeric rain-rate sensors only. A rate above this counts as raining. The default is 0, in the same unit as the sensor, so any positive rate counts. An on/off sensor ignores this."
               }
             }
           }

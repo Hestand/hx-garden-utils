@@ -20,6 +20,7 @@ from .const import (
     CONF_MOISTURE_SENSOR,
     CONF_PRESSURE_SENSOR,
     CONF_RAIN_AMOUNT_SENSOR,
+    CONF_RAIN_SENSOR,
     CONF_SOLAR_SENSOR,
     CONF_TEMPERATURE_SENSOR,
     CONF_UV_SENSOR,
@@ -31,6 +32,9 @@ from .const import (
 from .units import accepted_units, unit_ok
 
 _UNAVAILABLE = {"unknown", "unavailable"}
+
+# On/off rain sensors. A valve's open state is not rain.
+RAIN_ON_OFF_DOMAINS = frozenset({"binary_sensor", "switch", "input_boolean"})
 
 # Hub option key, unit kind, label shown on the repair.
 _SENSOR_FIELDS: tuple[tuple[str, str, str], ...] = (
@@ -118,6 +122,37 @@ def sensor_problem(hass: HomeAssistant, entity_id: str, kind: str, label: str) -
     if unit_ok(kind, unit):
         return None
     return rejection_sentence(label, entity_id, unit, kind)
+
+
+def _entity_known(hass: HomeAssistant, entity_id: str) -> bool:
+    if hass.states.get(entity_id) is not None:
+        return True
+    try:
+        return er.async_get(hass).async_get(entity_id) is not None
+    except (KeyError, RuntimeError):
+        return False
+
+
+def rain_sensor_problem(hass: HomeAssistant, entity_id: str) -> str | None:
+    """A form sentence when a rain sensor is missing or its rate unit is unusable.
+
+    An on/off sensor has no unit. A numeric sensor must report a rain rate.
+    """
+    if not _entity_known(hass, entity_id):
+        return (
+            f"Rain sensor ({entity_id}) is missing, so it cannot be checked. "
+            "An on/off sensor needs no unit. "
+            f"A rain-rate sensor needs {accepted_units('rain_rate')}."
+        )
+    domain = entity_id.partition(".")[0]
+    if domain in RAIN_ON_OFF_DOMAINS:
+        return None
+    if domain == "sensor":
+        return sensor_problem(hass, entity_id, "rain_rate", "Rain sensor")
+    return (
+        f"Rain sensor ({entity_id}) must be an on/off sensor "
+        "(binary_sensor, switch, or input_boolean) or a rain-rate sensor."
+    )
 
 
 def weather_problems(hass: HomeAssistant, entity_id: str) -> list[str]:
@@ -226,22 +261,68 @@ def audit_entry(
                 unit=unit,
                 decisive=True,
             )
+    _audit_rain(
+        bad,
+        leave,
+        hass,
+        options.get(CONF_RAIN_SENSOR),
+        key=CONF_RAIN_SENSOR,
+        label="Rain sensor",
+    )
     for subentry in entry.subentries.values():
         if subentry.subentry_type != SUBENTRY_ZONE:
             continue
         entity_id = subentry.data.get(CONF_MOISTURE_SENSOR)
-        if not entity_id:
-            continue
-        key = f"moisture_{subentry.subentry_id}"
-        unit, decisive = sensor_unit(hass, str(entity_id))
-        _consider(
+        if entity_id:
+            key = f"moisture_{subentry.subentry_id}"
+            unit, decisive = sensor_unit(hass, str(entity_id))
+            _consider(
+                bad,
+                leave,
+                key=key,
+                label=f"Soil moisture sensor ({subentry.title})",
+                entity_id=str(entity_id),
+                kind="moisture",
+                unit=unit,
+                decisive=decisive,
+            )
+        _audit_rain(
             bad,
             leave,
-            key=key,
-            label=f"Soil moisture sensor ({subentry.title})",
-            entity_id=str(entity_id),
-            kind="moisture",
-            unit=unit,
-            decisive=decisive,
+            hass,
+            subentry.data.get(CONF_RAIN_SENSOR),
+            key=f"rain_{subentry.subentry_id}",
+            label=f"Rain sensor ({subentry.title})",
         )
     return bad, leave
+
+
+def _audit_rain(
+    bad: dict[str, UnitProblem],
+    leave: set[str],
+    hass: HomeAssistant,
+    entity_id: str | None,
+    *,
+    key: str,
+    label: str,
+) -> None:
+    """Check a numeric rain sensor. An on/off sensor has no unit to repair."""
+    if not entity_id:
+        return
+    entity_id = str(entity_id)
+    domain = entity_id.partition(".")[0]
+    if domain in RAIN_ON_OFF_DOMAINS:
+        return
+    if domain != "sensor":
+        return
+    unit, decisive = sensor_unit(hass, str(entity_id))
+    _consider(
+        bad,
+        leave,
+        key=key,
+        label=label,
+        entity_id=str(entity_id),
+        kind="rain_rate",
+        unit=unit,
+        decisive=decisive,
+    )

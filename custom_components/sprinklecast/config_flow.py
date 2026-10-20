@@ -33,7 +33,7 @@ from homeassistant.data_entry_flow import section
 from homeassistant.helpers import selector
 from homeassistant.util import dt as dt_util
 
-from .unit_guard import sensor_problem, weather_problems
+from .unit_guard import rain_sensor_problem, sensor_problem, weather_problems
 from .const import (
     CONF_ALLOWED_WEEKDAYS,
     CONF_AREA_SQFT,
@@ -102,6 +102,7 @@ from .const import (
     CONF_PRIORITY,
     CONF_RAIN_AMOUNT_SENSOR,
     CONF_RAIN_KIND,
+    CONF_RAIN_RATE_MIN,
     CONF_RAIN_SENSOR,
     CONF_ROUND_MINUTES,
     CONF_ROOT_DEPTH_IN,
@@ -233,6 +234,7 @@ _MEASURE_KEYS = (
     CONF_FIELD_CAPACITY,
     CONF_FLOW_LOW_RATIO,
     CONF_FLOW_LEAK_RATIO,
+    CONF_RAIN_RATE_MIN,
     CONF_RAIN_SENSOR,
 )
 _SENSOR_KEYS = (
@@ -251,6 +253,7 @@ _LOCATION_KEYS = (
     CONF_LATITUDE,
     CONF_LONGITUDE,
     CONF_NOTIFY_TARGET,
+    CONF_RAIN_RATE_MIN,
     CONF_RAIN_SENSOR,
     CONF_PLAN_HOUR,
     CONF_FORECAST_SKIP_MM,
@@ -289,8 +292,10 @@ _MORNING_KEYS = (
 
 _WEATHER = selector.EntitySelector(selector.EntitySelectorConfig(domain="weather"))
 _SENSOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
-_BINARY = selector.EntitySelector(
-    selector.EntitySelectorConfig(domain="binary_sensor")
+_RAIN = selector.EntitySelector(
+    selector.EntitySelectorConfig(
+        domain=["binary_sensor", "switch", "input_boolean", "sensor"]
+    )
 )
 _ON_OFF = selector.EntitySelector(
     selector.EntitySelectorConfig(domain=["switch", "valve", "input_boolean"])
@@ -369,6 +374,11 @@ def _unit_detail(
     if not _blank(flow_entity):
         kind = "rate" if flat.get(CONF_FLOW_KIND) == FLOW_KIND_RATE else "volume"
         sentence = sensor_problem(hass, str(flow_entity), kind, "Flow sensor")
+        if sentence:
+            sentences.append(sentence)
+    rain_entity = flat.get(CONF_RAIN_SENSOR)
+    if not _blank(rain_entity):
+        sentence = rain_sensor_problem(hass, str(rain_entity))
         if sentence:
             sentences.append(sentence)
     if not sentences:
@@ -469,7 +479,8 @@ def _location_fields() -> dict[Any, Any]:
         vol.Optional(CONF_LATITUDE): _number(-90, 90, "any"),
         vol.Optional(CONF_LONGITUDE): _number(-180, 180, "any"),
         vol.Optional(CONF_NOTIFY_TARGET): _TEXT,
-        vol.Optional(CONF_RAIN_SENSOR): _BINARY,
+        vol.Optional(CONF_RAIN_SENSOR): _RAIN,
+        vol.Optional(CONF_RAIN_RATE_MIN): _number(0, 1000, 0.001),
         vol.Required(CONF_PLAN_HOUR, default=DEFAULT_PLAN_HOUR): _number(0, 23, 1),
         vol.Optional(CONF_FORECAST_SKIP_MM): _number(0, 100, 0.1, "mm"),
         vol.Optional(CONF_MAX_DAILY_RUNTIME_MIN): _number(1, 600, 1, "min"),
@@ -813,7 +824,8 @@ def _advanced_schema() -> vol.Schema:
                         vol.Required(
                             CONF_FLOW_LEAK_RATIO, default=DEFAULT_FLOW_LEAK_RATIO
                         ): _number(1, 5, 0.05),
-                        vol.Optional(CONF_RAIN_SENSOR): _BINARY,
+                        vol.Optional(CONF_RAIN_SENSOR): _RAIN,
+                        vol.Optional(CONF_RAIN_RATE_MIN): _number(0, 1000, 0.001),
                     }
                 ),
                 {"collapsed": True},
