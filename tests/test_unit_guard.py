@@ -2,32 +2,46 @@
 
 from __future__ import annotations
 
-from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import issue_registry as ir
-import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from datetime import timedelta
 
-from homeassistant.config_entries import SOURCE_USER
+from homeassistant.config_entries import SOURCE_USER, ConfigEntryState
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.util import dt as dt_util
+import pytest
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.sprinklecast.const import (
     CONF_ELEVATION_M,
+    CONF_FLOW_KIND,
+    CONF_FLOW_SENSOR,
     CONF_HUMIDITY_SENSOR,
     CONF_MOISTURE_SENSOR,
     CONF_PLANT_TYPE,
+    CONF_PRESSURE_SENSOR,
+    CONF_RAIN_AMOUNT_SENSOR,
     CONF_RAIN_RATE_MIN,
     CONF_RAIN_SENSOR,
     CONF_SOIL_TYPE,
+    CONF_SOLAR_SENSOR,
     CONF_SPRINKLER_TYPE,
     CONF_SUN_EXPOSURE,
     CONF_TEMPERATURE_SENSOR,
+    CONF_UV_SENSOR,
     CONF_VALVE_ENTITY,
     CONF_WEATHER_ENTITY,
+    CONF_WIND_SENSOR,
     DOMAIN,
+    FLOW_KIND_RATE,
     SUBENTRY_ZONE,
 )
+from custom_components.sprinklecast.coordinator import UNIT_STARTUP_GRACE
 from custom_components.sprinklecast.coordinator import _is_wet
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -566,3 +580,140 @@ async def test_options_flow_rejects_a_rain_rate_without_a_unit(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_RAIN_SENSOR] == "switch.rain"
+
+
+_STARTUP_SENSORS = (
+    "temperature_sensor",
+    "humidity_sensor",
+    "wind_sensor",
+    "pressure_sensor",
+    "solar_sensor",
+    "uv_sensor",
+    "rain_amount_sensor",
+    "flow_sensor",
+)
+
+
+def _startup_entry() -> MockConfigEntry:
+    return MockConfigEntry(
+        domain=DOMAIN,
+        title="Garden",
+        data={CONF_WEATHER_ENTITY: "weather.home"},
+        options={
+            CONF_ELEVATION_M: 219.0,
+            CONF_TEMPERATURE_SENSOR: "sensor.temp",
+            CONF_HUMIDITY_SENSOR: "sensor.humidity",
+            CONF_WIND_SENSOR: "sensor.wind",
+            CONF_PRESSURE_SENSOR: "sensor.pressure",
+            CONF_SOLAR_SENSOR: "sensor.solar",
+            CONF_UV_SENSOR: "sensor.uv",
+            CONF_RAIN_AMOUNT_SENSOR: "sensor.rain_today",
+            CONF_FLOW_SENSOR: "sensor.flow",
+            CONF_FLOW_KIND: FLOW_KIND_RATE,
+        },
+        subentries_data=[
+            {
+                "data": {
+                    CONF_PLANT_TYPE: "warm_season_turf",
+                    CONF_SOIL_TYPE: "loam",
+                    CONF_SPRINKLER_TYPE: "spray",
+                    CONF_SUN_EXPOSURE: "full_sun",
+                    CONF_VALVE_ENTITY: "switch.front",
+                    CONF_MOISTURE_SENSOR: "sensor.soil",
+                },
+                "subentry_type": "zone",
+                "title": "Front",
+                "unique_id": "front",
+            }
+        ],
+    )
+
+
+def _valid_startup_states(hass: HomeAssistant) -> None:
+    hass.states.async_set("sensor.temp", "70", {"unit_of_measurement": "°F"})
+    hass.states.async_set("sensor.humidity", "45", {"unit_of_measurement": "%"})
+    hass.states.async_set("sensor.wind", "5", {"unit_of_measurement": "mph"})
+    hass.states.async_set("sensor.pressure", "29.8", {"unit_of_measurement": "inHg"})
+    hass.states.async_set("sensor.solar", "600", {"unit_of_measurement": "W/m²"})
+    hass.states.async_set("sensor.uv", "3", {"unit_of_measurement": "UV index"})
+    hass.states.async_set("sensor.rain_today", "0.1", {"unit_of_measurement": "in"})
+    hass.states.async_set("sensor.flow", "2.5", {"unit_of_measurement": "gal/min"})
+    hass.states.async_set("sensor.soil", "40", {"unit_of_measurement": "%"})
+
+
+async def test_sensors_missing_at_startup_do_not_raise_a_repair(
+    hass: HomeAssistant,
+) -> None:
+    """A sensor that has not loaded is not a unit error, even after it appears."""
+    hass.states.async_set("weather.home", "sunny", _weather())
+    hass.states.async_set("switch.front", "off")
+    entry = _startup_entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    zone_id = next(iter(entry.subentries))
+    keys = [*_STARTUP_SENSORS, f"moisture_{zone_id}"]
+    assert all(_issue(hass, entry.entry_id, key) is None for key in keys)
+
+    for entity_id in (
+        "sensor.temp",
+        "sensor.humidity",
+        "sensor.wind",
+        "sensor.pressure",
+        "sensor.solar",
+        "sensor.uv",
+        "sensor.rain_today",
+        "sensor.flow",
+        "sensor.soil",
+    ):
+        hass.states.async_set(entity_id, "unavailable")
+    await hass.async_block_till_done()
+    assert all(_issue(hass, entry.entry_id, key) is None for key in keys)
+
+    _valid_startup_states(hass)
+    await hass.async_block_till_done()
+    assert all(_issue(hass, entry.entry_id, key) is None for key in keys)
+
+
+async def test_a_valid_unit_clears_the_repair_when_the_state_changes(
+    hass: HomeAssistant,
+) -> None:
+    """A real state with a bad unit is repaired, and the next state clears it."""
+    hass.states.async_set("weather.home", "sunny", _weather())
+    hass.states.async_set("switch.front", "off")
+    hass.states.async_set("sensor.temp", "70")
+    hass.states.async_set("sensor.humidity", "45", {"unit_of_measurement": "%"})
+    hass.states.async_set("sensor.soil", "40", {"unit_of_measurement": "%"})
+    entry = await _load(hass)
+    assert _issue(hass, entry.entry_id, "temperature_sensor") is not None
+
+    hass.states.async_set("sensor.temp", "70", {"unit_of_measurement": "°F"})
+    await hass.async_block_till_done()
+    assert _issue(hass, entry.entry_id, "temperature_sensor") is None
+
+
+async def test_startup_grace_waits_for_sensors_to_load(hass: HomeAssistant) -> None:
+    """During restart, a restored state without a unit waits out the grace period."""
+    hass.set_state(CoreState.not_running)
+    hass.states.async_set("weather.home", "sunny", _weather())
+    hass.states.async_set("switch.front", "off")
+    hass.states.async_set("sensor.temp", "70")
+    hass.states.async_set("sensor.humidity", "45", {"unit_of_measurement": "%"})
+    hass.states.async_set("sensor.soil", "40", {"unit_of_measurement": "%"})
+    entry = _entry()
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert _issue(hass, entry.entry_id, "temperature_sensor") is None
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+    assert _issue(hass, entry.entry_id, "temperature_sensor") is None
+
+    async_fire_time_changed(hass, dt_util.utcnow() + UNIT_STARTUP_GRACE + timedelta(seconds=1))
+    await hass.async_block_till_done()
+    assert _issue(hass, entry.entry_id, "temperature_sensor") is not None
+
+    hass.states.async_set("sensor.temp", "70", {"unit_of_measurement": "°F"})
+    await hass.async_block_till_done()
+    assert _issue(hass, entry.entry_id, "temperature_sensor") is None

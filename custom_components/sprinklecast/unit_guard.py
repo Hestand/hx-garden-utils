@@ -1,8 +1,9 @@
 """Decide whether a selected entity's unit can be used.
 
-A missing or unknown unit is a problem. An unavailable entity that has not
-published a unit yet is left alone so a brief dropout does not open a repair
-and does not clear one that is already open.
+A repair is only for an entity that has a real state and a missing or
+unrecognized unit. An entity that does not exist yet, or is unavailable or
+unknown, is not ready. That is not a unit error: it does not open a repair,
+and it does not clear one that is already open.
 """
 
 from __future__ import annotations
@@ -31,7 +32,8 @@ from .const import (
 )
 from .units import accepted_units, unit_ok
 
-_UNAVAILABLE = {"unknown", "unavailable"}
+# No reading yet. Restored and still-loading entities use these states.
+_NOT_READY = {"unknown", "unavailable", "none", ""}
 
 # On/off rain sensors. A valve's open state is not rain.
 RAIN_ON_OFF_DOMAINS = frozenset({"binary_sensor", "switch", "input_boolean"})
@@ -93,20 +95,18 @@ def _registry_unit(hass: HomeAssistant, entity_id: str) -> str | None:
 def sensor_unit(hass: HomeAssistant, entity_id: str) -> tuple[str | None, bool]:
     """Return ``(unit, decisive)``.
 
-    ``decisive`` is false when the entity is unavailable and no unit is stored,
-    so the caller neither opens nor clears a repair.
+    ``decisive`` is false when the entity is not ready, so the caller neither
+    opens nor clears a repair. A real state with a missing unit is decisive.
     """
     state = hass.states.get(entity_id)
-    if state is None:
-        return None, True
+    if state is None or state.state in _NOT_READY:
+        return None, False
     raw = state.attributes.get("unit_of_measurement")
     if raw not in (None, ""):
         return str(raw), True
     stored = _registry_unit(hass, entity_id)
     if stored:
         return stored, True
-    if state.state in _UNAVAILABLE:
-        return None, False
     return None, True
 
 
@@ -243,14 +243,14 @@ def audit_entry(
     weather_id = entry.data.get(CONF_WEATHER_ENTITY)
     if weather_id:
         state = hass.states.get(str(weather_id))
-        down = state is None or state.state in _UNAVAILABLE
+        not_ready = state is None or state.state in _NOT_READY
         for attribute, kind, label in _WEATHER_FIELDS:
             key = f"weather_{attribute}"
-            raw = None if state is None else state.attributes.get(attribute)
-            unit = None if raw in (None, "") else str(raw)
-            if down and unit is None:
+            if not_ready:
                 leave.add(key)
                 continue
+            raw = state.attributes.get(attribute) if state is not None else None
+            unit = None if raw in (None, "") else str(raw)
             _consider(
                 bad,
                 leave,
@@ -295,6 +295,34 @@ def audit_entry(
             label=f"Rain sensor ({subentry.title})",
         )
     return bad, leave
+
+
+def configured_unit_entities(entry: ConfigEntry) -> list[str]:
+    """Entity ids whose unit this hub checks."""
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        if not value:
+            return
+        entity_id = str(value)
+        if entity_id in seen:
+            return
+        seen.add(entity_id)
+        found.append(entity_id)
+
+    options = entry.options
+    for key, _kind, _label in _SENSOR_FIELDS:
+        add(options.get(key))
+    add(options.get(CONF_FLOW_SENSOR))
+    add(options.get(CONF_RAIN_SENSOR))
+    add(entry.data.get(CONF_WEATHER_ENTITY))
+    for subentry in entry.subentries.values():
+        if subentry.subentry_type != SUBENTRY_ZONE:
+            continue
+        add(subentry.data.get(CONF_MOISTURE_SENSOR))
+        add(subentry.data.get(CONF_RAIN_SENSOR))
+    return found
 
 
 def _audit_rain(

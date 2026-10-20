@@ -18,9 +18,14 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.event import async_track_time_change
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_change,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -213,7 +218,12 @@ from .usage import (
     period_gallons,
     saved_gallons,
 )
-from .unit_guard import RAIN_ON_OFF_DOMAINS, audit_entry, sensor_unit
+from .unit_guard import (
+    RAIN_ON_OFF_DOMAINS,
+    audit_entry,
+    configured_unit_entities,
+    sensor_unit,
+)
 from .units import (
     depth_mm,
     humidity_percent,
@@ -232,6 +242,8 @@ from .units import (
 
 _LOGGER = logging.getLogger(__name__)
 UPDATE_INTERVAL = timedelta(hours=1)
+# Other integrations restore entities after this one. Don't judge units until then.
+UNIT_STARTUP_GRACE = timedelta(seconds=30)
 
 
 @dataclass
@@ -443,6 +455,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         self._forecast_probability: float | None = None
         self._forecast_has_probability = False
         self._open_unit_issues: set[str] = set()
+        self._units_ready = False
 
     @callback
     def async_track_plan_time(self) -> None:
@@ -455,6 +468,46 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
 
         self.config_entry.async_on_unload(
             async_track_time_change(self.hass, _at_plan_hour, hour=hour, minute=5)
+        )
+
+    @callback
+    def async_watch_units(self) -> None:
+        """Follow sensor states, and wait out startup before the first unit check.
+
+        A reload after Home Assistant is up checks immediately. A restart waits
+        until startup plus a short grace period, because Tempest, Flume, and
+        this integration's own sensors are still missing then.
+        """
+        entity_ids = configured_unit_entities(self.config_entry)
+        if entity_ids:
+
+            @callback
+            def _units_changed(_event: Event) -> None:
+                if self._units_ready:
+                    self._sync_unit_issues()
+
+            self.config_entry.async_on_unload(
+                async_track_state_change_event(self.hass, entity_ids, _units_changed)
+            )
+        if self.hass.is_running:
+            self._units_ready = True
+            return
+
+        @callback
+        def _ready(_now: datetime) -> None:
+            self._units_ready = True
+            self._sync_unit_issues()
+
+        @callback
+        def _started(_event: Event) -> None:
+            self.config_entry.async_on_unload(
+                async_call_later(
+                    self.hass, UNIT_STARTUP_GRACE.total_seconds(), _ready
+                )
+            )
+
+        self.config_entry.async_on_unload(
+            self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _started)
         )
 
     def _options(self) -> dict[str, Any]:
@@ -1247,6 +1300,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
 
     def _sync_unit_issues(self) -> None:
         """Open one repair per field with a bad unit, and clear it when fixed."""
+        if not self._units_ready:
+            return
         from homeassistant.helpers import issue_registry as ir
 
         bad, leave = audit_entry(self.hass, self.config_entry)
