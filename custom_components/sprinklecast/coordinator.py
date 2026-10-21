@@ -123,6 +123,7 @@ from .const import (
     CONF_FLOW_HIGH_ACTION,
     CONF_FLOW_HIGH_PCT,
     CONF_FLOW_IDLE_ACTION,
+    CONF_LEARN_FLOW_MINUTES,
     CONF_FLOW_IDLE_GPM,
     CONF_FLOW_LEARN_RUNS,
     CONF_FLOW_LOW_ACTION,
@@ -138,6 +139,7 @@ from .const import (
     FLOW_ACTION_STOP,
     FLOW_SCOPE_IRRIGATION,
     DEFAULT_FREEZE_SKIP_F,
+    DEFAULT_LEARN_FLOW_MINUTES,
     DEFAULT_MAX_RUN_MIN,
     DEFAULT_MOISTURE_KIND,
     DEFAULT_MOISTURE_MODE,
@@ -1132,6 +1134,83 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             raise HomeAssistantError("Sprinklecast executor is not ready.")
         await self.executor.start(jobs)
 
+    def learn_flow_minutes(self, minutes: float | None = None) -> float:
+        """Minutes for a learn-flow run. An explicit value wins, then the hub option."""
+        if minutes is not None:
+            return float(minutes)
+        stored = self._options().get(CONF_LEARN_FLOW_MINUTES, DEFAULT_LEARN_FLOW_MINUTES)
+        try:
+            value = float(stored)
+        except (TypeError, ValueError):
+            value = float(DEFAULT_LEARN_FLOW_MINUTES)
+        return value
+
+    async def async_learn_flow_rates(
+        self, zone_ids: list[str] | None, minutes: float | None = None
+    ) -> None:
+        """Run each selected zone and save the peak flow from the middle.
+
+        The default is 5 minutes, or the hub's learn-flow minutes. The clock
+        starts at the command. A cloud valve's open report is not the start.
+        This does not change the precipitation rate. Rain and the other safety
+        stops still apply. A second press while it is running is ignored.
+        """
+        if not self._options().get(CONF_FLOW_SENSOR):
+            raise HomeAssistantError(
+                "Learn flow rates needs a flow meter on the hub."
+            )
+        used = self.learn_flow_minutes(minutes)
+        if used <= 0:
+            raise HomeAssistantError("Learn-flow minutes must be greater than 0.")
+        chosen = self._catch_cup_zone_ids(zone_ids)
+        if not chosen:
+            raise HomeAssistantError("No enabled zone is available to learn flow.")
+        now = dt_util.now(self._timezone())
+        jobs: list[CycleJob] = []
+        skipped: list[str] = []
+        for zone_id in chosen:
+            subentry = self.config_entry.subentries.get(zone_id)
+            if subentry is None or subentry.subentry_type != SUBENTRY_ZONE:
+                raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
+            data = self._with_measured(dict(subentry.data), self.store.zone(zone_id))
+            entity_id = str(data.get(CONF_VALVE_ENTITY) or "")
+            if not entity_id or entity_id.startswith("simulation."):
+                skipped.append(f"{subentry.title}: no on/off entity")
+                continue
+            reason = self.live_skip(zone_id, True)
+            if reason:
+                skipped.append(f"{subentry.title}: {reason}")
+                await self._write_run(
+                    zone_id, minutes=0, net_mm=0, gallons=None, result=reason
+                )
+                continue
+            precip = _optional_float(data, CONF_PRECIPITATION_RATE) or 0.0
+            jobs.append(
+                self._cycle_job(
+                    zone_id=zone_id,
+                    name=subentry.title,
+                    data=data,
+                    start=None,
+                    minutes=used,
+                    net_mm=0.0,
+                    zone_net_mm=0.0,
+                    precip=precip,
+                    finish_by=None,
+                    marked_at=now,
+                    soak_after_min=0.0,
+                    manual=True,
+                    credit_bucket=False,
+                    uncapped=True,
+                    learn_flow=True,
+                )
+            )
+        if not jobs:
+            detail = "; ".join(skipped) or "No zone can learn a flow rate."
+            raise HomeAssistantError(detail)
+        if self.executor is None:
+            raise HomeAssistantError("Sprinklecast executor is not ready.")
+        await self.executor.start(jobs)
+
     def _catch_cup_zone_ids(self, zone_ids: list[str] | None) -> list[str]:
         """Explicit zones, or every enabled zone when the caller passed none."""
         if zone_ids is not None:
@@ -1304,6 +1383,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         result: str,
         gpm: float | None = None,
         catch_cup: bool = False,
+        learn_flow: bool = False,
     ) -> None:
         """Credit one finished cycle. Called by the executor outside the build lock."""
         alerts: list[dict[str, Any]] = []
@@ -1316,6 +1396,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 result=result,
                 gpm=gpm,
                 catch_cup=catch_cup,
+                learn_flow=learn_flow,
             )
             await self.store.async_save()
         for alert in alerts:
@@ -2358,6 +2439,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         gpm: float,
         *,
         catch_cup: bool = False,
+        learn_flow: bool = False,
         minutes: float = 0.0,
     ) -> list[dict[str, Any]]:
         """Learn this run and compare it with the saved baseline when one exists."""
@@ -2372,13 +2454,13 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         subentry = self.config_entry.subentries.get(zone_id)
         name = subentry.title if subentry is not None else zone_id
         _ = data
-        if catch_cup:
+        if catch_cup or learn_flow:
             self._store_learned(state, samples, gpm, minimum)
             state["last_run_gpm"] = round(gpm, 3)
             state["baseline_gpm"] = round(gpm, 3)
             state["baseline_gpm_at"] = now_iso
-            state["baseline_source"] = "catch_cup"
-            state["baseline_window"] = "steady"
+            state["baseline_source"] = "catch_cup" if catch_cup else "flow_test"
+            state["baseline_window"] = "steady" if catch_cup else "middle"
             # The test is the baseline, not one of the normal runs the trend counts.
             state["flow_history"] = []
             state["flow_alert"] = None
@@ -3274,6 +3356,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         credit_bucket: bool = True,
         uncapped: bool = False,
         catch_cup: bool = False,
+        learn_flow: bool = False,
     ) -> CycleJob:
         return CycleJob(
             zone_id=zone_id,
@@ -3296,6 +3379,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             credit_bucket=credit_bucket,
             uncapped=uncapped,
             catch_cup=catch_cup,
+            learn_flow=learn_flow,
         )
 
     async def _write_run(
@@ -3323,6 +3407,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         result: str,
         gpm: float | None = None,
         catch_cup: bool = False,
+        learn_flow: bool = False,
     ) -> list[dict[str, Any]]:
         state = self.store.zone(zone_id)
         subentry = self.config_entry.subentries.get(zone_id)
@@ -3366,6 +3451,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 data,
                 gpm,
                 catch_cup=catch_cup,
+                learn_flow=learn_flow,
                 minutes=minutes,
             )
         state["last_run"] = {

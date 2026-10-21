@@ -83,13 +83,13 @@ New entity: `calendar.<hub>_watering` (name **Watering**), for example `calendar
 
 Update to `v0.14.9` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
 
-Nothing is imported again. Config entry version stays 10. Setting several zones' catch-cup depth, soil water level, or adjustment at the same time saves each one. The hub does not reload between them. Restart after the update.
+Nothing is imported again. Config entry version stays 10. Setting several zones' catch-cup depth, soil water level, or adjustment at the same time saves each one. The hub does not reload between them. **Learn flow rates** runs each zone for 5 minutes by default (change Learn flow minutes on the hub). It saves the peak flow from the middle of that run. With a flow meter, timing follows the meter rising and falling. A valve entity that reports open later is not the start. Restart after the update.
 
 ### Already on Sprinklecast 0.14.7
 
 Update to `v0.14.9` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
 
-Nothing is imported again. Config entry version stays 10. A catch-cup or normal run measures flow while that zone's valve is actually open, after a short settle, instead of averaging the start and end of the scheduled clock. The catch-cup test waits for the valve to close and the meter to fall before the next zone, and each zone runs for 15 minutes of open time. A second press does not restart the test. Applied water is credited from the zone's current rate, then replaced when you enter the cup depth. If a catch-cup baseline was saved by an older version and recorder history is still there, it is recomputed on startup. Otherwise the number stays and a repair asks you to run the test again. **Flow trend** says the baseline is set and how many normal runs the trend still needs. Restart after the update.
+Nothing is imported again. Config entry version stays 10. A catch-cup or normal run measures flow while the meter is up, after a short settle, instead of averaging the start and end of the scheduled clock. A valve entity that reports open or closed later is only a fallback when there is no flow reading. The catch-cup test waits for the valve to close and the meter to fall before the next zone, and each zone runs for 15 minutes of open time. A second press does not restart the test. Applied water is credited from the zone's current rate, then replaced when you enter the cup depth. If a catch-cup baseline was saved by an older version and recorder history is still there, it is recomputed on startup. Otherwise the number stays and a repair asks you to run the test again. **Flow trend** says the baseline is set and how many normal runs the trend still needs. Restart after the update.
 
 ### Already on Sprinklecast 0.14.6
 

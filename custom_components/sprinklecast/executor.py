@@ -3,8 +3,11 @@
 Services are the generic Home Assistant ones: ``switch.turn_on`` /
 ``turn_off``, ``valve.open_valve`` / ``close_valve``, and
 ``input_boolean.turn_on`` / ``turn_off``. Hydrawise is never called.
-Each command is confirmed against the entity state and retried. A cycle's
-``finally`` turns the entity off, including when the task is cancelled.
+Without a flow meter, each command is confirmed against the entity state
+and retried. With a flow meter, the command is the clock: a cloud-polled
+valve can stay closed for minutes after water is moving, so that report
+does not gate the run. A cycle's ``finally`` turns the entity off,
+including when the task is cancelled.
 """
 
 from __future__ import annotations
@@ -21,9 +24,11 @@ from homeassistant.util import dt as dt_util
 from .flow import GALLONS_PER_INCH_SQFT
 from .flow_learn import DEFAULT_IDLE_GPM
 from .flow_window import (
+    OPEN_STATES,
     SAMPLE_SECONDS,
     VALVE_WAIT_TIMEOUT_SECONDS,
     FlowSample,
+    peak_middle_gpm,
     steady_gpm,
     zone_is_flowing,
     zone_is_quiet,
@@ -76,6 +81,7 @@ class CycleJob:
     credit_bucket: bool = True
     uncapped: bool = False
     catch_cup: bool = False
+    learn_flow: bool = False
 
 
 class WateringExecutor:
@@ -89,6 +95,7 @@ class WateringExecutor:
         self._pause: Callable[[float], Awaitable[None]] = asyncio.sleep
         self._task: asyncio.Task[None] | None = None
         self._catch_cup_active = False
+        self._learn_flow_active = False
         self._run_token = 0
         self._clock_base = dt_util.utcnow()
         self._clock_seconds = 0.0
@@ -130,25 +137,35 @@ class WateringExecutor:
         press used to stop the test and start it again.
         """
         catch_cup = bool(jobs) and all(job.catch_cup for job in jobs)
+        learn_flow = bool(jobs) and all(job.learn_flow for job in jobs)
         if catch_cup and self._catch_cup_active:
             _LOGGER.info(
                 "Catch-cup test is already running; ignoring another press"
             )
             return
+        if learn_flow and self._learn_flow_active:
+            _LOGGER.info(
+                "Learn flow rates is already running; ignoring another press"
+            )
+            return
         # Bump the token before stop() so the cancelled run does not clear
         # the flag this press just set.
-        if catch_cup:
+        if catch_cup or learn_flow:
             self._run_token += 1
-            self._catch_cup_active = True
+            self._catch_cup_active = catch_cup
+            self._learn_flow_active = learn_flow
         token = self._run_token
         await self.stop()
         if not jobs:
-            if catch_cup:
+            if catch_cup or learn_flow:
                 self._catch_cup_active = False
+                self._learn_flow_active = False
             return
-        if not catch_cup:
+        if not catch_cup and not learn_flow:
             self._run_token += 1
             token = self._run_token
+            self._catch_cup_active = False
+            self._learn_flow_active = False
         self._clock_base = dt_util.utcnow()
         self._clock_seconds = 0.0
         self._task = asyncio.create_task(self._run(jobs, token))
@@ -173,6 +190,7 @@ class WateringExecutor:
         finally:
             if token == self._run_token:
                 self._catch_cup_active = False
+                self._learn_flow_active = False
             self._sequence_finished()
 
     async def _run_jobs(
@@ -242,7 +260,11 @@ class WateringExecutor:
                 if minutes > room:
                     net_mm *= room / minutes
                     minutes = room
-            turned_on = await self._turn(job.entity_id, on=True)
+            # A flow meter is the proof the zone started. Do not wait for
+            # the valve entity to report open; that report lags the water.
+            turned_on = await self._turn(
+                job.entity_id, on=True, confirm=not job.flow_entity
+            )
             if not turned_on:
                 await self._report(
                     job, 0.0, 0.0, None, f"Could not turn on {job.entity_id}."
@@ -255,12 +277,19 @@ class WateringExecutor:
             self._poke()
             samples: list[FlowSample] = []
             try:
-                opened = await self._wait_until_flowing(job, samples)
-                open_minutes = 0.0
-                if opened:
-                    open_minutes = await self._hold_open(job, minutes, samples)
+                if job.flow_entity:
+                    # The command is the clock. The valve entity reports late.
+                    samples.append(self._take_sample(job))
+                    open_minutes = await self._hold_commanded(job, minutes, samples)
+                else:
+                    opened = await self._wait_until_flowing(job, samples)
+                    open_minutes = (
+                        await self._hold_open(job, minutes, samples) if opened else 0.0
+                    )
             finally:
-                await self._turn(job.entity_id, on=False)
+                await self._turn(
+                    job.entity_id, on=False, confirm=not job.flow_entity
+                )
                 if self.store.watering_entity == job.entity_id:
                     self.store.watering_entity = None
                 self.current_zone_id = None
@@ -272,15 +301,20 @@ class WateringExecutor:
             # waits until both have finished.
             await self._wait_until_quiet(job, samples)
             if open_minutes <= 0:
-                await self._report(
-                    job, 0.0, 0.0, None, f"Valve {job.entity_id} did not open."
-                )
+                if job.flow_entity:
+                    detail = f"No flow was seen for {job.entity_id}."
+                else:
+                    detail = f"Valve {job.entity_id} did not open."
+                await self._report(job, 0.0, 0.0, None, detail)
                 continue
             hub_used += open_minutes
             zone_used[job.zone_id] = zone_before + open_minutes
-            gpm = steady_gpm(samples, idle_gpm=self._idle_gpm())
+            if job.learn_flow:
+                gpm = peak_middle_gpm(samples, idle_gpm=self._idle_gpm())
+            else:
+                gpm = steady_gpm(samples, idle_gpm=self._idle_gpm())
             gallons = None if gpm is None else gpm * open_minutes
-            if job.catch_cup:
+            if job.catch_cup or job.learn_flow:
                 credited = self._rate_mm(job, open_minutes)
             else:
                 share = open_minutes / minutes if minutes else 1.0
@@ -309,21 +343,36 @@ class WateringExecutor:
         except (TypeError, ValueError):
             return DEFAULT_IDLE_GPM
 
-    def _take_sample(self, job: CycleJob) -> FlowSample:
+    def _take_sample(
+        self, job: CycleJob, previous: FlowSample | None = None
+    ) -> FlowSample:
+        """One sample. A rising volume total becomes gallons per minute."""
         state = self.hass.states.get(job.entity_id)
         valve = None if state is None else state.state
+        gallons = self._flow_gallons(job)
+        gpm = self._flow_gpm(job)
+        if (
+            gpm is None
+            and gallons is not None
+            and previous is not None
+            and previous.gallons is not None
+        ):
+            minutes = (self._clock() - previous.at).total_seconds() / 60.0
+            if minutes > 0 and gallons >= previous.gallons:
+                gpm = (gallons - previous.gallons) / minutes
         return FlowSample(
             at=self._clock(),
             valve=valve,
-            gpm=self._flow_gpm(job),
-            gallons=self._flow_gallons(job),
+            gpm=gpm,
+            gallons=gallons,
         )
 
     async def _wait_until_flowing(self, job: CycleJob, samples: list[FlowSample]) -> bool:
-        """Wait until this valve is open, or the meter rises while the valve is unknown."""
+        """Wait until the valve reports open. Used only when there is no flow meter."""
         waited = 0.0
         while True:
-            sample = self._take_sample(job)
+            previous = samples[-1] if samples else None
+            sample = self._take_sample(job, previous)
             samples.append(sample)
             if zone_is_flowing(sample.valve, sample.gpm, self._idle_gpm()):
                 return True
@@ -333,17 +382,50 @@ class WateringExecutor:
             await self._sleep(step)
             waited += step
 
+    async def _hold_commanded(
+        self, job: CycleJob, minutes: float, samples: list[FlowSample]
+    ) -> float:
+        """Keep the valve commanded on for ``minutes``, starting at the command.
+
+        Counting does not wait for the valve entity. Flow rising during this
+        hold is the measurement. No rise, and no valve-open report, means the
+        zone did not run.
+        """
+        elapsed = 0.0
+        target = max(0.0, minutes) * 60.0
+        idle = self._idle_gpm()
+        saw_flow = False
+        saw_valve = False
+        while elapsed < target - 0.25:
+            step = min(SAMPLE_SECONDS, target - elapsed)
+            await self._sleep(step)
+            elapsed += step
+            previous = samples[-1] if samples else None
+            sample = self._take_sample(job, previous)
+            samples.append(sample)
+            if sample.gpm is not None and sample.gpm > idle:
+                saw_flow = True
+            if sample.valve in OPEN_STATES:
+                saw_valve = True
+        if saw_flow or saw_valve:
+            return elapsed / 60.0
+        return 0.0
+
     async def _hold_open(
         self, job: CycleJob, minutes: float, samples: list[FlowSample]
     ) -> float:
-        """Keep the valve commanded on for ``minutes`` of actual open time."""
+        """Keep the valve commanded on for ``minutes`` of reported open time.
+
+        This is the fallback when the zone has no flow meter.
+        """
         open_seconds = 0.0
         target = max(0.0, minutes) * 60.0
         idle = self._idle_gpm()
         while open_seconds < target - 0.25:
             step = min(SAMPLE_SECONDS, target - open_seconds)
             await self._sleep(step)
-            sample = self._take_sample(job)
+            previous = samples[-1] if samples else None
+            sample = self._take_sample(job, previous)
             samples.append(sample)
             if zone_is_flowing(sample.valve, sample.gpm, idle):
                 open_seconds += step
@@ -357,7 +439,8 @@ class WateringExecutor:
         waited = 0.0
         idle = self._idle_gpm()
         while waited <= VALVE_WAIT_TIMEOUT_SECONDS:
-            sample = self._take_sample(job)
+            previous = samples[-1] if samples else None
+            sample = self._take_sample(job, previous)
             samples.append(sample)
             if zone_is_quiet(sample.valve, sample.gpm, idle):
                 return
@@ -483,13 +566,20 @@ class WateringExecutor:
             result=result,
             gpm=gpm,
             catch_cup=job.catch_cup,
+            learn_flow=job.learn_flow,
         )
 
     def _poke(self) -> None:
         if self.on_status is not None:
             self.on_status()
 
-    async def _turn(self, entity_id: str, *, on: bool) -> bool:
+    async def _turn(self, entity_id: str, *, on: bool, confirm: bool = True) -> bool:
+        """Send the on or off service.
+
+        ``confirm`` waits until the entity reports the new state. Leave it
+        false when a flow meter will decide whether water actually moved.
+        A failed service call is still retried.
+        """
         domain = entity_id.split(".", 1)[0]
         spec = _CONTROL.get(domain)
         if spec is None:
@@ -501,6 +591,7 @@ class WateringExecutor:
         service = spec[0] if on else spec[1]
         wanted = _ON_STATES[domain] if on else _OFF_STATES[domain]
         for attempt in range(1, _ATTEMPTS + 1):
+            failed = False
             try:
                 await self.hass.services.async_call(
                     domain,
@@ -509,11 +600,21 @@ class WateringExecutor:
                     blocking=True,
                 )
             except Exception as err:  # noqa: BLE001 - a failed command is logged and retried
+                failed = True
                 _LOGGER.error(
                     "Sprinklecast %s.%s failed for %s: %s", domain, service, entity_id, err
                 )
             state = self.hass.states.get(entity_id)
-            if state is not None and state.state in wanted:
+            reported = None if state is None else state.state
+            if state is not None and reported in wanted:
+                return True
+            if not confirm and not failed:
+                _LOGGER.debug(
+                    "Sprinklecast sent %s to %s; entity still reports %s",
+                    service,
+                    entity_id,
+                    reported,
+                )
                 return True
             _LOGGER.warning(
                 "Sprinklecast expected %s to be %s after %s (attempt %s of %s, state %s)",
@@ -522,7 +623,7 @@ class WateringExecutor:
                 service,
                 attempt,
                 _ATTEMPTS,
-                None if state is None else state.state,
+                reported,
             )
             if attempt < _ATTEMPTS:
                 await self._sleep(1)

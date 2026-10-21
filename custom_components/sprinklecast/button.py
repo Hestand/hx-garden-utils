@@ -18,7 +18,7 @@ async def async_setup_entry(
 ) -> None:
     """Create the catch-cup button, one run-now button per zone, and a week button."""
     coordinator = entry.runtime_data
-    async_add_entities([CatchCupTestButton(coordinator)])
+    async_add_entities([CatchCupTestButton(coordinator), LearnFlowButton(coordinator)])
     if entry.data.get(CONF_SIMULATION):
         async_add_entities([SimulateButton(coordinator)])
     for subentry in entry.subentries.values():
@@ -44,6 +44,22 @@ class CatchCupTestButton(SmartWaterHubEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Start the catch-cup sequence. Stop all watering cancels it."""
         await self.coordinator.async_run_catch_cup_test(None, 15)
+
+
+class LearnFlowButton(SmartWaterHubEntity, ButtonEntity):
+    """Run every enabled zone and save the peak flow from the middle."""
+
+    _attr_translation_key = "learn_flow"
+    _attr_icon = "mdi:speedometer"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_learn_flow"
+
+    async def async_press(self) -> None:
+        """Start the learn-flow sequence. Stop all watering cancels it."""
+        await self.coordinator.async_learn_flow_rates(None)
 
 
 class SimulateButton(SmartWaterHubEntity, ButtonEntity):

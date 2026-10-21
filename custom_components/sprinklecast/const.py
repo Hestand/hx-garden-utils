@@ -109,6 +109,7 @@ CONF_FLOW_IDLE_GPM = "flow_idle_gpm"
 CONF_FLOW_HIGH_ACTION = "flow_high_action"
 CONF_FLOW_LOW_ACTION = "flow_low_action"
 CONF_FLOW_IDLE_ACTION = "flow_idle_action"
+CONF_LEARN_FLOW_MINUTES = "learn_flow_minutes"
 CONF_COST_PER_1000_GAL = "cost_per_1000_gal"
 CONF_WEEKLY_BUDGET_GAL = "weekly_budget_gal"
 CONF_WEEKLY_SUMMARY = "weekly_summary"
@@ -132,6 +133,8 @@ DEFAULT_RECENT_RAIN_MM = 2.5
 # Valve-on minutes for one zone on one night. Soak time does not count.
 # The rest stays in the bucket. An optional hub total is off unless set.
 DEFAULT_MAX_RUN_MIN = 60
+# Learn flow rates runs each zone this long unless the hub option says otherwise.
+DEFAULT_LEARN_FLOW_MINUTES = 5
 
 DEFAULT_ELEVATION_M = 219.0
 # Kept so a stored 0.7 option still has a name during migration.
@@ -216,6 +219,7 @@ SERVICE_SUBMIT_AUDIT = "submit_audit"
 SERVICE_RUN_CATCH_CUP = "run_catch_cup_test"
 SERVICE_SET_CATCH_CUP = "set_catch_cup_result"
 SERVICE_SET_FLOW_BASELINE = "set_flow_baseline"
+SERVICE_LEARN_FLOW = "learn_flow_rates"
 
 SERVICES = (
     SERVICE_CALCULATE_PLAN,
@@ -236,6 +240,7 @@ SERVICES = (
     SERVICE_RUN_CATCH_CUP,
     SERVICE_SET_CATCH_CUP,
     SERVICE_SET_FLOW_BASELINE,
+    SERVICE_LEARN_FLOW,
 )
 
 FLOW_ACTION_NOTIFY = "notify"

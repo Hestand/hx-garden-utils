@@ -56,6 +56,7 @@ from .const import (
     CONF_FLOW_HIGH_ACTION,
     CONF_FLOW_HIGH_PCT,
     CONF_FLOW_IDLE_ACTION,
+    CONF_LEARN_FLOW_MINUTES,
     CONF_FLOW_IDLE_GPM,
     CONF_FLOW_KIND,
     CONF_FLOW_LEARN_RUNS,
@@ -132,6 +133,7 @@ from .const import (
     DEFAULT_FREEZE_SKIP_F,
     DEFAULT_MAX_RUN_MIN,
     DEFAULT_FLOW_KIND,
+    DEFAULT_LEARN_FLOW_MINUTES,
     FLOW_KIND_RATE,
     DEFAULT_FLOW_LEAK_RATIO,
     DEFAULT_FLOW_LOW_RATIO,
@@ -531,7 +533,12 @@ def _location_fields() -> dict[Any, Any]:
     }
 
 
-_FLOW_KEYS = (CONF_FLOW_SENSOR, CONF_FLOW_KIND, CONF_FLOW_SCOPE)
+_FLOW_KEYS = (
+    CONF_FLOW_SENSOR,
+    CONF_FLOW_KIND,
+    CONF_FLOW_SCOPE,
+    CONF_LEARN_FLOW_MINUTES,
+)
 _FLOW_IDLE_KEYS = (CONF_FLOW_IDLE_GPM, CONF_FLOW_IDLE_ACTION)
 
 
@@ -573,6 +580,9 @@ def _flow_fields(*, show_idle: bool) -> dict[Any, Any]:
             FLOW_KINDS, "flow_kind"
         ),
         vol.Optional(CONF_FLOW_SCOPE): _select(FLOW_SCOPES, "flow_scope"),
+        vol.Required(
+            CONF_LEARN_FLOW_MINUTES, default=DEFAULT_LEARN_FLOW_MINUTES
+        ): _number(1, 60, 1, "min"),
     }
     if show_idle:
         fields[vol.Required(CONF_FLOW_IDLE_GPM, default=DEFAULT_IDLE_GPM)] = _number(

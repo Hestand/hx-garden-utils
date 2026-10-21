@@ -44,6 +44,7 @@ from .const import (
     SERVICE_RESET_LEARNING,
     SERVICE_SIMULATE,
     SERVICE_SKIP_ZONE,
+    SERVICE_LEARN_FLOW,
     SERVICE_RUN_CATCH_CUP,
     SERVICE_SET_CATCH_CUP,
     SERVICE_SET_FLOW_BASELINE,
@@ -554,6 +555,36 @@ def async_setup_services(hass: HomeAssistant) -> None:
         ),
     )
 
+    async def learn_flow(call: ServiceCall) -> None:
+        """Run selected zones and save each peak flow from the middle of the run."""
+        raw = call.data.get("minutes")
+        minutes = None if raw is None else float(raw)
+        hub = call.data.get("hub")
+        names = _as_list(call.data.get("zone"))
+        grouped: dict[Any, list[str]] = {}
+        if names:
+            for name in names:
+                _entry, coordinator, zone_id = _find_zone(hass, name, hub)
+                grouped.setdefault(coordinator, []).append(zone_id)
+        else:
+            targets = [
+                coordinator
+                for entry, coordinator in _coordinators(hass)
+                if _hub_matches(entry, hub)
+            ]
+            if not targets:
+                raise ServiceValidationError("No Sprinklecast hub is loaded.")
+            if len(targets) > 1:
+                raise ServiceValidationError(
+                    "More than one Sprinklecast hub is loaded. Pass the hub name or a zone."
+                )
+            grouped[targets[0]] = []
+        for coordinator, zone_ids in grouped.items():
+            try:
+                await coordinator.async_learn_flow_rates(zone_ids or None, minutes)
+            except HomeAssistantError as err:
+                raise ServiceValidationError(str(err)) from err
+
     async def run_catch_cup(call: ServiceCall) -> None:
         """Run selected zones one at a time for a catch-cup test."""
         minutes = float(call.data.get("minutes", 15))
@@ -620,6 +651,19 @@ def async_setup_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError("; ".join(errors))
 
     minutes = vol.All(vol.Coerce(float), vol.Range(min=1, max=180))
+    learn_minutes = vol.All(vol.Coerce(float), vol.Range(min=1, max=60))
+    _register(
+        DOMAIN,
+        SERVICE_LEARN_FLOW,
+        learn_flow,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Optional("zone"): vol.Any(str, [str]),
+                vol.Optional("minutes"): learn_minutes,
+            }
+        ),
+    )
     _register(
         DOMAIN,
         SERVICE_RUN_CATCH_CUP,

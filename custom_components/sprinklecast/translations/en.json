@@ -63,14 +63,16 @@
               "flow_kind": "Flow sensor kind",
               "flow_scope": "What this meter measures",
               "flow_idle_gpm": "Flow while nothing is running",
-              "flow_idle_action": "When flow is seen with every zone off"
+              "flow_idle_action": "When flow is seen with every zone off",
+              "learn_flow_minutes": "Learn flow minutes"
             },
             "data_description": {
               "flow_sensor": "Optional. One sensor for every zone. Volume total or a flow rate. Water used while a zone is running is counted for that zone.\nCommon names: Flow rate, Water flow, Flow, Water total, Water usage, Irrigation flow (Flume, Moen Flo, Phyn, Rachio, Hydrawise, Ecowitt).\nDevice class: water, volume, or volume_flow_rate.\nUnits: gal, gallon, gallons, L, liter, liters, litre, litres, m³, m3, m^3, ft³, ft3, ft^3, cuft for a volume total (non-gallon units are converted automatically). gal/min, gpm, L/min, lpm, m³/h, m3/h, m^3/h, gal/h, gph for a flow rate (non-gal/min units are converted automatically). A missing unit or any other unit shows a warning and this sensor is ignored. Set Flow sensor kind to match.",
               "flow_kind": "Volume total counts up. Flow rate is gallons or liters per minute.",
               "flow_scope": "Required when a flow sensor is set. Whole-home does not alert while the house is using water. Irrigation-only alerts when water moves and no zone is running.",
               "flow_idle_gpm": "Shown only for an irrigation-only meter. Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on.",
-              "flow_idle_action": "Notify only, or stop watering and skip every zone until you reset flow learning. Hidden for a whole-home meter."
+              "flow_idle_action": "Notify only, or stop watering and skip every zone until you reset flow learning. Hidden for a whole-home meter.",
+              "learn_flow_minutes": "How long each zone runs for Learn flow rates. Default 5 minutes. The rate saved is the peak flow in the middle of that run."
             }
           },
           "location": {
@@ -395,14 +397,16 @@
               "flow_kind": "Flow sensor kind",
               "flow_scope": "What this meter measures",
               "flow_idle_gpm": "Flow while nothing is running",
-              "flow_idle_action": "When flow is seen with every zone off"
+              "flow_idle_action": "When flow is seen with every zone off",
+              "learn_flow_minutes": "Learn flow minutes"
             },
             "data_description": {
               "flow_sensor": "Optional. One sensor for every zone. Volume total or a flow rate. Water used while a zone is running is counted for that zone.\nCommon names: Flow rate, Water flow, Flow, Water total, Water usage, Irrigation flow (Flume, Moen Flo, Phyn, Rachio, Hydrawise, Ecowitt).\nDevice class: water, volume, or volume_flow_rate.\nUnits: gal, gallon, gallons, L, liter, liters, litre, litres, m³, m3, m^3, ft³, ft3, ft^3, cuft for a volume total (non-gallon units are converted automatically). gal/min, gpm, L/min, lpm, m³/h, m3/h, m^3/h, gal/h, gph for a flow rate (non-gal/min units are converted automatically). A missing unit or any other unit shows a warning and this sensor is ignored. Set Flow sensor kind to match.",
               "flow_kind": "Volume total counts up. Flow rate is gallons or liters per minute.",
               "flow_scope": "Required when a flow sensor is set. Whole-home does not alert while the house is using water. Irrigation-only alerts when water moves and no zone is running.",
               "flow_idle_gpm": "Shown only for an irrigation-only meter. Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on.",
-              "flow_idle_action": "Notify only, or stop watering and skip every zone until you reset flow learning. Hidden for a whole-home meter."
+              "flow_idle_action": "Notify only, or stop watering and skip every zone until you reset flow learning. Hidden for a whole-home meter.",
+              "learn_flow_minutes": "How long each zone runs for Learn flow rates. Default 5 minutes. The rate saved is the peak flow in the middle of that run."
             }
           },
           "location": {
@@ -863,6 +867,9 @@
       "catch_cup_test": {
         "name": "Run catch-cup test"
       },
+      "learn_flow": {
+        "name": "Learn flow rates"
+      },
       "simulate": {
         "name": "Run simulation"
       }
@@ -925,6 +932,10 @@
     "reset_flow_learning": {
       "name": "Reset flow learning",
       "description": "Clear learned flow, the flow alert, and a skip that is waiting for reset. The baseline stays unless clear baseline is on."
+    },
+    "learn_flow_rates": {
+      "name": "Learn flow rates",
+      "description": "Run each selected zone for a few minutes and save the peak flow from the middle. Default is the hub's learn-flow minutes, or 5. Does not open a valve until you press it. Does not change the precipitation rate."
     },
     "run_catch_cup_test": {
       "name": "Run catch-cup test",
