@@ -19,6 +19,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -35,12 +36,26 @@ from .units import mm_to_inches
 from .week_plan import exact_next_text
 
 
-def _drop_sensor(hass: HomeAssistant, unique_id: str) -> None:
+def _drop_sensor(hass: HomeAssistant, unique_id: str) -> bool:
     """Remove a sensor that no longer has a moisture sensor or a flow meter."""
     registry = er.async_get(hass)
     entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
-    if entity_id is not None:
-        registry.async_remove(entity_id)
+    if entity_id is None:
+        return False
+    registry.async_remove(entity_id)
+    return True
+
+
+def _note_flow_check_replaced(hass: HomeAssistant, entry_id: str) -> None:
+    """One repair when the old Flow check sensor was actually removed."""
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        f"flow_check_replaced_{entry_id}",
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="flow_check_replaced",
+    )
 
 
 async def async_setup_entry(
@@ -73,6 +88,7 @@ async def async_setup_entry(
     if entry.data.get(CONF_SIMULATION):
         hub_sensors.append(SimulationSensor(coordinator))
     async_add_entities(hub_sensors)
+    replaced_flow_check = False
     for subentry in entry.subentries.values():
         if subentry.subentry_type != SUBENTRY_ZONE:
             continue
@@ -94,10 +110,11 @@ async def async_setup_entry(
             zone_sensors.append(MoistureSensor(coordinator, zone_id))
         else:
             _drop_sensor(hass, f"{prefix}_moisture")
+        if _drop_sensor(hass, f"{prefix}_flow"):
+            replaced_flow_check = True
         if entry.options.get(CONF_FLOW_SENSOR):
             zone_sensors.extend(
                 [
-                    FlowSensor(coordinator, zone_id),
                     LearnedGpmSensor(coordinator, zone_id),
                     LastRunGpmSensor(coordinator, zone_id),
                     BaselineFlowSensor(coordinator, zone_id),
@@ -107,7 +124,6 @@ async def async_setup_entry(
             )
         else:
             for suffix in (
-                "flow",
                 "learned_gpm",
                 "last_run_gpm",
                 "baseline_flow",
@@ -116,6 +132,8 @@ async def async_setup_entry(
             ):
                 _drop_sensor(hass, f"{prefix}_{suffix}")
         async_add_entities(zone_sensors, config_subentry_id=zone_id)
+    if replaced_flow_check:
+        _note_flow_check_replaced(hass, entry.entry_id)
 
 
 class TonightPlanSensor(SmartWaterHubEntity, SensorEntity):
@@ -536,36 +554,6 @@ class ZonePlanSensor(_ZoneSensor):
             "preset_efficiency": zone.preset_efficiency,
             "du_lq": zone.du_lq,
             "precipitation_rate_in_hr": zone.precipitation_rate_in_hr,
-        }
-
-
-class FlowSensor(_ZoneSensor):
-    """Delivered volume versus the plan. Status only; nothing is closed."""
-
-    _attr_translation_key = "flow"
-    _attr_icon = "mdi:water-pump"
-
-    def __init__(self, coordinator, zone_id: str) -> None:
-        """Create the flow sensor."""
-        super().__init__(coordinator, zone_id, "flow")
-
-    @property
-    def native_value(self) -> str | None:
-        """Return pending, ok, low_flow, leak, no_data, or not_configured."""
-        zone = self._zone()
-        if zone is None:
-            return None
-        return zone.flow_status
-
-    @property
-    def extra_state_attributes(self) -> dict[str, object]:
-        """Gallons observed and gallons the plan expected."""
-        zone = self._zone()
-        if zone is None:
-            return {}
-        return {
-            "delivered_gal": round(zone.flow_delivered_gal, 2),
-            "expected_gal": zone.flow_expected_gal,
         }
 
 

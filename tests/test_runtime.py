@@ -162,6 +162,7 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
     assert by_uid[f"{entry.entry_id}_{zone_id}_last_run"].entity_category is None
     assert by_uid[f"{entry.entry_id}_water_use"].entity_category is None
     assert f"{entry.entry_id}_{zone_id}_flow" not in unique_ids
+    assert f"{entry.entry_id}_{zone_id}_flow_problem" not in unique_ids
     assert f"{entry.entry_id}_{zone_id}_moisture" not in unique_ids
     assert f"{entry.entry_id}_{zone_id}_learned_gpm" not in unique_ids
     assert f"{entry.entry_id}_{zone_id}_last_run_gpm" not in unique_ids

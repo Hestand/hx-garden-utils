@@ -252,7 +252,14 @@ EVENT_BUDGET_ALERT = "smart_water_budget_alert"
 EVENT_WEEKLY_SUMMARY = "smart_water_weekly_summary"
 EVENT_FREEZE_ALERT = "smart_water_freeze_alert"
 
-PLATFORMS: list[str] = ["sensor", "switch", "number", "button", "calendar"]
+PLATFORMS: list[str] = [
+    "sensor",
+    "binary_sensor",
+    "switch",
+    "number",
+    "button",
+    "calendar",
+]
 
 # FAO-56 ignores daily rain below about 0.2 × ET0 (Chapter 8).
 RAIN_IGNORE_FRACTION_OF_ET0 = 0.2

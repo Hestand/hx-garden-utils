@@ -211,6 +211,7 @@ class SmartWaterCard extends HTMLElement {
       reason: planAttrs.reason || (planState && planState.state) || "",
       scheduled: planState && planState.state === "scheduled",
       last: lastState && lastState.attributes ? lastState.attributes : null,
+      flowProblem: this._flowProblem(entities, hass),
       source: attrs.precip_source,
       rate: attrs.precipitation_rate_in_hr,
       preset: attrs.preset_precip_in_hr,
@@ -223,6 +224,18 @@ class SmartWaterCard extends HTMLElement {
 
   _byKey(entries, key) {
     return entries.find((entry) => entry.translation_key === key);
+  }
+
+  _flowProblem(entities, hass) {
+    const entity = this._byKey(entities, "flow_problem");
+    if (!entity) {
+      return null;
+    }
+    const state = hass.states[entity.entity_id];
+    if (!state || state.state !== "on") {
+      return null;
+    }
+    return state.attributes || {};
   }
 
   _full(attrs) {
@@ -492,6 +505,12 @@ class SmartWaterCard extends HTMLElement {
       : "No run yet";
     detail.textContent = `${next}. ${last}.`;
     box.append(row, bar, detail);
+    if (zone.flowProblem) {
+      const problem = document.createElement("div");
+      problem.className = "sw-alert";
+      problem.textContent = `Flow problem. ${zone.flowProblem.reason || "Outside the baseline."}`;
+      box.append(problem);
+    }
     if (zone.source === "measured" && zone.rate != null) {
       const measured = document.createElement("div");
       measured.className = "sw-muted";

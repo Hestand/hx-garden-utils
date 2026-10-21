@@ -83,7 +83,7 @@ New entity: `calendar.<hub>_watering` (name **Watering**), for example `calendar
 
 Update to `v0.14.9` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
 
-Nothing is imported again. Config entry version stays 10. Setting several zones' catch-cup depth, soil water level, or adjustment at the same time saves each one. The hub does not reload between them. **Learn flow rates** runs each zone for 5 minutes by default (change Learn flow minutes on the hub). It saves the peak flow from the middle of that run. With a flow meter, timing follows the meter rising and falling. A valve entity that reports open later is not the start. Restart after the update.
+Nothing is imported again. Config entry version stays 10. Setting several zones' catch-cup depth, soil water level, or adjustment at the same time saves each one. The hub does not reload between them. **Learn flow rates** runs each zone for 5 minutes by default (change Learn flow minutes on the hub). It saves the peak flow from the middle of that run. With a flow meter, timing follows the meter rising and falling. A valve entity that reports open later is not the start. **Flow check** is replaced by **Flow problem** (off is normal, on is outside the saved baseline). With no baseline yet it stays off, and a restart keeps the last result. A repair notes that the old sensor was removed. Restart after the update.
 
 ### Already on Sprinklecast 0.14.7
 
@@ -452,7 +452,7 @@ High flow and low flow are **Notify only** or **Stop and skip until reset**. Not
 
 After you change nozzles, run the catch-cup test again, or call `sprinklecast.set_flow_baseline`. That replaces the baseline and clears the trend history so the old nozzles are not the comparison.
 
-Sensors, only when a hub flow meter is set: **Flow check**, **Learned flow rate**, **Last flow rate**, **Baseline flow**, **Flow vs baseline** (percent), and **Flow trend** (percent). Flow check can read `learning`, `ok`, `high_flow`, `low_flow`, or `main_leak`. With no area, gallons use the learned rate once it exists. An entered rate still wins over flow and area. Area still wins over GPM for the gallon estimate.
+Sensors, only when a hub flow meter is set: **Flow problem** (a problem binary sensor: off is normal, on means the last run is outside the high/low band versus the saved baseline, or the recent trend has drifted), **Learned flow rate**, **Last flow rate**, **Baseline flow**, **Flow vs baseline** (percent), and **Flow trend** (percent). Flow problem stays off until a baseline exists, including when only the learned rate is known. Its attributes carry the last run, the baseline, the percent difference, the reason, and the high and low percents. The last on/off result stays across a restart. With no area, gallons use the learned rate once it exists. An entered rate still wins over flow and area. Area still wins over GPM for the gallon estimate.
 
 ## Water use
 
@@ -521,7 +521,7 @@ A zone is usable when Home Assistant already exposes it as a valve, switch, or i
 
 ## Entities
 
-Per zone, on the device page: soil water (percent full, read-only), **Soil water level** (a number, 0–100%, step 1), **Catch-cup depth** (a number, inches or millimeters), water needed, next watering, why this plan, today's run, last run, plant activity, water used, water saved, a watering-amount number (0–300%), a run-now button, and an enabled switch. Setting Soil water level writes the water still needed as that percent of the water the soil can hold, saves it, and rebuilds the plan. The value you set is today's soil water. The next plan hour applies the following day's water loss. Catch-cup depth stores the measured average and the date, minutes, and rate as attributes. The watering point is diagnostic. Soil moisture level is diagnostic and exists only when that zone has a moisture sensor. Flow check, learned flow rate, last flow rate, baseline flow, flow vs baseline, and flow trend exist only when the hub has a flow meter.
+Per zone, on the device page: soil water (percent full, read-only), **Soil water level** (a number, 0–100%, step 1), **Catch-cup depth** (a number, inches or millimeters), water needed, next watering, why this plan, today's run, last run, plant activity, water used, water saved, a watering-amount number (0–300%), a run-now button, and an enabled switch. Setting Soil water level writes the water still needed as that percent of the water the soil can hold, saves it, and rebuilds the plan. The value you set is today's soil water. The next plan hour applies the following day's water loss. Catch-cup depth stores the measured average and the date, minutes, and rate as attributes. The watering point is diagnostic. Soil moisture level is diagnostic and exists only when that zone has a moisture sensor. Flow problem, learned flow rate, last flow rate, baseline flow, flow vs baseline, and flow trend exist only when the hub has a flow meter.
 
 The hub has **Run catch-cup test**. It runs every enabled zone, one at a time, for 15 minutes.
 

@@ -841,6 +841,11 @@
         "name": "Water cost"
       }
     },
+    "binary_sensor": {
+      "flow_problem": {
+        "name": "Flow problem"
+      }
+    },
     "switch": {
       "master_auto": {
         "name": "Automatic watering"
@@ -966,6 +971,10 @@
     "flow_alert": {
       "title": "Flow alert for {name}",
       "description": "{detail} Reset flow learning when the zone should run again. The baseline stays unless you clear it."
+    },
+    "flow_check_replaced": {
+      "title": "Flow check is now Flow problem",
+      "description": "The old Flow check sensor was removed. Each zone now has Flow problem, a problem sensor. Off is normal. On means the last run or the recent trend is outside the saved baseline. With no baseline yet it stays off, and the reason is on the sensor. The last result stays across a restart."
     },
     "catch_cup_depths": {
       "title": "Enter catch-cup depths",
