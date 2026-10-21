@@ -31,6 +31,9 @@ _ATTRIBUTE_KEYS = (
     "reason",
     "high_pct",
     "low_pct",
+    "trend_status",
+    "trend_pct",
+    "trend",
 )
 
 
@@ -115,6 +118,9 @@ class FlowProblemBinarySensor(SmartWaterZoneEntity, RestoreEntity, BinarySensorE
             "reason": reason,
             "high_pct": high,
             "low_pct": low,
+            "trend_status": zone.flow_trend_status,
+            "trend_pct": zone.flow_trend_pct,
+            "trend": zone.flow_trend_detail,
         }
 
     def _band(self) -> tuple[float, float]:

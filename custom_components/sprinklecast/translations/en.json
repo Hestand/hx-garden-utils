@@ -816,20 +816,14 @@
       "dormancy": {
         "name": "Plant activity"
       },
-      "learned_gpm": {
-        "name": "Learned flow rate"
-      },
       "last_run_gpm": {
-        "name": "Last flow rate"
+        "name": "Last run flow"
       },
       "baseline_flow": {
         "name": "Baseline flow"
       },
       "flow_vs_baseline": {
         "name": "Flow vs baseline"
-      },
-      "flow_trend": {
-        "name": "Flow trend"
       },
       "water_use": {
         "name": "Water used"
@@ -975,6 +969,10 @@
     "flow_check_replaced": {
       "title": "Flow check is now Flow problem",
       "description": "The old Flow check sensor was removed. Each zone now has Flow problem, a problem sensor. Off is normal. On means the last run or the recent trend is outside the saved baseline. With no baseline yet it stays off, and the reason is on the sensor. The last result stays across a restart."
+    },
+    "flow_diagnostics_removed": {
+      "title": "Extra flow sensors were removed",
+      "description": "Learned flow and Flow trend are no longer separate sensors. Baseline flow is the expected rate: the catch-cup or saved baseline, or the rate learned from normal runs when no baseline is saved (source learned). Last run flow and Flow vs baseline stay. The trend status, drift percent, and sentence are attributes on Flow problem."
     },
     "catch_cup_depths": {
       "title": "Enter catch-cup depths",

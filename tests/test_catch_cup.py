@@ -333,9 +333,16 @@ async def test_metered_run_saves_baseline_and_alerts_against_it(
     assert reloaded.zones["front"]["baseline_gpm"] == pytest.approx(1.0)
 
     registry = er.async_get(hass)
-    for suffix in ("baseline_flow", "flow_vs_baseline", "flow_trend"):
+    for suffix in ("baseline_flow", "flow_vs_baseline", "last_run_gpm"):
         assert registry.async_get_entity_id(
             "sensor", DOMAIN, f"{entry.entry_id}_front_{suffix}"
+        )
+    for suffix in ("learned_gpm", "flow_trend"):
+        assert (
+            registry.async_get_entity_id(
+                "sensor", DOMAIN, f"{entry.entry_id}_front_{suffix}"
+            )
+            is None
         )
     baseline = hass.states.get(
         registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_front_baseline_flow")
@@ -379,13 +386,17 @@ async def test_trend_alerts_when_the_median_drifts_and_a_single_run_does_not(
     assert coordinator.store.zone("front")["baseline_source"] == "manual"
     assert coordinator.store.zone("front")["flow_history"] == []
     registry = er.async_get(hass)
-    trend_id = registry.async_get_entity_id(
-        "sensor", DOMAIN, f"{entry.entry_id}_front_flow_trend"
+    problem_id = registry.async_get_entity_id(
+        "binary_sensor", DOMAIN, f"{entry.entry_id}_front_flow_problem"
     )
-    trend = hass.states.get(trend_id)
-    assert trend is not None
-    assert trend.state == "Baseline is set at 10.00 gal/min. Trend needs 5 normal runs (0 so far)."
-    assert trend.attributes["status"] == "learning"
+    problem = hass.states.get(problem_id)
+    assert problem is not None
+    assert problem.state == "off"
+    assert (
+        problem.attributes["trend"]
+        == "Baseline is set at 10.00 gal/min. Trend needs 5 normal runs (0 so far)."
+    )
+    assert problem.attributes["trend_status"] == "learning"
     for _ in range(5):
         await coordinator.async_credit_cycle(
             zone_id="front", minutes=10, net_mm=1, gallons=112, result="ok", gpm=11.2

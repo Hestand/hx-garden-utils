@@ -103,6 +103,18 @@ async def test_flow_problem_uses_the_baseline_and_survives_reload(
         config_entry=entry,
         original_name="Flow check",
     )
+    for suffix, name in (
+        ("learned_gpm", "Learned flow rate"),
+        ("flow_trend", "Flow trend"),
+    ):
+        registry.async_get_or_create(
+            "sensor",
+            DOMAIN,
+            f"{entry.entry_id}_bed_{suffix}",
+            suggested_object_id=f"bed_{suffix}",
+            config_entry=entry,
+            original_name=name,
+        )
     store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
     high = [_run(12.0, f"2026-10-1{index}T12:00:00+00:00") for index in range(5)]
     await store.async_save(
@@ -152,15 +164,34 @@ async def test_flow_problem_uses_the_baseline_and_survives_reload(
     assert side.state == "on"
     assert side.attributes["reason"] == "Recent runs are above the baseline"
     assert side.attributes["percent_difference"] == pytest.approx(10.0)
-    assert (
-        registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_bed_flow")
-        is None
+    assert side.attributes["trend_status"] == "high_trend"
+    assert side.attributes["trend_pct"] == pytest.approx(20.0)
+    assert side.attributes["trend"] == (
+        "Baseline is set at 10.00 gal/min. Recent runs are above it."
     )
+    baseline = _sensor(hass, entry.entry_id, "bed", "baseline_flow")
+    assert float(baseline.state) == pytest.approx(10.0)
+    assert baseline.attributes["source"] == "learned"
+    front_base = _sensor(hass, entry.entry_id, "front", "baseline_flow")
+    assert float(front_base.state) == pytest.approx(10.0)
+    assert front_base.attributes["source"] == "catch_cup"
+    for suffix in ("flow", "learned_gpm", "flow_trend"):
+        assert (
+            registry.async_get_entity_id(
+                "sensor", DOMAIN, f"{entry.entry_id}_bed_{suffix}"
+            )
+            is None
+        )
     issue = ir.async_get(hass).async_get_issue(
         DOMAIN, f"flow_check_replaced_{entry.entry_id}"
     )
     assert issue is not None
     assert issue.translation_key == "flow_check_replaced"
+    removed = ir.async_get(hass).async_get_issue(
+        DOMAIN, f"flow_diagnostics_removed_{entry.entry_id}"
+    )
+    assert removed is not None
+    assert removed.translation_key == "flow_diagnostics_removed"
 
     await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
@@ -188,13 +219,27 @@ async def test_flow_problem_does_not_open_a_repair_without_the_old_sensor(
         )
         is None
     )
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, f"flow_diagnostics_removed_{entry.entry_id}"
+        )
+        is None
+    )
     assert _binary(hass, entry.entry_id, "bed").state == "off"
 
 
 def _binary(hass: HomeAssistant, entry_id: str, zone_id: str):
+    return _entity(hass, "binary_sensor", entry_id, zone_id, "flow_problem")
+
+
+def _sensor(hass: HomeAssistant, entry_id: str, zone_id: str, suffix: str):
+    return _entity(hass, "sensor", entry_id, zone_id, suffix)
+
+
+def _entity(hass: HomeAssistant, domain: str, entry_id: str, zone_id: str, suffix: str):
     registry = er.async_get(hass)
     entity_id = registry.async_get_entity_id(
-        "binary_sensor", DOMAIN, f"{entry_id}_{zone_id}_flow_problem"
+        domain, DOMAIN, f"{entry_id}_{zone_id}_{suffix}"
     )
     assert entity_id
     state = hass.states.get(entity_id)
