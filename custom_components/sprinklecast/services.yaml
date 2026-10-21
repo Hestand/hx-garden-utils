@@ -345,15 +345,15 @@ learn_flow_rates:
   description: >-
     Run each selected zone once and save the peak gallons per minute from the
     middle of the run as that zone's baseline. Empty minutes uses the hub
-    setting, which defaults to 1 minute (60 seconds). The clock starts when
-    the valve reports open or the flow meter rises, not when the command is
-    sent. If the meter updates slowly, the zone stays on until two readings
-    from the middle are captured. One zone at a time, after the previous
-    valve reports closed and the meter is near zero. No flow within the wait
-    fails that zone. Rain, freeze, wind, and a wet soil sensor still stop a
-    zone. Leave the zone empty to run every enabled zone. This does not
-    change the precipitation rate. Stop all watering cancels it. A second
-    press while it is running is ignored.
+    setting, which defaults to 5 minutes. The clock starts when the flow
+    meter rises, not when the command is sent and not when the valve entity
+    reports open. If the meter updates slowly, the zone stays on until two
+    readings from the middle are captured. One zone at a time, after the
+    previous zone's meter falls near zero. The valve report can still say
+    open. No flow within the wait fails that zone. Rain, freeze, wind, and
+    a wet soil sensor still stop a zone. Leave the zone empty to run every
+    enabled zone. This does not change the precipitation rate. Stop all
+    watering cancels it. A second press while it is running is ignored.
   fields:
     hub:
       name: Hub
@@ -367,7 +367,7 @@ learn_flow_rates:
         text:
     minutes:
       name: Minutes
-      description: Minimum minutes after flow or the valve is confirmed. Empty uses the hub's learn-flow minutes, or 1.
+      description: Minimum minutes after the meter rises. Empty uses the hub's learn-flow minutes, or 5.
       selector:
         number:
           min: 1

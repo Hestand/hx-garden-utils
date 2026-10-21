@@ -1,11 +1,11 @@
 """Flow for the minutes a zone is actually running.
 
 A cloud-polled valve entity can say closed for minutes after water is already
-moving, and say open only after the meter has been up. That report is lag,
-not the valve itself. When a flow reading exists, the window starts when the
-meter rises and ends when it falls. The valve entity is the fallback when
-the meter has no reading, and a sanity check so another zone's reported-open
-period is not mixed in.
+moving, and say open only after the meter has fallen. That report is lag,
+not the valve itself. When a flow sensor is configured, the window starts
+when the meter rises and ends when it falls. The valve entity is the fallback
+only when the zone has no flow sensor. Another zone's reported-open period
+is still left out so two valves are not mixed.
 
 Learn-flow uses the peak in the middle third of that window. A catch-cup or
 normal run still uses the median after a short settle, on the same edges.
@@ -29,7 +29,6 @@ LEARN_EXTRA_SECONDS = 180.0
 VALVE_WAIT_TIMEOUT_SECONDS = 300.0
 
 OPEN_STATES = frozenset({"open", "on"})
-CLOSED_STATES = frozenset({"closed", "off"})
 # Command accepted, water not moving yet. Not an open valve.
 TRANSITIONAL_STATES = frozenset({"opening", "closing"})
 
@@ -46,63 +45,65 @@ class FlowSample:
     meter_at: datetime | None = None
 
 
-def zone_is_flowing(valve: str | None, gpm: float | None, idle_gpm: float) -> bool:
-    """True when the meter is up, or the valve says open and the meter is absent.
+def zone_is_flowing(
+    valve: str | None,
+    gpm: float | None,
+    idle_gpm: float,
+    *,
+    metered: bool = False,
+) -> bool:
+    """True when this zone's water is moving.
 
-    A high reading while the valve entity still says closed or opening is this
-    zone once it has been commanded on. The entity has not caught up yet.
+    A configured flow sensor decides, including a high reading while the valve
+    entity still says closed. A missing reading does not fall through to that
+    entity. With no flow sensor, the valve report is the fallback.
     """
     if gpm is not None:
         return gpm > idle_gpm
+    if metered:
+        return False
     return valve in OPEN_STATES
 
 
-def learn_confirmed(valve: str | None, gpm: float | None, idle_gpm: float) -> bool:
+def learn_confirmed(gpm: float | None, idle_gpm: float) -> bool:
     """True when a learn-flow run may start its clock.
 
-    Either signal is enough. A cloud valve can report open late, and a meter
-    can rise first. The command itself is not confirmation.
+    The meter rising is the start. A valve entity that says open is not.
+    The command itself is not confirmation.
     """
-    if gpm is not None and gpm > idle_gpm:
-        return True
-    return valve in OPEN_STATES
+    return gpm is not None and gpm > idle_gpm
 
 
-def zone_ready_for_next(valve: str | None, gpm: float | None, idle_gpm: float) -> bool:
-    """True when the valve reports closed and the meter is near zero.
+def zone_is_quiet(
+    valve: str | None,
+    gpm: float | None,
+    idle_gpm: float,
+    *,
+    metered: bool = False,
+) -> bool:
+    """True when this zone is finished and the next one may start.
 
-    Learn flow waits for both before the next zone. A valve that still says
-    open, or a meter that is still up, holds the line.
-    """
-    flow_quiet = gpm is None or gpm <= idle_gpm
-    if valve is None:
-        return flow_quiet
-    if gpm is None:
-        return valve in CLOSED_STATES
-    return flow_quiet and valve in CLOSED_STATES
-
-
-def zone_is_quiet(valve: str | None, gpm: float | None, idle_gpm: float) -> bool:
-    """True when the meter is back near zero, or the valve is shut and there is no meter.
-
-    The valve entity can still say open after the water has stopped. That does
-    not hold the next zone. A meter that is still up does.
+    With a flow sensor, the meter falling is the stop. The valve entity can
+    still say open after the water has stopped, and that does not hold the
+    line. With no flow sensor, an open valve does.
     """
     if gpm is not None:
         return gpm <= idle_gpm
+    if metered:
+        return True
     if valve in OPEN_STATES or valve == "opening":
         return False
     return True
 
 
 def flowing_bounds(
-    samples: list[FlowSample], *, idle_gpm: float
+    samples: list[FlowSample], *, idle_gpm: float, metered: bool = False
 ) -> tuple[datetime, datetime] | None:
-    """Start and end of the first contiguous period the meter (or valve) is up."""
+    """Start and end of the first contiguous period this zone is flowing."""
     ordered = sorted(samples, key=lambda sample: sample.at)
     start: datetime | None = None
     for sample in ordered:
-        if zone_is_flowing(sample.valve, sample.gpm, idle_gpm):
+        if zone_is_flowing(sample.valve, sample.gpm, idle_gpm, metered=metered):
             start = sample.at
             break
     if start is None:
@@ -111,7 +112,7 @@ def flowing_bounds(
     for sample in ordered:
         if sample.at < start:
             continue
-        if zone_is_flowing(sample.valve, sample.gpm, idle_gpm):
+        if zone_is_flowing(sample.valve, sample.gpm, idle_gpm, metered=metered):
             end = sample.at
             continue
         if sample.at > start:
@@ -119,15 +120,18 @@ def flowing_bounds(
     return start, end
 
 
-def steady_gpm(samples: list[FlowSample], *, idle_gpm: float) -> float | None:
+def steady_gpm(
+    samples: list[FlowSample], *, idle_gpm: float, metered: bool = False
+) -> float | None:
     """Median rate while this zone is flowing, after the settle period.
 
     The window starts when the meter rises, not when the valve entity reports
     open, and ends when the meter falls. The first two minutes plus a minute
     of meter lag are left out when the flowing time is longer than that. A
-    shorter run uses the whole flowing window.
+    shorter run uses the whole flowing window. ``metered`` keeps a missing
+    reading from using the valve report.
     """
-    bounds = flowing_bounds(samples, idle_gpm=idle_gpm)
+    bounds = flowing_bounds(samples, idle_gpm=idle_gpm, metered=metered)
     if bounds is None:
         return None
     start, end = bounds
@@ -137,17 +141,19 @@ def steady_gpm(samples: list[FlowSample], *, idle_gpm: float) -> float | None:
     else:
         window_start = start
     ordered = sorted(samples, key=lambda sample: sample.at)
-    return _median_in_window(ordered, window_start, end, idle_gpm)
+    return _median_in_window(ordered, window_start, end, idle_gpm, metered=metered)
 
 
-def middle_updates(samples: list[FlowSample], *, idle_gpm: float) -> int:
+def middle_updates(
+    samples: list[FlowSample], *, idle_gpm: float, metered: bool = False
+) -> int:
     """How many distinct meter updates were first seen in the middle third.
 
     Polls that repeat one meter timestamp count once. A reading that started
     before the middle, and is only polled again there, does not count. A meter
     that updates once a minute therefore needs a longer run than the minimum.
     """
-    bounds = flowing_bounds(samples, idle_gpm=idle_gpm)
+    bounds = flowing_bounds(samples, idle_gpm=idle_gpm, metered=metered)
     if bounds is None:
         return 0
     start, end = bounds
@@ -171,13 +177,15 @@ def middle_updates(samples: list[FlowSample], *, idle_gpm: float) -> int:
     )
 
 
-def peak_middle_gpm(samples: list[FlowSample], *, idle_gpm: float) -> float | None:
+def peak_middle_gpm(
+    samples: list[FlowSample], *, idle_gpm: float, metered: bool = False
+) -> float | None:
     """Highest rate in the middle third of the flowing window.
 
     The ends are fill, air, and the meter catching up or falling off. The
     middle is the run. One sample uses that sample.
     """
-    bounds = flowing_bounds(samples, idle_gpm=idle_gpm)
+    bounds = flowing_bounds(samples, idle_gpm=idle_gpm, metered=metered)
     if bounds is None:
         return None
     start, end = bounds
@@ -188,9 +196,11 @@ def peak_middle_gpm(samples: list[FlowSample], *, idle_gpm: float) -> float | No
         window_start = start + timedelta(seconds=span / 3.0)
         window_end = start + timedelta(seconds=span * 2.0 / 3.0)
     ordered = sorted(samples, key=lambda sample: sample.at)
-    rates = _rates_in_window(ordered, window_start, window_end, idle_gpm)
+    rates = _rates_in_window(
+        ordered, window_start, window_end, idle_gpm, metered=metered
+    )
     if not rates:
-        rates = _rates_in_window(ordered, start, end, idle_gpm)
+        rates = _rates_in_window(ordered, start, end, idle_gpm, metered=metered)
     if not rates:
         return None
     return float(max(rates))
@@ -222,9 +232,10 @@ def baseline_gpm_from_history(
     """Steady rate for the flowing period nearest a finished catch-cup run.
 
     ``flow`` entries are ``(time, gpm or None)``. The meter rising is the
-    start, including samples from before the valve entity reports open. A
-    point is skipped when another valve was reported open then. With no meter
-    history, this returns None.
+    start, including samples from before the valve entity reports open, and
+    including a run whose valve entity never reports open. A point is skipped
+    when another valve was reported open then. With no meter history, this
+    returns None.
     """
     if not flow:
         return None
@@ -243,9 +254,8 @@ def baseline_gpm_from_history(
         # The entity reports open late. Keep flow from a few minutes before that.
         search_from = opened - timedelta(minutes=5)
         search_to = closed + timedelta(minutes=3)
-    elif valve:
-        return None
     else:
+        # No open report. The meter around the finish is still this run.
         opened = None
         closed = None
         search_from = hint_start
@@ -258,12 +268,14 @@ def baseline_gpm_from_history(
         if any(start <= moment < end for start, end in blocked):
             continue
         reported = (
-            "open" if opened is not None and opened <= moment < closed else "closed"
+            "open"
+            if opened is not None and closed is not None and opened <= moment < closed
+            else "closed"
         )
         samples.append(FlowSample(at=moment, valve=reported, gpm=gpm))
     if not samples:
         return None
-    return steady_gpm(samples, idle_gpm=idle_gpm)
+    return steady_gpm(samples, idle_gpm=idle_gpm, metered=True)
 
 
 def _rates_in_window(
@@ -271,13 +283,15 @@ def _rates_in_window(
     start: datetime,
     end: datetime,
     idle_gpm: float,
+    *,
+    metered: bool = False,
 ) -> list[float]:
     """Gallons per minute inside the window. A volume total is differenced."""
     rates: list[float] = []
     for sample in samples:
         if sample.at < start or sample.at > end:
             continue
-        if not zone_is_flowing(sample.valve, sample.gpm, idle_gpm):
+        if not zone_is_flowing(sample.valve, sample.gpm, idle_gpm, metered=metered):
             continue
         if sample.gpm is not None and sample.gpm > idle_gpm:
             rates.append(sample.gpm)
@@ -302,8 +316,10 @@ def _median_in_window(
     start: datetime,
     end: datetime,
     idle_gpm: float,
+    *,
+    metered: bool = False,
 ) -> float | None:
-    rates = _rates_in_window(samples, start, end, idle_gpm)
+    rates = _rates_in_window(samples, start, end, idle_gpm, metered=metered)
     if not rates:
         return None
     return float(statistics.median(rates))

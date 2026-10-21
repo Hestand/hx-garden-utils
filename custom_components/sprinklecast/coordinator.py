@@ -1150,8 +1150,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
     ) -> None:
         """Run each selected zone and save the peak flow from the middle.
 
-        The default minimum is 60 seconds, or the hub's learn-flow minutes.
-        The clock starts when the valve reports open or the meter rises.
+        The default minimum is 5 minutes, or the hub's learn-flow minutes.
+        The clock starts when the meter rises, not when the valve entity
+        reports open.
         A slow meter keeps the zone on until two middle readings exist.
         This does not change the precipitation rate. Rain and the other safety
         stops still apply. A second press while it is running is ignored.

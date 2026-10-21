@@ -36,7 +36,8 @@ from custom_components.sprinklecast.flow_window import (
     middle_updates,
     peak_middle_gpm,
     steady_gpm,
-    zone_ready_for_next,
+    zone_is_flowing,
+    zone_is_quiet,
 )
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -94,17 +95,27 @@ def test_middle_updates_count_one_slow_meter_reading_once() -> None:
     assert peak_middle_gpm(samples, idle_gpm=0.5) == pytest.approx(9.5)
 
 
-def test_next_zone_waits_for_a_closed_valve_and_a_quiet_meter() -> None:
-    """Learn flow does not start the next zone on one of those two signals."""
-    assert learn_confirmed("closed", 0.0, 0.5) is False
-    assert learn_confirmed("opening", 0.1, 0.5) is False
-    assert learn_confirmed("closed", 1.2, 0.5) is True
-    assert learn_confirmed("open", 0.0, 0.5) is True
-    assert zone_ready_for_next("open", 0.0, 0.5) is False
-    assert zone_ready_for_next("closing", 0.0, 0.5) is False
-    assert zone_ready_for_next("closed", 2.0, 0.5) is False
-    assert zone_ready_for_next("closed", 0.2, 0.5) is True
-    assert zone_ready_for_next(None, 0.0, 0.5) is True
+def test_meter_edges_ignore_a_lagging_valve_report() -> None:
+    """A flow sensor decides. The valve report is only for a zone with no meter."""
+    assert learn_confirmed(0.0, 0.5) is False
+    assert learn_confirmed(None, 0.5) is False
+    assert learn_confirmed(1.2, 0.5) is True
+    # Valve says open, meter still near zero: the run has not started.
+    assert zone_is_flowing("open", 0.0, 0.5, metered=True) is False
+    # Water is moving while the valve entity still says closed.
+    assert zone_is_flowing("closed", 9.5, 0.5, metered=True) is True
+    # A missing reading does not fall through to the valve.
+    assert zone_is_flowing("open", None, 0.5, metered=True) is False
+    # No meter: the valve is the fallback.
+    assert zone_is_flowing("open", None, 0.5) is True
+    assert zone_is_flowing("closed", None, 0.5) is False
+    # Meter fell, valve still says open: this zone is finished.
+    assert zone_is_quiet("open", 0.0, 0.5, metered=True) is True
+    assert zone_is_quiet("open", 2.0, 0.5, metered=True) is False
+    assert zone_is_quiet("open", None, 0.5, metered=True) is True
+    # No meter: an open valve holds the next zone.
+    assert zone_is_quiet("open", None, 0.5) is False
+    assert zone_is_quiet("closed", None, 0.5) is True
 
 
 def test_flow_starts_while_the_valve_entity_still_says_closed() -> None:
@@ -198,6 +209,21 @@ def test_history_rebuilds_the_live_catch_cup_rates() -> None:
             idle_gpm=0.5,
         )
         assert measured == pytest.approx(gpm)
+
+
+def test_history_uses_the_meter_when_the_valve_never_reports_open() -> None:
+    """A cloud valve that stays closed does not throw away the flow record."""
+    finished = datetime(2026, 10, 21, 0, 10, 0, tzinfo=UTC)
+    start = finished - timedelta(minutes=10)
+    measured = baseline_gpm_from_history(
+        _points(start, 10, 8.0),
+        [(start, "closed"), (finished, "closed")],
+        [],
+        finished_at=finished,
+        minutes=10,
+        idle_gpm=0.5,
+    )
+    assert measured == pytest.approx(8.0)
 
 
 def _zone(title: str, valve: str, unique_id: str) -> dict:
@@ -331,7 +357,7 @@ async def test_a_lagging_valve_is_measured_while_it_is_open(
     await hass.async_block_till_done()
     assert entry.runtime_data.store.zone("bed")["baseline_gpm"] is None
     assert entry.runtime_data.store.zone("front")["baseline_gpm"] is None
-    # Open time, not the three minutes spent waiting for the valve.
+    # Fifteen minutes from the command. Flow at 90s counts; the late open report does not.
     assert entry.runtime_data.store.zone("bed")["catch_cup_pending"]["minutes"] == pytest.approx(
         15
     )
@@ -339,10 +365,59 @@ async def test_a_lagging_valve_is_measured_while_it_is_open(
     assert entry.runtime_data.store.zone("front")["last_run"]["net_mm"] > 0
 
 
+async def test_metered_run_ignores_a_valve_report_when_the_meter_stays_quiet(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An open valve with a quiet meter is not a measured run."""
+    _weather(hass)
+    entry = _entry()
+    entry.add_to_hass(hass)
+    hass.states.async_set("valve.bed", "closed")
+    hass.states.async_set("sensor.main_flow", "0", {"unit_of_measurement": "gal/min"})
+    original = ServiceRegistry.async_call
+
+    async def fake(
+        self,
+        domain,
+        service,
+        service_data=None,
+        blocking=False,
+        context=None,
+        target=None,
+        return_response=False,
+    ):
+        data = service_data or {}
+        if domain == "valve" and data.get("entity_id") == "valve.bed":
+            hass.states.async_set("valve.bed", "open" if service == "open_valve" else "closed")
+            return None
+        return await original(
+            self, domain, service, service_data, blocking, context, target, return_response
+        )
+
+    async def pause(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(ServiceRegistry, "async_call", fake)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    entry.runtime_data.executor._pause = pause
+    await hass.services.async_call(
+        DOMAIN, "run_catch_cup_test", {"zone": "Bed", "minutes": 1}, blocking=True
+    )
+    task = entry.runtime_data.executor._task
+    assert task is not None
+    await task
+    await hass.async_block_till_done()
+    zone = entry.runtime_data.store.zone("bed")
+    assert zone.get("catch_cup_pending") is None
+    assert zone.get("baseline_gpm") is None
+    assert "No flow was seen for Bed" in zone["last_run"]["result"]
+
+
 async def test_learn_flow_starts_when_flow_rises_and_waits_for_two_samples(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """60 seconds starts at the meter, and a once-a-minute meter extends the run."""
+    """Five minutes start at the meter, while the valve entity still says closed."""
     _weather(hass)
     entry = _entry()
     entry.add_to_hass(hass)
@@ -352,6 +427,7 @@ async def test_learn_flow_starts_when_flow_rises_and_waits_for_two_samples(
     marks: dict[str, float] = {}
     published: dict[str, int | None] = {"bucket": None}
     started = time.time()
+    measured_while_closed = {"ok": False}
     seen: list[tuple[str, str | None, str | None]] = []
     original = ServiceRegistry.async_call
 
@@ -405,8 +481,15 @@ async def test_learn_flow_starts_when_flow_rises_and_waits_for_two_samples(
             )
             published["bucket"] = None if closed is not None else bucket
         now = hass.states.get("sensor.garden_watering_now")
+        valve = hass.states.get("valve.bed")
         if now is not None:
             seen.append((now.state, now.attributes.get("status"), now.attributes.get("zone")))
+            if (
+                now.attributes.get("status") == "Measuring"
+                and valve is not None
+                and valve.state != "open"
+            ):
+                measured_while_closed["ok"] = True
 
     monkeypatch.setattr(ServiceRegistry, "async_call", fake)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -424,9 +507,10 @@ async def test_learn_flow_starts_when_flow_rises_and_waits_for_two_samples(
     zone = entry.runtime_data.store.zone("bed")
     assert zone["baseline_gpm"] == pytest.approx(9.5)
     assert zone["baseline_source"] == "flow_learning"
-    # A minute with the meter still at zero, then three minutes of measurement.
-    assert zone["last_run"]["minutes"] == pytest.approx(3, abs=0.1)
-    assert marks["close"] - marks["open"] == pytest.approx(240, abs=5)
+    # A minute with the meter still at zero, then five minutes after it rises.
+    assert zone["last_run"]["minutes"] == pytest.approx(5, abs=0.1)
+    assert marks["close"] - marks["open"] == pytest.approx(360, abs=5)
+    assert measured_while_closed["ok"] is True
     assert ("Learning flow rates", "Waiting for flow", "Bed") in seen
     assert ("Learning flow rates", "Measuring", "Bed") in seen
     assert hass.states.get("sensor.garden_watering_now").state != "Learning flow rates"
@@ -435,7 +519,7 @@ async def test_learn_flow_starts_when_flow_rises_and_waits_for_two_samples(
 async def test_learn_flow_waits_until_the_previous_zone_is_quiet(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Front stays off while Bed's valve still says open and the meter is up."""
+    """Front starts when Bed's meter falls, even if the valve entity stays open."""
     _weather(hass)
     entry = _entry()
     entry.add_to_hass(hass)
@@ -504,9 +588,9 @@ async def test_learn_flow_waits_until_the_previous_zone_is_quiet(
     async def pause(seconds: float) -> None:
         clock["t"] += seconds
         for entity, requested in list(pending_close.items()):
-            if clock["t"] - requested < 60:
+            if clock["t"] - requested < 30:
                 continue
-            hass.states.async_set(entity, "closed")
+            # The meter falls. The valve entity keeps saying open.
             publish(0.0, None, None)
             pending_close.pop(entity, None)
             return
@@ -529,9 +613,10 @@ async def test_learn_flow_waits_until_the_previous_zone_is_quiet(
     await task
     await hass.async_block_till_done()
     front_open = next(item for item in opens if item[0] == "valve.front")
-    assert front_open[1] >= close_at["valve.bed"] + 59
-    assert front_open[2] == "closed"
+    assert close_at["valve.bed"] + 29 <= front_open[1] <= close_at["valve.bed"] + 90
+    assert front_open[2] == "open"
     assert float(front_open[3]) == pytest.approx(0.0)
+    assert hass.states.get("valve.bed").state == "open"
     for zone_id in ("bed", "front"):
         zone = entry.runtime_data.store.zone(zone_id)
         assert zone["baseline_gpm"] == pytest.approx(8.0)
@@ -560,7 +645,10 @@ async def test_learn_flow_fails_when_no_flow_is_seen(
     ):
         data = service_data or {}
         if domain == "valve" and data.get("entity_id") == "valve.bed":
-            hass.states.async_set("valve.bed", "closed")
+            if service == "open_valve":
+                hass.states.async_set("valve.bed", "open")
+            else:
+                hass.states.async_set("valve.bed", "closed")
             return None
         return await original(
             self, domain, service, service_data, blocking, context, target, return_response
@@ -583,6 +671,8 @@ async def test_learn_flow_fails_when_no_flow_is_seen(
     zone = entry.runtime_data.store.zone("bed")
     assert zone.get("baseline_gpm") is None
     assert "No flow was seen for Bed" in zone["last_run"]["result"]
+    assert "flow meter stayed near zero" in zone["last_run"]["result"]
+    assert "valve reported open" in zone["last_run"]["result"]
 
 
 async def test_stop_all_cancels_learn_flow_and_a_second_press_is_ignored(
