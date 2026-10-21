@@ -255,7 +255,12 @@ async def test_depth_sets_the_rate_and_credits_only_the_change(
     assert state["catch_cup"]["minutes"] == 15
     assert state["catch_cup"]["depth_in"] == pytest.approx(0.25)
     assert state["deficit_mm"] == pytest.approx(20 - 0.25 * 25.4)
-    assert entry.subentries["front"].data[CONF_PRECIPITATION_RATE] == pytest.approx(1.0)
+    # The rate is runtime state. The zone config is not rewritten, so the hub
+    # does not reload.
+    assert entry.subentries["front"].data[CONF_PRECIPITATION_RATE] == pytest.approx(1.5)
+    assert entry.runtime_data.data.zones["front"].precipitation_rate_in_hr == pytest.approx(
+        1.0
+    )
 
     await hass.services.async_call(
         DOMAIN,

@@ -466,6 +466,11 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         self.executor: WateringExecutor | None = None
         self._notified_date = store.notified_date
         self._lock = asyncio.Lock()
+        # Zone number and switch writes share one save. A burst marks the
+        # state dirty and the flush writes it once. Config is not reloaded.
+        self._runtime_lock = asyncio.Lock()
+        self._runtime_dirty = False
+        self._runtime_flush: asyncio.Task[None] | None = None
         self._week: dict[str, Any] | None = None
         self._outlook: dict[str, Any] = {"by_zone": {}, "summary": ""}
         self._last_observation: Observation | None = None
@@ -951,7 +956,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         reason = self.live_skip(zone_id, True)
         if reason:
             raise HomeAssistantError(reason)
-        data = dict(subentry.data)
+        data = self._with_measured(dict(subentry.data), self.store.zone(zone_id))
         entity_id = str(data.get(CONF_VALVE_ENTITY) or "")
         if not entity_id or entity_id.startswith("simulation."):
             raise HomeAssistantError("This zone has no on/off entity.")
@@ -994,7 +999,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         cup_diameter_in: float | None,
         minutes: float | None,
     ) -> dict[str, Any]:
-        """Store the measured rate and DU_lq. Save the store before the reload."""
+        """Store the measured rate and DU_lq. This does not reload the hub."""
         subentry = self.config_entry.subentries.get(zone_id)
         if subentry is None:
             raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
@@ -1032,13 +1037,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         state["measured_efficiency"] = result.scheduling_efficiency
         state["measured_du_lq"] = result.du_lq
         state["audit_pending"] = None
-        await self.store.async_save()
-        data = dict(subentry.data)
-        data[CONF_PRECIPITATION_RATE] = result.precipitation_rate_in_hr
-        data[CONF_EFFICIENCY] = result.scheduling_efficiency
-        self.hass.config_entries.async_update_subentry(
-            self.config_entry, subentry, data=data
-        )
+        await self._save_and_refresh_snapshot()
         return {
             "precipitation_rate_in_hr": result.precipitation_rate_in_hr,
             "du_lq": result.du_lq,
@@ -1056,12 +1055,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         is a separate option and does not follow this switch.
         """
         self.store.automatic = bool(enabled)
-        await self.store.async_save()
         if not enabled and self.executor is not None:
             await self.executor.stop()
-        self.async_set_updated_data(
-            await self._publish(force_balance=False, force_notify=False)
-        )
+        await self._save_and_refresh_snapshot()
 
     async def async_stop_all(self) -> None:
         """Turn off whatever this hub turned on."""
@@ -1095,7 +1091,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             subentry = self.config_entry.subentries.get(zone_id)
             if subentry is None or subentry.subentry_type != SUBENTRY_ZONE:
                 raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
-            data = dict(subentry.data)
+            data = self._with_measured(
+                dict(subentry.data), self.store.zone(zone_id)
+            )
             entity_id = str(data.get(CONF_VALVE_ENTITY) or "")
             if not entity_id or entity_id.startswith("simulation."):
                 skipped.append(f"{subentry.title}: no on/off entity")
@@ -1234,10 +1232,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         }
         state["catch_cup_pending"] = None
         state["measured_precipitation_rate_in_hr"] = rate
-        await self.store.async_save()
         self._clear_catch_cup_issue_if_done()
-        data[CONF_PRECIPITATION_RATE] = rate
-        self.hass.config_entries.async_update_subentry(self.config_entry, subentry, data=data)
+        await self._save_and_refresh_snapshot()
         return {
             "precipitation_rate_in_hr": rate,
             "depth_in": round(float(depth_in), 4),
@@ -1337,9 +1333,53 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             self.async_set_updated_data(self.data)
 
     async def _save_and_refresh_snapshot(self) -> None:
-        self.async_set_updated_data(
-            await self._publish(force_balance=False, force_notify=False)
-        )
+        """Save runtime state once for this burst, then refresh entities.
+
+        Several number or switch writes can be in flight together. Each one
+        updates the in-memory zone first. One flush writes the file and
+        rebuilds the plan. The config entry is not updated, so the hub does
+        not reload.
+        """
+        async with self._runtime_lock:
+            self._runtime_dirty = True
+            flush = self._runtime_flush
+            if flush is None or flush.done():
+                flush = asyncio.create_task(self._flush_runtime())
+                self._runtime_flush = flush
+        await flush
+
+    async def _flush_runtime(self) -> None:
+        """Write the latest runtime state, then again if a write arrived mid-save."""
+        while True:
+            async with self._runtime_lock:
+                if not self._runtime_dirty:
+                    return
+                self._runtime_dirty = False
+            await self.store.async_save()
+            self.async_set_updated_data(
+                await self._publish(force_balance=False, force_notify=False)
+            )
+
+    def _with_measured(self, data: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+        """Config data plus a catch-cup or audit rate stored at runtime.
+
+        The measured rate lives in the hub store. Writing it into the zone
+        config would reload the hub.
+        """
+        merged = dict(data)
+        rate = state.get("measured_precipitation_rate_in_hr")
+        if rate not in (None, ""):
+            try:
+                merged[CONF_PRECIPITATION_RATE] = float(rate)
+            except (TypeError, ValueError):
+                pass
+        efficiency = state.get("measured_efficiency")
+        if efficiency not in (None, ""):
+            try:
+                merged[CONF_EFFICIENCY] = float(efficiency)
+            except (TypeError, ValueError):
+                pass
+        return merged
 
     async def _async_build(
         self, *, force_balance: bool, force_notify: bool
@@ -2583,6 +2623,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             days = float(DEFAULT_BASELINE_DAYS)
         from .presets import sprinkler_precip
 
+        data = self._with_measured(data, state)
         precip = _optional_float(data, CONF_PRECIPITATION_RATE)
         if precip is None:
             precip = sprinkler_precip(str(data.get(CONF_SPRINKLER_TYPE) or DEFAULT_SPRINKLER_TYPE))
@@ -2625,10 +2666,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             self.store.flow_locked = any(
                 bool(self.store.zone(item).get("flow_locked")) for item in self.store.zones
             )
-        await self.store.async_save()
-        self.async_set_updated_data(
-            await self._publish(force_balance=False, force_notify=False)
-        )
+        await self._save_and_refresh_snapshot()
 
     def _limits(self, data: dict[str, Any], et0: float | None, month: int | None = None):
         return root_zone(
@@ -2706,8 +2744,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         for subentry in self.config_entry.subentries.values():
             if subentry.subentry_type != SUBENTRY_ZONE:
                 continue
-            data = dict(subentry.data)
             state = self.store.zone(subentry.subentry_id)
+            data = self._with_measured(dict(subentry.data), state)
             areas[subentry.subentry_id] = _optional_float(data, CONF_AREA_SQFT)
             requests.append(
                 self._zone_request(
@@ -3154,11 +3192,11 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         reason = self.live_skip(zone_id, True)
         if reason:
             return [], reason
-        data = dict(subentry.data)
+        state = self.store.zone(zone_id)
+        data = self._with_measured(dict(subentry.data), state)
         entity_id = str(data.get(CONF_VALVE_ENTITY) or "")
         if not entity_id or entity_id.startswith("simulation."):
             return [], "This zone has no on/off entity."
-        state = self.store.zone(zone_id)
         adjusted = float(state["deficit_mm"]) * float(
             state.get("adjustment_pct", DEFAULT_ADJUSTMENT_PCT)
         ) / 100.0
@@ -3761,7 +3799,10 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                         dict(subentry.data),
                         scheduled=False,
                         runtime_min=0,
-                        precip=_optional_float(dict(subentry.data), CONF_PRECIPITATION_RATE),
+                        precip=_optional_float(
+                            self._with_measured(dict(subentry.data), state),
+                            CONF_PRECIPITATION_RATE,
+                        ),
                         next_run=None,
                         taw_mm=taw,
                     ),

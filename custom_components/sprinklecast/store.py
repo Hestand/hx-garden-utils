@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from copy import deepcopy
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -80,6 +82,9 @@ class SmartWaterStore:
         self._store: Store[dict[str, Any]] = Store(
             hass, STORAGE_VERSION, f"{DOMAIN}.{entry_id}"
         )
+        # One save copies the whole hub. Hold this across the copy and the
+        # write so a second save cannot replace the file with an older copy.
+        self._save_lock = asyncio.Lock()
         self.zones: dict[str, dict[str, Any]] = {}
         self.plan: dict[str, Any] | None = None
         self.notified_date: str | None = None
@@ -180,33 +185,42 @@ class SmartWaterStore:
             if zone_id not in zone_ids:
                 del self.zones[zone_id]
 
+    def _payload(self) -> dict[str, Any]:
+        """The dict written to disk. Callers copy it before the write."""
+        return {
+            "zones": self.zones,
+            "plan": self.plan,
+            "notified_date": self.notified_date,
+            "et0_mm": self.et0_mm,
+            "et0_method": self.et0_method,
+            "et0_detail": self.et0_detail,
+            "et0_date": self.et0_date,
+            "weather": self.weather,
+            "simulation": self.simulation,
+            "automatic": self.automatic,
+            "watering_entity": self.watering_entity,
+            "temp_history": self.temp_history,
+            "armed_date": self.armed_date,
+            "plan_marked_at": self.plan_marked_at,
+            "flow_locked": self.flow_locked,
+            "budget_alert_week": self.budget_alert_week,
+            "summary_sent_week": self.summary_sent_week,
+            "freeze_alert_key": self.freeze_alert_key,
+            "freeze_alert_detail": self.freeze_alert_detail,
+            "et0_history": self.et0_history,
+            "climate_days": self.climate_days,
+            "flow_idle_cursor": self.flow_idle_cursor,
+            "flow_idle_last_at": self.flow_idle_last_at,
+            "flow_idle_alert_date": self.flow_idle_alert_date,
+        }
+
     async def async_save(self) -> None:
-        """Write the current state."""
-        await self._store.async_save(
-            {
-                "zones": self.zones,
-                "plan": self.plan,
-                "notified_date": self.notified_date,
-                "et0_mm": self.et0_mm,
-                "et0_method": self.et0_method,
-                "et0_detail": self.et0_detail,
-                "et0_date": self.et0_date,
-                "weather": self.weather,
-                "simulation": self.simulation,
-                "automatic": self.automatic,
-                "watering_entity": self.watering_entity,
-                "temp_history": self.temp_history,
-                "armed_date": self.armed_date,
-                "plan_marked_at": self.plan_marked_at,
-                "flow_locked": self.flow_locked,
-                "budget_alert_week": self.budget_alert_week,
-                "summary_sent_week": self.summary_sent_week,
-                "freeze_alert_key": self.freeze_alert_key,
-                "freeze_alert_detail": self.freeze_alert_detail,
-                "et0_history": self.et0_history,
-                "climate_days": self.climate_days,
-                "flow_idle_cursor": self.flow_idle_cursor,
-                "flow_idle_last_at": self.flow_idle_last_at,
-                "flow_idle_alert_date": self.flow_idle_alert_date,
-            }
-        )
+        """Write one complete copy of the current state.
+
+        The copy is taken under the lock, and the lock is held until that
+        copy is on disk. A save that starts later cannot finish first with
+        an older copy.
+        """
+        async with self._save_lock:
+            payload = deepcopy(self._payload())
+            await self._store.async_save(payload)

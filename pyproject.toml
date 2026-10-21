@@ -1,6 +1,6 @@
 [project]
 name = "sprinklecast"
-version = "0.14.8"
+version = "0.14.9"
 description = "Home Assistant irrigation planner and zone controller."
 requires-python = ">=3.12"
 
