@@ -960,6 +960,10 @@
       "title": "Enter catch-cup depths",
       "description": "{detail}"
     },
+    "catch_cup_baseline": {
+      "title": "Catch-cup baselines need another test",
+      "description": "{detail}"
+    },
     "freeze_alert": {
       "title": "Freeze in the forecast",
       "description": "{detail}"

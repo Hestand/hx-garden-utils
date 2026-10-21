@@ -31,6 +31,7 @@ from custom_components.sprinklecast.const import (
     DOMAIN,
     EVENT_FLOW_ALERT,
 )
+from custom_components.sprinklecast.presets import sprinkler_efficiency
 from custom_components.sprinklecast.store import SmartWaterStore
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -147,7 +148,7 @@ async def _run(hass: HomeAssistant, entry: MockConfigEntry, **data) -> list[floa
     async def instant(seconds: float) -> None:
         slept.append(seconds)
 
-    entry.runtime_data.executor._sleep = instant
+    entry.runtime_data.executor._pause = instant
     await hass.services.async_call(DOMAIN, "run_catch_cup_test", data, blocking=True)
     task = entry.runtime_data.executor._task
     if task is not None:
@@ -159,7 +160,10 @@ async def _run(hass: HomeAssistant, entry: MockConfigEntry, **data) -> list[floa
 async def test_catch_cup_runs_each_enabled_zone_for_the_full_minutes(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Fifteen minutes each, one at a time, ignoring caps, soak, and the bucket."""
+    """Fifteen minutes each, one at a time, ignoring caps and soak.
+
+    The bucket is credited from the zone's current precipitation rate.
+    """
     entry = await _setup(hass, _entry())
     calls = _patch_valves(monkeypatch, hass)
     await hass.services.async_call(
@@ -168,12 +172,16 @@ async def test_catch_cup_runs_each_enabled_zone_for_the_full_minutes(
     before = entry.runtime_data.store.zone("front")["deficit_mm"]
     entry.runtime_data.store.zone("back")["enabled"] = False
     slept = await _run(hass, entry, minutes=15)
-    assert slept == [900.0]
+    assert sum(slept) == pytest.approx(900.0)
     assert calls == [
         ("switch.front_valve", SERVICE_TURN_ON),
         ("switch.front_valve", SERVICE_TURN_OFF),
     ]
-    assert entry.runtime_data.store.zone("front")["deficit_mm"] == before
+    # 15 min at 1.5 in/hr and the spray efficiency. Depth entry replaces this later.
+    credited = (15 / 60.0) * 1.5 * sprinkler_efficiency("spray") * 25.4
+    assert entry.runtime_data.store.zone("front")["deficit_mm"] == pytest.approx(
+        before - credited
+    )
     assert hass.states.get("switch.front_valve").state == "off"
     issues = ir.async_get(hass)
     assert issues.async_get_issue(DOMAIN, f"catch_cup_{entry.entry_id}") is None
@@ -185,7 +193,7 @@ async def test_two_zones_run_back_to_back_without_a_soak(
     entry = await _setup(hass, _entry())
     calls = _patch_valves(monkeypatch, hass)
     slept = await _run(hass, entry, minutes=10)
-    assert slept == [600.0, 600.0]
+    assert sum(slept) == pytest.approx(1200.0)
     assert [item[0] for item in calls] == [
         "switch.front_valve",
         "switch.front_valve",
@@ -211,7 +219,7 @@ async def test_rain_skips_the_test_and_stop_cancels_it(
     async def blocked(_seconds: float) -> None:
         await asyncio.Event().wait()
 
-    entry.runtime_data.executor._sleep = blocked
+    entry.runtime_data.executor._pause = blocked
     await hass.services.async_call(DOMAIN, "run_catch_cup_test", {"zone": "Front"}, blocking=True)
     for _ in range(10):
         await hass.async_block_till_done()
@@ -233,6 +241,8 @@ async def test_depth_sets_the_rate_and_credits_only_the_change(
         DOMAIN, "set_bucket", {"zone": "Front", "deficit_mm": 20}, blocking=True
     )
     await _run(hass, entry, zone="Front", minutes=15)
+    after_run = entry.runtime_data.store.zone("front")["deficit_mm"]
+    assert after_run < 20
     await hass.services.async_call(
         DOMAIN,
         "set_catch_cup_result",
@@ -296,7 +306,7 @@ async def test_metered_run_saves_baseline_and_alerts_against_it(
             {"unit_of_measurement": "gal"},
         )
 
-    entry.runtime_data.executor._sleep = one_gpm
+    entry.runtime_data.executor._pause = one_gpm
     await hass.services.async_call(
         DOMAIN, "run_catch_cup_test", {"zone": "Front", "minutes": 15}, blocking=True
     )
@@ -363,6 +373,14 @@ async def test_trend_alerts_when_the_median_drifts_and_a_single_run_does_not(
     coordinator = entry.runtime_data
     assert coordinator.store.zone("front")["baseline_source"] == "manual"
     assert coordinator.store.zone("front")["flow_history"] == []
+    registry = er.async_get(hass)
+    trend_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry.entry_id}_front_flow_trend"
+    )
+    trend = hass.states.get(trend_id)
+    assert trend is not None
+    assert trend.state == "Baseline is set at 10.00 gal/min. Trend needs 5 normal runs (0 so far)."
+    assert trend.attributes["status"] == "learning"
     for _ in range(5):
         await coordinator.async_credit_cycle(
             zone_id="front", minutes=10, net_mm=1, gallons=112, result="ok", gpm=11.2
@@ -375,3 +393,38 @@ async def test_trend_alerts_when_the_median_drifts_and_a_single_run_does_not(
     zone = coordinator.data.zones["front"]
     assert zone.flow_vs_baseline_pct == pytest.approx(12.0)
     assert zone.flow_trend_status == "high_trend"
+    assert "Baseline is set" in zone.flow_trend_detail
+
+
+async def test_a_second_press_does_not_restart_or_cancel(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three presses in a row must leave the first test running."""
+    entry = await _setup(hass, _entry())
+    calls = _patch_valves(monkeypatch, hass)
+
+    async def blocked(_seconds: float) -> None:
+        await asyncio.Event().wait()
+
+    entry.runtime_data.executor._pause = blocked
+    await hass.services.async_call(
+        DOMAIN, "run_catch_cup_test", {"zone": "Front"}, blocking=True
+    )
+    for _ in range(10):
+        await hass.async_block_till_done()
+        if hass.states.get("switch.front_valve").state == "on":
+            break
+    assert hass.states.get("switch.front_valve").state == "on"
+    calls.clear()
+    await hass.services.async_call(
+        DOMAIN, "run_catch_cup_test", {"zone": "Front"}, blocking=True
+    )
+    await hass.services.async_call(
+        DOMAIN, "run_catch_cup_test", {"zone": "Back"}, blocking=True
+    )
+    await hass.async_block_till_done()
+    assert calls == []
+    assert hass.states.get("switch.front_valve").state == "on"
+    await hass.services.async_call(DOMAIN, "stop_all", {}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get("switch.front_valve").state == "off"

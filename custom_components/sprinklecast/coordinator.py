@@ -197,8 +197,10 @@ from .flow_learn import (
     robust_gpm,
     run_status,
     trend_detail,
+    trend_note,
     trend_status,
 )
+from .flow_window import baseline_gpm_from_history
 from .learn import should_learn, update_awc_factor
 from .moisture import apply_moisture, deficit_from_reading, reading_percent
 from .observe import (
@@ -314,6 +316,7 @@ class ZoneSnapshot:
     flow_vs_baseline_pct: float | None = None
     flow_trend_pct: float | None = None
     flow_trend_status: str = "no_baseline"
+    flow_trend_detail: str = ""
     catch_cup: dict[str, Any] | None = None
     catch_cup_pending: dict[str, Any] | None = None
     water_total_gal: float = 0.0
@@ -474,6 +477,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         self._forecast_has_probability = False
         self._open_unit_issues: set[str] = set()
         self._units_ready = False
+        self._baselines_ready = False
         # Today's ET0 was not saved because a configured input was not ready.
         self._et_waiting = False
 
@@ -514,11 +518,13 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             )
         if self.hass.is_running:
             self._units_ready = True
+            self._baselines_ready = True
             return
 
         @callback
         def _ready(_now: datetime) -> None:
             self._units_ready = True
+            self._baselines_ready = True
             self._sync_unit_issues()
             self.hass.async_create_task(self.async_request_refresh())
 
@@ -533,6 +539,214 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         self.config_entry.async_on_unload(
             self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _started)
         )
+
+    def idle_gpm(self) -> float:
+        """Flow at or below this is treated as stopped."""
+        return float(self._options().get(CONF_FLOW_IDLE_GPM, DEFAULT_IDLE_GPM))
+
+    async def _async_recompute_baselines(self, now: datetime) -> None:
+        """Replace a catch-cup baseline that was averaged on the scheduled clock.
+
+        Recorder history of the valve and the flow meter is enough to measure
+        the open window instead. Without that history the saved number stays,
+        and a repair asks for the test to be run again.
+        """
+        if not self._baselines_ready:
+            return
+        pending: list[str] = []
+        for zone_id, state in self.store.zones.items():
+            if state.get("baseline_source") != "catch_cup":
+                continue
+            if state.get("baseline_window") in {"steady", "unverified"}:
+                continue
+            pending.append(zone_id)
+        if not pending:
+            return
+        flow_entity = self._options().get(CONF_FLOW_SENSOR)
+        kind = str(self._options().get(CONF_FLOW_KIND) or "total")
+        valves: dict[str, str] = {}
+        for zone_id in pending:
+            subentry = self.config_entry.subentries.get(zone_id)
+            entity_id = ""
+            if subentry is not None:
+                entity_id = str(subentry.data.get(CONF_VALVE_ENTITY) or "")
+            valves[zone_id] = entity_id
+        if not flow_entity:
+            self._baseline_repair(pending, "No flow meter is configured, so the old catch-cup baselines could not be recomputed.")
+            return
+        earliest, latest = self._baseline_history_span(pending, now)
+        wanted = [str(flow_entity), *[entity for entity in valves.values() if entity]]
+        histories = await climate_day.async_entity_histories(
+            self.hass, wanted, earliest, latest
+        )
+        if histories is None:
+            # The recorder may still be starting. Leave the number and try again.
+            self._baseline_repair(
+                pending,
+                "Recorder history for the flow meter and valves was not available, "
+                "so the old catch-cup baselines were left as they are.",
+                remember=False,
+            )
+            return
+        flow_points = self._history_flow(histories.get(str(flow_entity)) or [], kind)
+        valve_points = {
+            zone_id: self._history_valve(histories.get(entity) or [])
+            for zone_id, entity in valves.items()
+            if entity
+        }
+        idle = self.idle_gpm()
+        missing: list[str] = []
+        for zone_id in pending:
+            state = self.store.zone(zone_id)
+            subentry = self.config_entry.subentries.get(zone_id)
+            name = subentry.title if subentry is not None else zone_id
+            finished = self._baseline_finished_at(state, now)
+            minutes = self._baseline_minutes(state)
+            others = [
+                points
+                for other_id, points in valve_points.items()
+                if other_id != zone_id
+            ]
+            measured = baseline_gpm_from_history(
+                flow_points,
+                valve_points.get(zone_id) or [],
+                others,
+                finished_at=finished,
+                minutes=minutes,
+                idle_gpm=idle,
+            )
+            if measured is None or measured <= 0:
+                state["baseline_window"] = "unverified"
+                missing.append(name)
+                continue
+            old = state.get("baseline_gpm")
+            state["baseline_gpm"] = round(measured, 3)
+            state["baseline_window"] = "steady"
+            try:
+                if old is not None and abs(float(state.get("last_run_gpm") or 0) - float(old)) < 0.05:
+                    state["last_run_gpm"] = round(measured, 3)
+            except (TypeError, ValueError):
+                pass
+            kept: list[dict[str, Any]] = []
+            for item in list(state.get("flow_history") or []):
+                if not isinstance(item, dict):
+                    continue
+                if old is None:
+                    kept.append(item)
+                    continue
+                try:
+                    same = abs(float(item.get("gpm")) - float(old)) < 0.05
+                except (TypeError, ValueError):
+                    same = False
+                if not same:
+                    kept.append(item)
+            state["flow_history"] = kept
+        if missing:
+            self._baseline_repair(
+                [
+                    zone_id
+                    for zone_id in pending
+                    if self.store.zone(zone_id).get("baseline_window") != "steady"
+                ],
+                "Run the catch-cup test again for "
+                + ", ".join(missing)
+                + ". The saved baselines were averaged on the scheduled clock, "
+                "and recorder history could not rebuild the open-valve window.",
+            )
+        else:
+            from homeassistant.helpers import issue_registry as ir
+
+            ir.async_delete_issue(
+                self.hass, DOMAIN, f"catch_cup_baseline_{self.config_entry.entry_id}"
+            )
+
+    def _baseline_repair(
+        self, zone_ids: list[str], detail: str, *, remember: bool = True
+    ) -> None:
+        from homeassistant.helpers import issue_registry as ir
+
+        if remember:
+            for zone_id in zone_ids:
+                self.store.zone(zone_id)["baseline_window"] = "unverified"
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"catch_cup_baseline_{self.config_entry.entry_id}",
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="catch_cup_baseline",
+            translation_placeholders={"detail": detail},
+        )
+
+    def _baseline_history_span(
+        self, zone_ids: list[str], now: datetime
+    ) -> tuple[datetime, datetime]:
+        earliest = now
+        latest = now
+        for zone_id in zone_ids:
+            finished = self._baseline_finished_at(self.store.zone(zone_id), now)
+            minutes = self._baseline_minutes(self.store.zone(zone_id))
+            start = finished - timedelta(minutes=minutes + 30)
+            end = finished + timedelta(minutes=30)
+            earliest = min(earliest, start)
+            latest = max(latest, end)
+        return earliest, latest
+
+    def _baseline_finished_at(self, state: dict[str, Any], now: datetime) -> datetime:
+        raw = state.get("baseline_gpm_at")
+        if not raw:
+            history = list(state.get("flow_history") or [])
+            if history and isinstance(history[-1], dict):
+                raw = history[-1].get("at")
+        if raw:
+            try:
+                parsed = datetime.fromisoformat(str(raw))
+            except ValueError:
+                parsed = now
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=now.tzinfo)
+            return parsed
+        return now
+
+    def _baseline_minutes(self, state: dict[str, Any]) -> float:
+        pending = state.get("catch_cup_pending")
+        if isinstance(pending, dict) and pending.get("minutes"):
+            return float(pending["minutes"])
+        catch = state.get("catch_cup")
+        if isinstance(catch, dict) and catch.get("minutes"):
+            return float(catch["minutes"])
+        history = list(state.get("flow_history") or [])
+        if history and isinstance(history[-1], dict) and history[-1].get("minutes"):
+            return float(history[-1]["minutes"])
+        return 15.0
+
+    def _history_flow(
+        self, points: list, kind: str
+    ) -> list[tuple[datetime, float | None]]:
+        rows: list[tuple[datetime, float | None]] = []
+        previous: tuple[datetime, float] | None = None
+        for point in points:
+            try:
+                value = float(point.state)
+            except (TypeError, ValueError):
+                continue
+            if kind == "rate":
+                gpm = rate_gpm(value, point.unit)
+                if gpm is not None:
+                    rows.append((point.at, gpm))
+                continue
+            gallons = volume_gallons(value, point.unit)
+            if gallons is None:
+                continue
+            if previous is not None:
+                minutes = (point.at - previous[0]).total_seconds() / 60.0
+                if minutes > 0:
+                    rows.append((point.at, (gallons - previous[1]) / minutes))
+            previous = (point.at, gallons)
+        return rows
+
+    def _history_valve(self, points: list) -> list[tuple[datetime, str]]:
+        return [(point.at, point.state) for point in points if point.state]
 
     def _options(self) -> dict[str, Any]:
         return dict(self.config_entry.options)
@@ -860,11 +1074,13 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
     async def async_run_catch_cup_test(
         self, zone_ids: list[str] | None, minutes: float = 15
     ) -> None:
-        """Run each selected zone once, for exactly ``minutes``, with no soak.
+        """Run each selected zone once, for ``minutes`` of actual open time.
 
-        This is manual. It is not part of the morning plan. The bucket is not
-        credited until a cup depth is entered. Rain and the other safety stops
-        still apply. A nightly runtime cap does not.
+        This is manual. It is not part of the morning plan. The bucket is
+        credited from the zone's current precipitation rate. Entering the cup
+        depth later replaces that credit with the measured depth. Rain and the
+        other safety stops still apply. A nightly runtime cap does not. A
+        second press while the test is running is ignored.
         """
         minutes = float(minutes)
         if minutes <= 0:
@@ -980,6 +1196,10 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         state = self.store.zone(zone_id)
         pending = state.get("catch_cup_pending") or {}
         previous = state.get("catch_cup") if isinstance(state.get("catch_cup"), dict) else {}
+        if pending.get("credited_mm") is not None:
+            already = float(pending["credited_mm"])
+        else:
+            already = float(previous.get("credited_mm") or 0.0)
         if minutes is None:
             minutes = pending.get("minutes") or previous.get("minutes") or 15
         used = float(minutes)
@@ -990,8 +1210,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         except ValueError as err:
             raise HomeAssistantError(str(err)) from err
         new_mm = inches_to_mm(depth_in)
-        old_mm = float(previous.get("credited_mm") or 0.0)
-        delta = new_mm - old_mm
+        delta = new_mm - already
         data = dict(subentry.data)
         try:
             taw = self._limits(data, self.store.et0_mm, dt_util.now(self._timezone()).month).taw_mm
@@ -1153,6 +1372,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         error: str | None = None
 
         self._sync_unit_issues()
+        await self._async_recompute_baselines(now)
         self._accumulate_day(now, today)
         self._note_temp_history(now, today)
         observation = self._overlay_observed(await self._async_observation(now))
@@ -2118,9 +2338,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             state["baseline_gpm"] = round(gpm, 3)
             state["baseline_gpm_at"] = now_iso
             state["baseline_source"] = "catch_cup"
-            state["flow_history"] = append_flow_history(
-                [], at=now_iso, gpm=gpm, minutes=minutes
-            )
+            state["baseline_window"] = "steady"
+            # The test is the baseline, not one of the normal runs the trend counts.
+            state["flow_history"] = []
             state["flow_alert"] = None
             state["flow_trend_alert"] = None
             return []
@@ -3098,6 +3318,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             state["catch_cup_pending"] = {
                 "minutes": round(float(minutes), 2),
                 "at": dt_util.now(self._timezone()).isoformat(),
+                "credited_mm": float(net_mm),
             }
             self._catch_cup_completed.add(zone_id)
         if gpm is not None and gpm > 0 and result == "ok":
@@ -3333,6 +3554,11 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             trend_pct=trend_pct,
         )
         gap = percent_vs_reference(state.get("last_run_gpm"), reference)
+        have = 0
+        for item in list(state.get("flow_history") or []):
+            if isinstance(item, dict) and item.get("gpm") is not None:
+                have += 1
+        detail = trend_note(kind, reference=reference, have=have, need=trend_runs)
         catch = state.get("catch_cup") if isinstance(state.get("catch_cup"), dict) else None
         pending = (
             state.get("catch_cup_pending")
@@ -3347,6 +3573,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             "flow_vs_baseline_pct": None if gap is None else round(gap, 1),
             "flow_trend_pct": None if drift is None else round(drift, 1),
             "flow_trend_status": kind,
+            "flow_trend_detail": detail,
             "catch_cup": catch,
             "catch_cup_pending": pending,
         }
@@ -3396,7 +3623,12 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         alert = state.get("flow_alert")
         if alert:
             status = str(alert)
-        elif hub_flow and state.get("last_run_gpm") and not state.get("learned_gpm"):
+        elif (
+            hub_flow
+            and state.get("last_run_gpm")
+            and not state.get("learned_gpm")
+            and self._saved_baseline(state) is None
+        ):
             status = "learning"
         today = dt_util.now(self._timezone()).date()
         week_gal = period_gallons(state.get("water_days"), today, span="week")

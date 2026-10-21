@@ -206,6 +206,30 @@ def alert_detail(
     return f"{name}: {kind}."
 
 
+def trend_note(
+    status: str,
+    *,
+    reference: float | None,
+    have: int,
+    need: int,
+) -> str:
+    """Plain status for the device page.
+
+    ``learning`` used to be the whole message after a baseline was saved.
+    The baseline is already set. The trend is what still needs normal runs.
+    """
+    if reference is None or status == "no_baseline":
+        return "No baseline yet. Run a catch-cup test, or save the flow, to set one."
+    base = f"Baseline is set at {reference:.2f} gal/min."
+    if status == "learning" or have < max(1, int(need)):
+        return f"{base} Trend needs {int(need)} normal runs ({int(have)} so far)."
+    if status == "high_trend":
+        return f"{base} Recent runs are above it."
+    if status == "low_trend":
+        return f"{base} Recent runs are below it."
+    return f"{base} Recent runs are in line with it."
+
+
 def trend_detail(
     kind: str,
     *,

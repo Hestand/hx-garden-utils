@@ -279,6 +279,7 @@ async def async_setup_entry(hass, entry) -> bool:
     executor.on_sequence_done = coordinator.async_catch_cup_finished
     executor.on_status = coordinator.poke_status
     executor.hub_cap_fn = coordinator.hub_nightly_cap
+    executor.idle_gpm_fn = coordinator.idle_gpm
     entry.runtime_data = coordinator
     # A restart must not leave a zone running. This happens before entities exist.
     await executor.async_quiesce()

@@ -134,7 +134,7 @@ async def _setup(
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    entry.runtime_data.executor._sleep = _instant
+    entry.runtime_data.executor._pause = _instant
     return calls
 
 
@@ -196,7 +196,7 @@ async def test_runtime_cap_stops_the_run(
         state = hass.states.get("switch.front_valve")
         slept.append((seconds, None if state is None else state.state))
 
-    entry.runtime_data.executor._sleep = record
+    entry.runtime_data.executor._pause = record
     await hass.services.async_call(
         DOMAIN, "set_bucket", {"zone": "Front", "deficit_mm": 30}, blocking=True
     )

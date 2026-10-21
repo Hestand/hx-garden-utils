@@ -191,7 +191,7 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
     assert zone.runtime_min == 16
     assert zone.scheduled is True
     calls = _patch_valve(monkeypatch, hass)
-    entry.runtime_data.executor._sleep = _instant_sleep
+    entry.runtime_data.executor._pause = _instant_sleep
 
     await hass.services.async_call(
         DOMAIN,

@@ -829,6 +829,7 @@ class BaselineFlowSensor(_ZoneSensor):
         return {
             "date": zone.baseline_gpm_at,
             "source": zone.baseline_source,
+            "detail": zone.flow_trend_detail,
         }
 
 
@@ -868,13 +869,10 @@ class FlowVsBaselineSensor(_ZoneSensor):
 
 
 class FlowTrendSensor(_ZoneSensor):
-    """Percent drift of the recent median from the baseline."""
+    """Whether the baseline is set and how recent runs compare with it."""
 
     _attr_translation_key = "flow_trend"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_suggested_display_precision = 1
     _attr_icon = "mdi:chart-timeline-variant"
 
     def __init__(self, coordinator, zone_id: str) -> None:
@@ -882,21 +880,22 @@ class FlowTrendSensor(_ZoneSensor):
         super().__init__(coordinator, zone_id, "flow_trend")
 
     @property
-    def native_value(self) -> float | None:
-        """Return the median drift. None until a reference exists."""
+    def native_value(self) -> str | None:
+        """Return a plain sentence. The percent stays an attribute."""
         zone = self._zone()
         if zone is None:
             return None
-        return zone.flow_trend_pct
+        return zone.flow_trend_detail or None
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Whether the recent median is still learning or past the trend line."""
+        """Status code, the percent drift, and the baseline the trend uses."""
         zone = self._zone()
         if zone is None:
             return {}
         return {
             "status": zone.flow_trend_status,
+            "drift_pct": zone.flow_trend_pct,
             "source": zone.baseline_source,
             "reference_gpm": zone.flow_reference_gpm,
         }

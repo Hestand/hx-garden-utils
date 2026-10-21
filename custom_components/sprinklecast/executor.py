@@ -12,13 +12,22 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .flow import GALLONS_PER_INCH_SQFT
+from .flow_learn import DEFAULT_IDLE_GPM
+from .flow_window import (
+    SAMPLE_SECONDS,
+    VALVE_WAIT_TIMEOUT_SECONDS,
+    FlowSample,
+    steady_gpm,
+    zone_is_flowing,
+    zone_is_quiet,
+)
 from .schedule import elapsed_seconds
 from .units import MM_PER_INCH, rate_gpm, volume_gallons
 
@@ -76,10 +85,16 @@ class WateringExecutor:
         """Bind Home Assistant and the hub store. Callbacks are set by the coordinator."""
         self.hass = hass
         self.store = store
-        self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+        # Tests replace ``_pause``. ``_sleep`` counts the time on the run clock.
+        self._pause: Callable[[float], Awaitable[None]] = asyncio.sleep
         self._task: asyncio.Task[None] | None = None
+        self._catch_cup_active = False
+        self._run_token = 0
+        self._clock_base = dt_util.utcnow()
+        self._clock_seconds = 0.0
         self.current_zone_id: str | None = None
         self.current_name: str | None = None
+        self.idle_gpm_fn: Callable[[], float] | None = None
         self.skip_checker: Callable[[str, bool], str | None] | None = None
         self.rain_since: Callable[[datetime], float] | None = None
         self.on_cycle_done: Callable[..., Awaitable[None]] | None = None
@@ -109,13 +124,36 @@ class WateringExecutor:
         self._poke()
 
     async def start(self, jobs: list[CycleJob]) -> None:
-        """Replace any running sequence with ``jobs``."""
+        """Replace any running sequence with ``jobs``.
+
+        A catch-cup test that is already running ignores another press. That
+        press used to stop the test and start it again.
+        """
+        catch_cup = bool(jobs) and all(job.catch_cup for job in jobs)
+        if catch_cup and self._catch_cup_active:
+            _LOGGER.info(
+                "Catch-cup test is already running; ignoring another press"
+            )
+            return
+        # Bump the token before stop() so the cancelled run does not clear
+        # the flag this press just set.
+        if catch_cup:
+            self._run_token += 1
+            self._catch_cup_active = True
+        token = self._run_token
         await self.stop()
         if not jobs:
+            if catch_cup:
+                self._catch_cup_active = False
             return
-        self._task = asyncio.create_task(self._run(jobs))
+        if not catch_cup:
+            self._run_token += 1
+            token = self._run_token
+        self._clock_base = dt_util.utcnow()
+        self._clock_seconds = 0.0
+        self._task = asyncio.create_task(self._run(jobs, token))
 
-    async def _run(self, jobs: list[CycleJob]) -> None:
+    async def _run(self, jobs: list[CycleJob], token: int) -> None:
         hub_cap = self._hub_cap()
         hub_used = 0.0
         zone_used: dict[str, float] = {}
@@ -133,6 +171,8 @@ class WateringExecutor:
             self._poke()
             raise
         finally:
+            if token == self._run_token:
+                self._catch_cup_active = False
             self._sequence_finished()
 
     async def _run_jobs(
@@ -213,10 +253,12 @@ class WateringExecutor:
             self.current_name = job.name
             await self.store.async_save()
             self._poke()
-            flow_before = self._flow_gallons(job)
-            gpm_before = self._flow_gpm(job)
+            samples: list[FlowSample] = []
             try:
-                await self._sleep(minutes * 60.0)
+                opened = await self._wait_until_flowing(job, samples)
+                open_minutes = 0.0
+                if opened:
+                    open_minutes = await self._hold_open(job, minutes, samples)
             finally:
                 await self._turn(job.entity_id, on=False)
                 if self.store.watering_entity == job.entity_id:
@@ -225,25 +267,112 @@ class WateringExecutor:
                 self.current_name = None
                 await self.store.async_save()
                 self._poke()
-            hub_used += minutes
-            zone_used[job.zone_id] = zone_before + minutes
-            flow_after = self._flow_gallons(job)
-            gallons = None
-            gpm = None
-            if flow_before is not None and flow_after is not None and flow_after > flow_before:
-                gallons = flow_after - flow_before
-                if minutes > 0:
-                    gpm = gallons / minutes
+            # The valve can stay open, and the meter can stay up, after the
+            # command. Those samples still belong to this zone. The next zone
+            # waits until both have finished.
+            await self._wait_until_quiet(job, samples)
+            if open_minutes <= 0:
+                await self._report(
+                    job, 0.0, 0.0, None, f"Valve {job.entity_id} did not open."
+                )
+                continue
+            hub_used += open_minutes
+            zone_used[job.zone_id] = zone_before + open_minutes
+            gpm = steady_gpm(samples, idle_gpm=self._idle_gpm())
+            gallons = None if gpm is None else gpm * open_minutes
+            if job.catch_cup:
+                credited = self._rate_mm(job, open_minutes)
             else:
-                gpm_after = self._flow_gpm(job)
-                pair = [value for value in (gpm_before, gpm_after) if value is not None]
-                if pair:
-                    gpm = sum(pair) / len(pair)
-                    gallons = gpm * minutes
-            credited = self._credited_mm(job, minutes, net_mm, gallons)
-            await self._report(job, minutes, credited, gallons, "ok", gpm)
+                share = open_minutes / minutes if minutes else 1.0
+                credited = self._credited_mm(job, open_minutes, net_mm * share, gallons)
+            await self._report(job, open_minutes, credited, gallons, "ok", gpm)
             if job.soak_after_min > 0 and index < len(jobs) - 1:
                 await self._sleep(job.soak_after_min * 60.0)
+
+    async def _sleep(self, seconds: float) -> None:
+        """Pause, and move the run clock by the same amount.
+
+        The wall clock does not move in tests. The run clock does, so a
+        sample taken after a pause is later than the one before it.
+        """
+        await self._pause(seconds)
+        self._clock_seconds += max(0.0, float(seconds))
+
+    def _clock(self) -> datetime:
+        return self._clock_base + timedelta(seconds=self._clock_seconds)
+
+    def _idle_gpm(self) -> float:
+        if self.idle_gpm_fn is None:
+            return DEFAULT_IDLE_GPM
+        try:
+            return max(0.0, float(self.idle_gpm_fn()))
+        except (TypeError, ValueError):
+            return DEFAULT_IDLE_GPM
+
+    def _take_sample(self, job: CycleJob) -> FlowSample:
+        state = self.hass.states.get(job.entity_id)
+        valve = None if state is None else state.state
+        return FlowSample(
+            at=self._clock(),
+            valve=valve,
+            gpm=self._flow_gpm(job),
+            gallons=self._flow_gallons(job),
+        )
+
+    async def _wait_until_flowing(self, job: CycleJob, samples: list[FlowSample]) -> bool:
+        """Wait until this valve is open, or the meter rises while the valve is unknown."""
+        waited = 0.0
+        while True:
+            sample = self._take_sample(job)
+            samples.append(sample)
+            if zone_is_flowing(sample.valve, sample.gpm, self._idle_gpm()):
+                return True
+            if waited >= VALVE_WAIT_TIMEOUT_SECONDS:
+                return False
+            step = min(SAMPLE_SECONDS, VALVE_WAIT_TIMEOUT_SECONDS - waited)
+            await self._sleep(step)
+            waited += step
+
+    async def _hold_open(
+        self, job: CycleJob, minutes: float, samples: list[FlowSample]
+    ) -> float:
+        """Keep the valve commanded on for ``minutes`` of actual open time."""
+        open_seconds = 0.0
+        target = max(0.0, minutes) * 60.0
+        idle = self._idle_gpm()
+        while open_seconds < target - 0.25:
+            step = min(SAMPLE_SECONDS, target - open_seconds)
+            await self._sleep(step)
+            sample = self._take_sample(job)
+            samples.append(sample)
+            if zone_is_flowing(sample.valve, sample.gpm, idle):
+                open_seconds += step
+                continue
+            if sample.valve in {"closed", "off"}:
+                break
+        return open_seconds / 60.0
+
+    async def _wait_until_quiet(self, job: CycleJob, samples: list[FlowSample]) -> None:
+        """Wait until this valve is shut and the meter is near zero."""
+        waited = 0.0
+        idle = self._idle_gpm()
+        while waited <= VALVE_WAIT_TIMEOUT_SECONDS:
+            sample = self._take_sample(job)
+            samples.append(sample)
+            if zone_is_quiet(sample.valve, sample.gpm, idle):
+                return
+            if waited >= VALVE_WAIT_TIMEOUT_SECONDS:
+                return
+            step = min(SAMPLE_SECONDS, VALVE_WAIT_TIMEOUT_SECONDS - waited)
+            await self._sleep(step)
+            waited += step
+
+    def _rate_mm(self, job: CycleJob, minutes: float) -> float:
+        """Net depth from the zone's current precipitation rate."""
+        if job.precip_in_hr <= 0 or job.efficiency <= 0 or minutes <= 0:
+            return 0.0
+        inches = (minutes / 60.0) * job.precip_in_hr * job.efficiency
+        return inches * MM_PER_INCH
 
     def _sequence_finished(self) -> None:
         """Tell the coordinator the sequence ended, including after a cancel."""
