@@ -211,6 +211,7 @@ class SmartWaterCard extends HTMLElement {
       reason: planAttrs.reason || (planState && planState.state) || "",
       scheduled: planState && planState.state === "scheduled",
       last: lastState && lastState.attributes ? lastState.attributes : null,
+      flowProblem: this._flowProblem(entities, hass),
       source: attrs.precip_source,
       rate: attrs.precipitation_rate_in_hr,
       preset: attrs.preset_precip_in_hr,
@@ -223,6 +224,18 @@ class SmartWaterCard extends HTMLElement {
 
   _byKey(entries, key) {
     return entries.find((entry) => entry.translation_key === key);
+  }
+
+  _flowProblem(entities, hass) {
+    const entity = this._byKey(entities, "flow_problem");
+    if (!entity) {
+      return null;
+    }
+    const state = hass.states[entity.entity_id];
+    if (!state || state.state !== "on") {
+      return null;
+    }
+    return state.attributes || {};
   }
 
   _full(attrs) {
@@ -297,7 +310,8 @@ class SmartWaterCard extends HTMLElement {
     wrap.className = "sw-days";
     const days = (state.attributes && state.attributes.days) || [];
     if (!days.length) {
-      wrap.append(this._markdown((state.attributes && state.attributes.markdown) || "No schedule yet."));
+      const text = this._stateText(state) || "No watering days yet.";
+      wrap.append(this._note(text));
       return wrap;
     }
     if (this._dayIndex == null || this._dayIndex >= days.length) {
@@ -334,104 +348,34 @@ class SmartWaterCard extends HTMLElement {
   }
 
   _appendDay(wrap, day) {
-    if (day.finish_at || day.start_at) {
-      const heading = document.createElement("div");
-      heading.className = "sw-muted";
-      const start = day.start_at ? this._exact(day.start_at) : "";
-      const finish = day.finish_at ? this._clock(day.finish_at) : "";
-      heading.textContent = finish ? `${start} – ${finish}` : start;
-      wrap.append(heading);
-    }
-    const rows = [];
-    (day.zones || []).forEach((zone) => {
-      if (zone.scheduled === false) {
-        return;
-      }
-      (zone.bursts || []).forEach((burst) => {
-        rows.push({ zone, burst });
-      });
-    });
-    rows.sort((left, right) => String(left.burst.start_at || left.burst.start).localeCompare(
-      String(right.burst.start_at || right.burst.start),
-    ));
-    if (!rows.length) {
+    const heading = document.createElement("div");
+    heading.className = "sw-muted";
+    const when = [day.date, day.start].filter(Boolean).join(" ");
+    heading.textContent = when || "Watering day";
+    wrap.append(heading);
+    const zones = (day.zones || []).filter((zone) => zone && zone.scheduled !== false);
+    if (!zones.length) {
       wrap.append(this._note("Nothing scheduled this morning."));
       return;
     }
-    rows.forEach(({ zone, burst }) => wrap.append(this._run(zone, burst)));
+    zones.forEach((zone) => wrap.append(this._zoneRun(zone)));
   }
 
-  _run(zone, burst) {
+  _zoneRun(zone) {
     const row = document.createElement("div");
     row.className = "sw-run";
     row.style.borderLeftColor = this._color(zone.zone_id || zone.name);
-    row.append(this._weather(zone));
     const text = document.createElement("div");
-    const when = document.createElement("div");
-    when.className = "sw-when";
-    when.textContent = this._span(burst);
     const line = document.createElement("div");
     line.className = "sw-zone-line";
     line.textContent = zone.name || "Zone";
     const meta = document.createElement("div");
     meta.className = "sw-burst";
-    meta.textContent = this._meta(zone, burst);
-    text.append(when, line, meta);
+    const minutes = zone.minutes == null || zone.minutes === "" ? "" : `${zone.minutes} min`;
+    meta.textContent = minutes;
+    text.append(line, meta);
     row.append(text);
     return row;
-  }
-
-  _meta(zone, burst) {
-    const parts = [`${this._minutes(burst.minutes)} min`];
-    const inches = burst.inches != null ? burst.inches : zone.inches;
-    if (inches != null && inches !== "") {
-      parts.push(`${Number(inches).toFixed(2)} in`);
-    }
-    if (zone.gallons != null && zone.gallons !== "") {
-      parts.push(`${Math.round(Number(zone.gallons))} gal`);
-    }
-    const soak = Number(burst.soak_min || zone.soak_min || 0);
-    if (soak) {
-      parts.push(`soak ${soak} min`);
-    }
-    const cycle = burst.cycle && burst.of ? `cycle ${burst.cycle} of ${burst.of}` : "";
-    if (cycle) {
-      parts.push(cycle);
-    }
-    return parts.join(" · ");
-  }
-
-  _span(burst) {
-    const start = burst.start_at ? this._ampm(burst.start_at) : String(burst.start || "");
-    const end = burst.end_at ? this._ampm(burst.end_at) : String(burst.end || "");
-    if (start && end) {
-      return `${start} - ${end}`;
-    }
-    return start || end;
-  }
-
-  _weather(zone) {
-    const reason = String(zone.reason || "").toLowerCase();
-    let icon = "mdi:weather-partly-cloudy";
-    if (reason.includes("rain")) {
-      icon = "mdi:weather-rainy";
-    } else if (reason.includes("wind")) {
-      icon = "mdi:weather-windy";
-    } else if (reason.includes("freeze") || reason.includes("°f")) {
-      icon = "mdi:snowflake";
-    } else if (reason.includes("moisture")) {
-      icon = "mdi:water-percent";
-    }
-    const holder = document.createElement("div");
-    if (customElements.get("ha-icon")) {
-      const graphic = document.createElement("ha-icon");
-      graphic.icon = icon;
-      holder.append(graphic);
-      return holder;
-    }
-    holder.className = "sw-glyph";
-    holder.textContent = reason.includes("rain") ? "🌧" : "⛅";
-    return holder;
   }
 
   _color(key) {
@@ -492,6 +436,12 @@ class SmartWaterCard extends HTMLElement {
       : "No run yet";
     detail.textContent = `${next}. ${last}.`;
     box.append(row, bar, detail);
+    if (zone.flowProblem) {
+      const problem = document.createElement("div");
+      problem.className = "sw-alert";
+      problem.textContent = `Flow problem. ${zone.flowProblem.reason || "Outside the baseline."}`;
+      box.append(problem);
+    }
     if (zone.source === "measured" && zone.rate != null) {
       const measured = document.createElement("div");
       measured.className = "sw-muted";
@@ -618,23 +568,6 @@ class SmartWaterCard extends HTMLElement {
     return `${part("weekday")} ${part("month")} ${part("day")}, ${part("hour")}:${part("minute")} ${part("dayPeriod")}`;
   }
 
-  _clock(value) {
-    return this._ampm(value);
-  }
-
-  _ampm(value) {
-    const parts = this._parts(value, true);
-    if (!parts) {
-      return value ? String(value) : "";
-    }
-    const part = (type) => {
-      const found = parts.find((item) => item.type === type);
-      return found ? found.value : "";
-    };
-    const period = part("dayPeriod").toLowerCase().replace(/\s/g, "");
-    return `${part("hour")}:${part("minute")} ${period}`;
-  }
-
   _note(text) {
     const div = document.createElement("div");
     div.className = "sw-muted";
@@ -642,12 +575,6 @@ class SmartWaterCard extends HTMLElement {
     return div;
   }
 
-  _markdown(text) {
-    const pre = document.createElement("pre");
-    pre.className = "sw-md";
-    pre.textContent = text;
-    return pre;
-  }
 }
 
 class SmartWaterCardEditor extends HTMLElement {

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 
 from homeassistant.core import HomeAssistant, ServiceRegistry
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 import pytest
@@ -29,7 +32,12 @@ from custom_components.sprinklecast.const import (
 from custom_components.sprinklecast.flow_window import (
     FlowSample,
     baseline_gpm_from_history,
+    learn_confirmed,
+    middle_updates,
+    peak_middle_gpm,
     steady_gpm,
+    zone_is_flowing,
+    zone_is_quiet,
 )
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -60,9 +68,98 @@ def test_open_window_ignores_the_previous_zone_and_the_settle() -> None:
     while moment <= closed:
         samples.append(FlowSample(moment, "open", gpm=2.28))
         moment += timedelta(minutes=1)
-    # The next zone's water must not be in this window.
+    # The meter falls before the next zone. The valve report is not the edge.
+    samples.append(FlowSample(closed + timedelta(seconds=20), "closed", gpm=0.0))
     samples.append(FlowSample(closed + timedelta(minutes=1), "closed", gpm=14.7))
     assert steady_gpm(samples, idle_gpm=0.5) == pytest.approx(2.28)
+
+
+def test_middle_updates_count_one_slow_meter_reading_once() -> None:
+    """A re-poll of the opening reading is not a middle sample."""
+    start = datetime(2026, 10, 20, 23, 55, 53, tzinfo=UTC)
+    first = start
+    second = start + timedelta(seconds=100)
+    third = start + timedelta(seconds=120)
+    end = start + timedelta(seconds=180)
+    samples = [
+        FlowSample(start, "closed", gpm=9.5, meter_at=first),
+        FlowSample(start + timedelta(seconds=30), "closed", gpm=9.5, meter_at=first),
+        # Still the opening reading, polled again after the middle has started.
+        FlowSample(start + timedelta(seconds=70), "closed", gpm=9.5, meter_at=first),
+        FlowSample(second, "closed", gpm=9.5, meter_at=second),
+        FlowSample(second + timedelta(seconds=10), "open", gpm=9.5, meter_at=second),
+        FlowSample(third, "open", gpm=9.5, meter_at=third),
+        FlowSample(end, "open", gpm=4.0, meter_at=end),
+    ]
+    assert middle_updates(samples, idle_gpm=0.5) == 2
+    assert peak_middle_gpm(samples, idle_gpm=0.5) == pytest.approx(9.5)
+
+
+def test_meter_edges_ignore_a_lagging_valve_report() -> None:
+    """A flow sensor decides. The valve report is only for a zone with no meter."""
+    assert learn_confirmed(0.0, 0.5) is False
+    assert learn_confirmed(None, 0.5) is False
+    assert learn_confirmed(1.2, 0.5) is True
+    # Valve says open, meter still near zero: the run has not started.
+    assert zone_is_flowing("open", 0.0, 0.5, metered=True) is False
+    # Water is moving while the valve entity still says closed.
+    assert zone_is_flowing("closed", 9.5, 0.5, metered=True) is True
+    # A missing reading does not fall through to the valve.
+    assert zone_is_flowing("open", None, 0.5, metered=True) is False
+    # No meter: the valve is the fallback.
+    assert zone_is_flowing("open", None, 0.5) is True
+    assert zone_is_flowing("closed", None, 0.5) is False
+    # Meter fell, valve still says open: this zone is finished.
+    assert zone_is_quiet("open", 0.0, 0.5, metered=True) is True
+    assert zone_is_quiet("open", 2.0, 0.5, metered=True) is False
+    assert zone_is_quiet("open", None, 0.5, metered=True) is True
+    # No meter: an open valve holds the next zone.
+    assert zone_is_quiet("open", None, 0.5) is False
+    assert zone_is_quiet("closed", None, 0.5) is True
+
+
+def test_flow_starts_while_the_valve_entity_still_says_closed() -> None:
+    """Bed's water is moving at 23:55:53. The valve entity says open at 23:57:13.
+
+    That open report is cloud polling lag. The peak in the middle of the
+    flowing window is the rate, including the part before the entity updates.
+    """
+    flow_at = datetime(2026, 10, 20, 23, 55, 53, tzinfo=UTC)
+    valve_open = datetime(2026, 10, 20, 23, 57, 13, tzinfo=UTC)
+    samples = [FlowSample(datetime(2026, 10, 20, 23, 54, 25, tzinfo=UTC), "closed", gpm=0.0)]
+    moment = flow_at
+    while moment < flow_at + timedelta(seconds=100):
+        samples.append(FlowSample(moment, "closed", gpm=9.5))
+        moment += timedelta(seconds=30)
+    while moment < flow_at + timedelta(minutes=5):
+        valve = "open" if moment >= valve_open else "closed"
+        samples.append(FlowSample(moment, valve, gpm=4.0))
+        moment += timedelta(seconds=30)
+    samples.append(FlowSample(moment + timedelta(seconds=30), "open", gpm=0.0))
+    assert peak_middle_gpm(samples, idle_gpm=0.5) == pytest.approx(9.5)
+    # A window that waited for the valve report would only see 4.0.
+    assert steady_gpm(samples, idle_gpm=0.5) == pytest.approx(4.0)
+
+
+def test_history_keeps_flow_from_before_the_valve_reports_open() -> None:
+    """The only high samples are before the valve entity says open."""
+    flow_at = datetime(2026, 10, 20, 23, 55, 53, tzinfo=UTC)
+    valve_open = datetime(2026, 10, 20, 23, 57, 13, tzinfo=UTC)
+    valve_close = datetime(2026, 10, 21, 0, 2, 13, tzinfo=UTC)
+    flow = []
+    moment = flow_at
+    while moment < valve_open:
+        flow.append((moment, 9.5))
+        moment += timedelta(seconds=30)
+    measured = baseline_gpm_from_history(
+        flow,
+        [(valve_open, "open"), (valve_close, "closed")],
+        [],
+        finished_at=valve_close,
+        minutes=5,
+        idle_gpm=0.5,
+    )
+    assert measured == pytest.approx(9.5)
 
 
 def test_overlapping_valve_samples_are_left_out() -> None:
@@ -112,6 +209,21 @@ def test_history_rebuilds_the_live_catch_cup_rates() -> None:
             idle_gpm=0.5,
         )
         assert measured == pytest.approx(gpm)
+
+
+def test_history_uses_the_meter_when_the_valve_never_reports_open() -> None:
+    """A cloud valve that stays closed does not throw away the flow record."""
+    finished = datetime(2026, 10, 21, 0, 10, 0, tzinfo=UTC)
+    start = finished - timedelta(minutes=10)
+    measured = baseline_gpm_from_history(
+        _points(start, 10, 8.0),
+        [(start, "closed"), (finished, "closed")],
+        [],
+        finished_at=finished,
+        minutes=10,
+        idle_gpm=0.5,
+    )
+    assert measured == pytest.approx(8.0)
 
 
 def _zone(title: str, valve: str, unique_id: str) -> dict:
@@ -171,7 +283,7 @@ def _weather(hass: HomeAssistant) -> None:
 async def test_a_lagging_valve_is_measured_while_it_is_open(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Each zone runs 15 open minutes. The previous zone's tail is not included."""
+    """Each zone runs 15 commanded minutes. Flow, not the valve report, is the window."""
     _weather(hass)
     entry = _entry()
     entry.add_to_hass(hass)
@@ -212,14 +324,20 @@ async def test_a_lagging_valve_is_measured_while_it_is_open(
         flowing = None
         for entity, rate in rates.items():
             state = hass.states.get(entity).state
-            if state == "opening" and clock["t"] - marks[f"open:{entity}"] >= 180:
+            opened_at = marks.get(f"open:{entity}")
+            closed_at = marks.get(f"close:{entity}")
+            # The entity reports open about 168s late. Water is already moving.
+            if state == "opening" and opened_at is not None and clock["t"] - opened_at >= 168:
                 hass.states.async_set(entity, "open")
                 state = "open"
-            if state == "closing" and clock["t"] - marks[f"close:{entity}"] >= 180:
+            if state == "closing" and closed_at is not None and clock["t"] - closed_at >= 180:
                 hass.states.async_set(entity, "closed")
                 state = "closed"
-            if state in {"open", "closing"}:
-                flowing = rate
+            # Meter rises 90s after the command, before the valve report,
+            # and falls 30s after the close command.
+            if opened_at is not None and clock["t"] - opened_at >= 90:
+                if closed_at is None or clock["t"] - closed_at < 30:
+                    flowing = rate
         hass.states.async_set(
             "sensor.main_flow",
             "0" if flowing is None else str(flowing),
@@ -237,14 +355,387 @@ async def test_a_lagging_valve_is_measured_while_it_is_open(
     assert task is not None
     await task
     await hass.async_block_till_done()
-    assert entry.runtime_data.store.zone("bed")["baseline_gpm"] == pytest.approx(2.28)
-    assert entry.runtime_data.store.zone("front")["baseline_gpm"] == pytest.approx(14.7)
-    # Open time, not the three minutes spent waiting for the valve.
+    assert entry.runtime_data.store.zone("bed")["baseline_gpm"] is None
+    assert entry.runtime_data.store.zone("front")["baseline_gpm"] is None
+    # Fifteen minutes from the command. Flow at 90s counts; the late open report does not.
     assert entry.runtime_data.store.zone("bed")["catch_cup_pending"]["minutes"] == pytest.approx(
         15
     )
     assert entry.runtime_data.store.zone("bed")["last_run"]["net_mm"] > 0
     assert entry.runtime_data.store.zone("front")["last_run"]["net_mm"] > 0
+
+
+async def test_metered_run_ignores_a_valve_report_when_the_meter_stays_quiet(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An open valve with a quiet meter is not a measured run."""
+    _weather(hass)
+    entry = _entry()
+    entry.add_to_hass(hass)
+    hass.states.async_set("valve.bed", "closed")
+    hass.states.async_set("sensor.main_flow", "0", {"unit_of_measurement": "gal/min"})
+    original = ServiceRegistry.async_call
+
+    async def fake(
+        self,
+        domain,
+        service,
+        service_data=None,
+        blocking=False,
+        context=None,
+        target=None,
+        return_response=False,
+    ):
+        data = service_data or {}
+        if domain == "valve" and data.get("entity_id") == "valve.bed":
+            hass.states.async_set("valve.bed", "open" if service == "open_valve" else "closed")
+            return None
+        return await original(
+            self, domain, service, service_data, blocking, context, target, return_response
+        )
+
+    async def pause(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(ServiceRegistry, "async_call", fake)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    entry.runtime_data.executor._pause = pause
+    await hass.services.async_call(
+        DOMAIN, "run_catch_cup_test", {"zone": "Bed", "minutes": 1}, blocking=True
+    )
+    task = entry.runtime_data.executor._task
+    assert task is not None
+    await task
+    await hass.async_block_till_done()
+    zone = entry.runtime_data.store.zone("bed")
+    assert zone.get("catch_cup_pending") is None
+    assert zone.get("baseline_gpm") is None
+    assert "No flow was seen for Bed" in zone["last_run"]["result"]
+
+
+async def test_learn_flow_starts_when_flow_rises_and_waits_for_two_samples(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Five minutes start at the meter, while the valve entity still says closed."""
+    _weather(hass)
+    entry = _entry()
+    entry.add_to_hass(hass)
+    hass.states.async_set("valve.bed", "closed")
+    hass.states.async_set("sensor.main_flow", "0", {"unit_of_measurement": "gal/min"})
+    clock = {"t": 0.0}
+    marks: dict[str, float] = {}
+    published: dict[str, int | None] = {"bucket": None}
+    started = time.time()
+    measured_while_closed = {"ok": False}
+    seen: list[tuple[str, str | None, str | None]] = []
+    original = ServiceRegistry.async_call
+
+    async def fake(
+        self,
+        domain,
+        service,
+        service_data=None,
+        blocking=False,
+        context=None,
+        target=None,
+        return_response=False,
+    ):
+        data = service_data or {}
+        entity = data.get("entity_id")
+        if domain == "valve" and entity == "valve.bed":
+            if service == "open_valve":
+                marks["open"] = clock["t"]
+                marks.pop("close", None)
+                hass.states.async_set(entity, "closed")
+            elif service == "close_valve":
+                marks["close"] = clock["t"]
+                hass.states.async_set(entity, "closed")
+            return None
+        return await original(
+            self, domain, service, service_data, blocking, context, target, return_response
+        )
+
+    async def pause(seconds: float) -> None:
+        clock["t"] += seconds
+        opened = marks.get("open")
+        closed = marks.get("close")
+        # The valve entity reports open late. Flow is already moving.
+        if opened is not None and closed is None and clock["t"] - opened >= 170:
+            hass.states.async_set("valve.bed", "open")
+        bucket = int(clock["t"] // 60)
+        if closed is not None or opened is None or bucket <= 0:
+            rate = 0.0
+        elif bucket >= 5:
+            rate = 4.0
+        else:
+            rate = 9.5
+        if closed is not None or published["bucket"] != bucket:
+            # Same gallons per minute still has to be a new meter timestamp.
+            hass.states.async_set(
+                "sensor.main_flow",
+                str(rate),
+                {"unit_of_measurement": "gal/min"},
+                force_update=True,
+                timestamp=started + clock["t"],
+            )
+            published["bucket"] = None if closed is not None else bucket
+        now = hass.states.get("sensor.garden_watering_now")
+        valve = hass.states.get("valve.bed")
+        if now is not None:
+            seen.append((now.state, now.attributes.get("status"), now.attributes.get("zone")))
+            if (
+                now.attributes.get("status") == "Measuring"
+                and valve is not None
+                and valve.state != "open"
+            ):
+                measured_while_closed["ok"] = True
+
+    monkeypatch.setattr(ServiceRegistry, "async_call", fake)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id("button", DOMAIN, f"{entry.entry_id}_learn_flow")
+    entry.runtime_data.executor._pause = pause
+    await hass.services.async_call(
+        DOMAIN, "learn_flow_rates", {"zone": "Bed"}, blocking=True
+    )
+    task = entry.runtime_data.executor._task
+    assert task is not None
+    await task
+    await hass.async_block_till_done()
+    zone = entry.runtime_data.store.zone("bed")
+    assert zone["baseline_gpm"] == pytest.approx(9.5)
+    assert zone["baseline_source"] == "flow_learning"
+    # A minute with the meter still at zero, then five minutes after it rises.
+    assert zone["last_run"]["minutes"] == pytest.approx(5, abs=0.1)
+    assert marks["close"] - marks["open"] == pytest.approx(360, abs=5)
+    assert measured_while_closed["ok"] is True
+    assert ("Learning flow rates", "Waiting for flow", "Bed") in seen
+    assert ("Learning flow rates", "Measuring", "Bed") in seen
+    assert hass.states.get("sensor.garden_watering_now").state != "Learning flow rates"
+
+
+async def test_learn_flow_waits_until_the_previous_zone_is_quiet(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Front starts when Bed's meter falls, even if the valve entity stays open."""
+    _weather(hass)
+    entry = _entry()
+    entry.add_to_hass(hass)
+    hass.states.async_set("valve.bed", "closed")
+    hass.states.async_set("valve.front", "closed")
+    hass.states.async_set("sensor.main_flow", "0", {"unit_of_measurement": "gal/min"})
+    clock = {"t": 0.0}
+    started = time.time()
+    active: dict[str, str | None] = {"entity": None}
+    close_at: dict[str, float] = {}
+    pending_close: dict[str, float] = {}
+    opens: list[tuple[str, float, str, str]] = []
+    published: dict[str, object] = {"bucket": None, "entity": None}
+    original = ServiceRegistry.async_call
+
+    def publish(rate: float, bucket: int | None, entity: str | None) -> None:
+        if published["bucket"] == bucket and published["entity"] == entity:
+            return
+        hass.states.async_set(
+            "sensor.main_flow",
+            str(rate),
+            {"unit_of_measurement": "gal/min"},
+            force_update=True,
+            timestamp=started + clock["t"],
+        )
+        published["bucket"] = bucket
+        published["entity"] = entity
+
+    async def fake(
+        self,
+        domain,
+        service,
+        service_data=None,
+        blocking=False,
+        context=None,
+        target=None,
+        return_response=False,
+    ):
+        data = service_data or {}
+        entity = data.get("entity_id")
+        if domain == "valve" and entity in {"valve.bed", "valve.front"}:
+            if service == "open_valve":
+                bed = hass.states.get("valve.bed")
+                flow = hass.states.get("sensor.main_flow")
+                opens.append(
+                    (
+                        entity,
+                        clock["t"],
+                        "closed" if bed is None else bed.state,
+                        "0" if flow is None else flow.state,
+                    )
+                )
+                active["entity"] = entity
+                pending_close.pop(entity, None)
+                hass.states.async_set(entity, "open")
+                publish(8.0, int(clock["t"] // 60), entity)
+            elif service == "close_valve":
+                close_at[entity] = clock["t"]
+                pending_close[entity] = clock["t"]
+                active["entity"] = None
+            return None
+        return await original(
+            self, domain, service, service_data, blocking, context, target, return_response
+        )
+
+    async def pause(seconds: float) -> None:
+        clock["t"] += seconds
+        for entity, requested in list(pending_close.items()):
+            if clock["t"] - requested < 30:
+                continue
+            # The meter falls. The valve entity keeps saying open.
+            publish(0.0, None, None)
+            pending_close.pop(entity, None)
+            return
+        running = active["entity"]
+        if running is not None:
+            publish(8.0, int(clock["t"] // 60), running)
+
+    monkeypatch.setattr(ServiceRegistry, "async_call", fake)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    entry.runtime_data.executor._pause = pause
+    await hass.services.async_call(
+        DOMAIN,
+        "learn_flow_rates",
+        {"zone": ["Bed", "Front"]},
+        blocking=True,
+    )
+    task = entry.runtime_data.executor._task
+    assert task is not None
+    await task
+    await hass.async_block_till_done()
+    front_open = next(item for item in opens if item[0] == "valve.front")
+    assert close_at["valve.bed"] + 29 <= front_open[1] <= close_at["valve.bed"] + 90
+    assert front_open[2] == "open"
+    assert float(front_open[3]) == pytest.approx(0.0)
+    assert hass.states.get("valve.bed").state == "open"
+    for zone_id in ("bed", "front"):
+        zone = entry.runtime_data.store.zone(zone_id)
+        assert zone["baseline_gpm"] == pytest.approx(8.0)
+        assert zone["baseline_source"] == "flow_learning"
+
+
+async def test_learn_flow_fails_when_no_flow_is_seen(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _weather(hass)
+    entry = _entry()
+    entry.add_to_hass(hass)
+    hass.states.async_set("valve.bed", "closed")
+    hass.states.async_set("sensor.main_flow", "0", {"unit_of_measurement": "gal/min"})
+    original = ServiceRegistry.async_call
+
+    async def fake(
+        self,
+        domain,
+        service,
+        service_data=None,
+        blocking=False,
+        context=None,
+        target=None,
+        return_response=False,
+    ):
+        data = service_data or {}
+        if domain == "valve" and data.get("entity_id") == "valve.bed":
+            if service == "open_valve":
+                hass.states.async_set("valve.bed", "open")
+            else:
+                hass.states.async_set("valve.bed", "closed")
+            return None
+        return await original(
+            self, domain, service, service_data, blocking, context, target, return_response
+        )
+
+    async def pause(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(ServiceRegistry, "async_call", fake)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    entry.runtime_data.executor._pause = pause
+    await hass.services.async_call(
+        DOMAIN, "learn_flow_rates", {"zone": "Bed"}, blocking=True
+    )
+    task = entry.runtime_data.executor._task
+    assert task is not None
+    await task
+    await hass.async_block_till_done()
+    zone = entry.runtime_data.store.zone("bed")
+    assert zone.get("baseline_gpm") is None
+    assert "No flow was seen for Bed" in zone["last_run"]["result"]
+    assert "flow meter stayed near zero" in zone["last_run"]["result"]
+    assert "valve reported open" in zone["last_run"]["result"]
+
+
+async def test_stop_all_cancels_learn_flow_and_a_second_press_is_ignored(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _weather(hass)
+    entry = _entry()
+    entry.add_to_hass(hass)
+    hass.states.async_set("valve.bed", "closed")
+    hass.states.async_set("sensor.main_flow", "0", {"unit_of_measurement": "gal/min"})
+    opens: list[str] = []
+    gate = asyncio.Event()
+    original = ServiceRegistry.async_call
+
+    async def fake(
+        self,
+        domain,
+        service,
+        service_data=None,
+        blocking=False,
+        context=None,
+        target=None,
+        return_response=False,
+    ):
+        data = service_data or {}
+        entity = data.get("entity_id")
+        if domain == "valve" and entity == "valve.bed":
+            if service == "open_valve":
+                opens.append(entity)
+                hass.states.async_set(entity, "closed")
+            elif service == "close_valve":
+                hass.states.async_set(entity, "closed")
+            return None
+        return await original(
+            self, domain, service, service_data, blocking, context, target, return_response
+        )
+
+    async def pause(_seconds: float) -> None:
+        await gate.wait()
+
+    monkeypatch.setattr(ServiceRegistry, "async_call", fake)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    entry.runtime_data.executor._pause = pause
+    await hass.services.async_call(
+        DOMAIN, "learn_flow_rates", {"zone": "Bed"}, blocking=True
+    )
+    for _ in range(20):
+        await hass.async_block_till_done()
+        if hass.states.get("sensor.garden_watering_now").state == "Learning flow rates":
+            break
+    assert hass.states.get("sensor.garden_watering_now").state == "Learning flow rates"
+    assert hass.states.get("sensor.garden_watering_now").attributes["zone"] == "Bed"
+    await hass.services.async_call(
+        DOMAIN, "learn_flow_rates", {"zone": "Bed"}, blocking=True
+    )
+    assert opens == ["valve.bed"]
+    await hass.services.async_call(DOMAIN, "stop_all", {}, blocking=True)
+    await hass.async_block_till_done()
+    assert hass.states.get("valve.bed").state == "closed"
+    assert entry.runtime_data.store.zone("bed").get("baseline_gpm") is None
+    assert hass.states.get("sensor.garden_watering_now").state != "Learning flow rates"
+    gate.set()
 
 
 def _point(moment: datetime, state: str, unit: str | None = None) -> HistoryPoint:

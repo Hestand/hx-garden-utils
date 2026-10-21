@@ -19,6 +19,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -32,15 +33,41 @@ from .const import (
 from .coordinator import SmartWaterConfigEntry
 from .entity import SmartWaterHubEntity, SmartWaterZoneEntity
 from .units import mm_to_inches
-from .week_plan import exact_next_text
+from .week_plan import exact_next_text, schedule_attributes
 
 
-def _drop_sensor(hass: HomeAssistant, unique_id: str) -> None:
+def _drop_sensor(hass: HomeAssistant, unique_id: str) -> bool:
     """Remove a sensor that no longer has a moisture sensor or a flow meter."""
     registry = er.async_get(hass)
     entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
-    if entity_id is not None:
-        registry.async_remove(entity_id)
+    if entity_id is None:
+        return False
+    registry.async_remove(entity_id)
+    return True
+
+
+def _note_flow_check_replaced(hass: HomeAssistant, entry_id: str) -> None:
+    """One repair when the old Flow check sensor was actually removed."""
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        f"flow_check_replaced_{entry_id}",
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="flow_check_replaced",
+    )
+
+
+def _note_flow_diagnostics_removed(hass: HomeAssistant, entry_id: str) -> None:
+    """One repair when Learned flow or Flow trend was actually removed."""
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        f"flow_diagnostics_removed_{entry_id}",
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="flow_diagnostics_removed",
+    )
 
 
 async def async_setup_entry(
@@ -73,6 +100,8 @@ async def async_setup_entry(
     if entry.data.get(CONF_SIMULATION):
         hub_sensors.append(SimulationSensor(coordinator))
     async_add_entities(hub_sensors)
+    replaced_flow_check = False
+    removed_diagnostics = False
     for subentry in entry.subentries.values():
         if subentry.subentry_type != SUBENTRY_ZONE:
             continue
@@ -94,28 +123,31 @@ async def async_setup_entry(
             zone_sensors.append(MoistureSensor(coordinator, zone_id))
         else:
             _drop_sensor(hass, f"{prefix}_moisture")
+        if _drop_sensor(hass, f"{prefix}_flow"):
+            replaced_flow_check = True
+        for suffix in ("learned_gpm", "flow_trend"):
+            if _drop_sensor(hass, f"{prefix}_{suffix}"):
+                removed_diagnostics = True
         if entry.options.get(CONF_FLOW_SENSOR):
             zone_sensors.extend(
                 [
-                    FlowSensor(coordinator, zone_id),
-                    LearnedGpmSensor(coordinator, zone_id),
                     LastRunGpmSensor(coordinator, zone_id),
                     BaselineFlowSensor(coordinator, zone_id),
                     FlowVsBaselineSensor(coordinator, zone_id),
-                    FlowTrendSensor(coordinator, zone_id),
                 ]
             )
         else:
             for suffix in (
-                "flow",
-                "learned_gpm",
                 "last_run_gpm",
                 "baseline_flow",
                 "flow_vs_baseline",
-                "flow_trend",
             ):
                 _drop_sensor(hass, f"{prefix}_{suffix}")
         async_add_entities(zone_sensors, config_subentry_id=zone_id)
+    if replaced_flow_check:
+        _note_flow_check_replaced(hass, entry.entry_id)
+    if removed_diagnostics:
+        _note_flow_diagnostics_removed(hass, entry.entry_id)
 
 
 class TonightPlanSensor(SmartWaterHubEntity, SensorEntity):
@@ -539,36 +571,6 @@ class ZonePlanSensor(_ZoneSensor):
         }
 
 
-class FlowSensor(_ZoneSensor):
-    """Delivered volume versus the plan. Status only; nothing is closed."""
-
-    _attr_translation_key = "flow"
-    _attr_icon = "mdi:water-pump"
-
-    def __init__(self, coordinator, zone_id: str) -> None:
-        """Create the flow sensor."""
-        super().__init__(coordinator, zone_id, "flow")
-
-    @property
-    def native_value(self) -> str | None:
-        """Return pending, ok, low_flow, leak, no_data, or not_configured."""
-        zone = self._zone()
-        if zone is None:
-            return None
-        return zone.flow_status
-
-    @property
-    def extra_state_attributes(self) -> dict[str, object]:
-        """Gallons observed and gallons the plan expected."""
-        zone = self._zone()
-        if zone is None:
-            return {}
-        return {
-            "delivered_gal": round(zone.flow_delivered_gal, 2),
-            "expected_gal": zone.flow_expected_gal,
-        }
-
-
 class MoistureSensor(_ZoneSensor):
     """The configured soil-moisture sensor's own reading, as a percent."""
 
@@ -639,26 +641,19 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Watering days, each zone's plan, and markdown for a Lovelace card."""
+        """Watering days: date, start, and minutes. Detail is in diagnostics."""
         data = self.coordinator.data
         if data is None:
             return {}
-        return {
-            "days": data.schedule_days or [],
-            "markdown": data.schedule_markdown,
-            "window": data.schedule_window,
-            "note": (
-                "The list is the next watering days, one for each allowed weekday, "
-                "within a year. Days with nothing scheduled are left out. Later days "
-                "use the forecast or the recent water-loss average and assume no rain. "
-                "A day past the weather forecast has estimated set. The date and time stay exact."
-            ),
-            "alerts": data.alerts,
-            "week_gal": round(sum(zone.water_week_gal for zone in data.zones.values()), 1),
-            "saved_gal": round(
+        return schedule_attributes(
+            list(data.schedule_days or []),
+            window=data.schedule_window,
+            alerts=list(data.alerts or []),
+            week_gal=round(sum(zone.water_week_gal for zone in data.zones.values()), 1),
+            saved_gal=round(
                 sum(zone.saved_week_gal or 0.0 for zone in data.zones.values()), 1
             ),
-        }
+        )
 
 
 class WateringNowSensor(SmartWaterHubEntity, SensorEntity):
@@ -674,14 +669,29 @@ class WateringNowSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def native_value(self) -> str:
-        """Return the running zone name."""
+        """Return the running zone name, or Learning flow rates during that run."""
         executor = self.coordinator.executor
+        if executor is not None and executor.learning_flow:
+            return "Learning flow rates"
         if executor is not None and executor.current_name:
             return executor.current_name
         data = self.coordinator.data
         if data is None:
             return "Idle"
         return data.watering_now or "Idle"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Current zone and what that run is doing."""
+        executor = self.coordinator.executor
+        if executor is None:
+            return {}
+        attrs: dict[str, object] = {}
+        if executor.current_name:
+            attrs["zone"] = executor.current_name
+        if executor.status:
+            attrs["status"] = executor.status
+        return attrs
 
 
 class LastRunSensor(_ZoneSensor):
@@ -749,30 +759,6 @@ class DormancySensor(_ZoneSensor):
         }
 
 
-class LearnedGpmSensor(_ZoneSensor):
-    """Median gallons per minute learned from finished runs."""
-
-    _attr_translation_key = "learned_gpm"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
-    _attr_native_unit_of_measurement = UnitOfVolumeFlowRate.GALLONS_PER_MINUTE
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_suggested_display_precision = 2
-    _attr_icon = "mdi:speedometer"
-
-    def __init__(self, coordinator, zone_id: str) -> None:
-        """Create the learned-GPM sensor."""
-        super().__init__(coordinator, zone_id, "learned_gpm")
-
-    @property
-    def native_value(self) -> float | None:
-        """Return the learned rate, or none until enough runs exist."""
-        zone = self._zone()
-        if zone is None:
-            return None
-        return zone.learned_gpm
-
-
 class LastRunGpmSensor(_ZoneSensor):
     """Gallons per minute measured on the last finished cycle."""
 
@@ -798,7 +784,7 @@ class LastRunGpmSensor(_ZoneSensor):
 
 
 class BaselineFlowSensor(_ZoneSensor):
-    """Permanent catch-cup baseline, or the learned rate when no test has been run."""
+    """Expected flow. A catch-cup or saved baseline wins; otherwise the learned rate."""
 
     _attr_translation_key = "baseline_flow"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -865,39 +851,6 @@ class FlowVsBaselineSensor(_ZoneSensor):
             "source": zone.baseline_source,
             "reference_gpm": zone.flow_reference_gpm,
             "last_run_gpm": zone.last_run_gpm,
-        }
-
-
-class FlowTrendSensor(_ZoneSensor):
-    """Whether the baseline is set and how recent runs compare with it."""
-
-    _attr_translation_key = "flow_trend"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_icon = "mdi:chart-timeline-variant"
-
-    def __init__(self, coordinator, zone_id: str) -> None:
-        """Create the flow-trend sensor."""
-        super().__init__(coordinator, zone_id, "flow_trend")
-
-    @property
-    def native_value(self) -> str | None:
-        """Return a plain sentence. The percent stays an attribute."""
-        zone = self._zone()
-        if zone is None:
-            return None
-        return zone.flow_trend_detail or None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, object]:
-        """Status code, the percent drift, and the baseline the trend uses."""
-        zone = self._zone()
-        if zone is None:
-            return {}
-        return {
-            "status": zone.flow_trend_status,
-            "drift_pct": zone.flow_trend_pct,
-            "source": zone.baseline_source,
-            "reference_gpm": zone.flow_reference_gpm,
         }
 
 

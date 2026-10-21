@@ -352,6 +352,53 @@ def _day_row(
     }
 
 
+def schedule_attributes(
+    days: list[dict[str, object]],
+    *,
+    window: str = "",
+    alerts: list[str] | None = None,
+    week_gal: float = 0.0,
+    saved_gal: float = 0.0,
+) -> dict[str, object]:
+    """Attributes for the watering-schedule sensor.
+
+    Home Assistant does not record state attributes above 16 KB. Each watering
+    day keeps its date, start time, and the minutes for each zone that waters.
+    Reasons, cycle times, depths, and the markdown table stay on the
+    coordinator for the diagnostics download.
+    """
+    compact: list[dict[str, object]] = []
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        zones: list[dict[str, object]] = []
+        for zone in list(day.get("zones") or []):
+            if not isinstance(zone, dict) or zone.get("scheduled") is False:
+                continue
+            zones.append(
+                {
+                    "zone_id": zone.get("zone_id"),
+                    "name": zone.get("name"),
+                    "minutes": zone.get("minutes"),
+                }
+            )
+        compact.append(
+            {
+                "date": day.get("date"),
+                "start": day.get("start") or "",
+                "estimated": bool(day.get("estimated")),
+                "zones": zones,
+            }
+        )
+    return {
+        "days": compact,
+        "window": window,
+        "alerts": list(alerts or []),
+        "week_gal": week_gal,
+        "saved_gal": saved_gal,
+    }
+
+
 def watering_day_limit(allowed_weekdays: tuple[str, ...] | None) -> int:
     """How many upcoming watering days the schedule lists.
 

@@ -107,6 +107,43 @@ def compare_to_reference(
     return "ok"
 
 
+def flow_problem(
+    *,
+    baseline_gpm: float | None,
+    last_run_gpm: float | None,
+    trend: str,
+    high_pct: float,
+    low_pct: float,
+) -> tuple[bool, str, float | None]:
+    """Whether Flow problem is on, a short reason, and the percent gap.
+
+    A saved baseline is required. A learned median, with no baseline, stays
+    off even when that run would have been high or low against the median.
+    """
+    baseline = _positive(baseline_gpm)
+    if baseline is None:
+        return False, "No baseline yet", None
+    gap = percent_vs_reference(last_run_gpm, baseline)
+    shown = None if gap is None else round(gap, 1)
+    run = compare_to_reference(
+        last_run_gpm, baseline, high_pct=high_pct, low_pct=low_pct
+    )
+    reasons: list[str] = []
+    if run == "high_flow":
+        reasons.append("Last run is above the baseline")
+    elif run == "low_flow":
+        reasons.append("Last run is below the baseline")
+    if trend == "high_trend":
+        reasons.append("Recent runs are above the baseline")
+    elif trend == "low_trend":
+        reasons.append("Recent runs are below the baseline")
+    if reasons:
+        return True, ". ".join(reasons), shown
+    if run == "no_data":
+        return False, "Baseline is set. No run to compare yet.", None
+    return False, "Last run is within the baseline", shown
+
+
 def percent_vs_reference(gpm: float | None, reference: float | None) -> float | None:
     """Percent difference of one run from the reference. Positive is higher."""
     measured = _positive(gpm)

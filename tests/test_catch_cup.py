@@ -255,7 +255,12 @@ async def test_depth_sets_the_rate_and_credits_only_the_change(
     assert state["catch_cup"]["minutes"] == 15
     assert state["catch_cup"]["depth_in"] == pytest.approx(0.25)
     assert state["deficit_mm"] == pytest.approx(20 - 0.25 * 25.4)
-    assert entry.subentries["front"].data[CONF_PRECIPITATION_RATE] == pytest.approx(1.0)
+    # The rate is runtime state. The zone config is not rewritten, so the hub
+    # does not reload.
+    assert entry.subentries["front"].data[CONF_PRECIPITATION_RATE] == pytest.approx(1.5)
+    assert entry.runtime_data.data.zones["front"].precipitation_rate_in_hr == pytest.approx(
+        1.0
+    )
 
     await hass.services.async_call(
         DOMAIN,
@@ -290,7 +295,7 @@ async def test_depth_sets_the_rate_and_credits_only_the_change(
 async def test_metered_run_saves_baseline_and_alerts_against_it(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The catch-cup gallons per minute is kept, and a later run uses that number."""
+    """A catch-cup run does not set the flow baseline. A saved baseline still alerts."""
     entry = await _setup(hass, _entry(flow=True))
     _patch_valves(monkeypatch, hass)
     hass.states.async_set("sensor.main_flow", "100", {"unit_of_measurement": "gal"})
@@ -316,27 +321,41 @@ async def test_metered_run_saves_baseline_and_alerts_against_it(
     await hass.async_block_till_done()
 
     state = entry.runtime_data.store.zone("front")
-    assert state["baseline_gpm"] == pytest.approx(1.0)
-    assert state["baseline_source"] == "catch_cup"
-    assert state["baseline_gpm_at"]
+    assert state["baseline_gpm"] is None
+    assert state["catch_cup_pending"]["minutes"] == pytest.approx(15)
+    assert state["last_run"]["net_mm"] > 0
     assert events == []
     issue = ir.async_get(hass).async_get_issue(DOMAIN, f"catch_cup_{entry.entry_id}")
     assert issue is not None
+
+    await hass.services.async_call(
+        DOMAIN, "set_flow_baseline", {"zone": "Front", "gpm": 1}, blocking=True
+    )
+    state = entry.runtime_data.store.zone("front")
+    assert state["baseline_gpm"] == pytest.approx(1.0)
+    assert state["baseline_source"] == "manual"
 
     reloaded = SmartWaterStore(hass, entry.entry_id)
     await reloaded.async_load()
     assert reloaded.zones["front"]["baseline_gpm"] == pytest.approx(1.0)
 
     registry = er.async_get(hass)
-    for suffix in ("baseline_flow", "flow_vs_baseline", "flow_trend"):
+    for suffix in ("baseline_flow", "flow_vs_baseline", "last_run_gpm"):
         assert registry.async_get_entity_id(
             "sensor", DOMAIN, f"{entry.entry_id}_front_{suffix}"
+        )
+    for suffix in ("learned_gpm", "flow_trend"):
+        assert (
+            registry.async_get_entity_id(
+                "sensor", DOMAIN, f"{entry.entry_id}_front_{suffix}"
+            )
+            is None
         )
     baseline = hass.states.get(
         registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_front_baseline_flow")
     )
     assert float(baseline.state) == pytest.approx(1.0)
-    assert baseline.attributes["source"] == "catch_cup"
+    assert baseline.attributes["source"] == "manual"
     assert baseline.attributes["date"]
 
     coordinator = entry.runtime_data
@@ -374,13 +393,17 @@ async def test_trend_alerts_when_the_median_drifts_and_a_single_run_does_not(
     assert coordinator.store.zone("front")["baseline_source"] == "manual"
     assert coordinator.store.zone("front")["flow_history"] == []
     registry = er.async_get(hass)
-    trend_id = registry.async_get_entity_id(
-        "sensor", DOMAIN, f"{entry.entry_id}_front_flow_trend"
+    problem_id = registry.async_get_entity_id(
+        "binary_sensor", DOMAIN, f"{entry.entry_id}_front_flow_problem"
     )
-    trend = hass.states.get(trend_id)
-    assert trend is not None
-    assert trend.state == "Baseline is set at 10.00 gal/min. Trend needs 5 normal runs (0 so far)."
-    assert trend.attributes["status"] == "learning"
+    problem = hass.states.get(problem_id)
+    assert problem is not None
+    assert problem.state == "off"
+    assert (
+        problem.attributes["trend"]
+        == "Baseline is set at 10.00 gal/min. Trend needs 5 normal runs (0 so far)."
+    )
+    assert problem.attributes["trend_status"] == "learning"
     for _ in range(5):
         await coordinator.async_credit_cycle(
             zone_id="front", minutes=10, net_mm=1, gallons=112, result="ok", gpm=11.2

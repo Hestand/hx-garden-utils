@@ -9,6 +9,7 @@ from sprinklecast.flow_learn import (
     accept_sample,
     append_flow_history,
     compare_to_reference,
+    flow_problem,
     reference_flow,
     robust_gpm,
     run_status,
@@ -72,3 +73,46 @@ def test_trend_uses_the_median_of_the_last_five_and_history_keeps_thirty() -> No
         long = append_flow_history(long, at="t", gpm=index + 1, minutes=1)
     assert len(long) == FLOW_HISTORY_LIMIT
     assert long[0]["gpm"] == 11
+
+
+def test_flow_problem_stays_off_without_a_saved_baseline() -> None:
+    off, reason, gap = flow_problem(
+        baseline_gpm=None,
+        last_run_gpm=20.0,
+        trend="high_trend",
+        high_pct=30,
+        low_pct=25,
+    )
+    assert off is False
+    assert reason == "No baseline yet"
+    assert gap is None
+    on, reason, gap = flow_problem(
+        baseline_gpm=10.0,
+        last_run_gpm=20.0,
+        trend="learning",
+        high_pct=30,
+        low_pct=25,
+    )
+    assert on is True
+    assert reason == "Last run is above the baseline"
+    assert gap == pytest.approx(100.0)
+    on, reason, gap = flow_problem(
+        baseline_gpm=10.0,
+        last_run_gpm=11.0,
+        trend="high_trend",
+        high_pct=30,
+        low_pct=25,
+    )
+    assert on is True
+    assert "Recent runs are above the baseline" in reason
+    assert "Last run is above" not in reason
+    off, reason, gap = flow_problem(
+        baseline_gpm=10.0,
+        last_run_gpm=11.0,
+        trend="ok",
+        high_pct=30,
+        low_pct=25,
+    )
+    assert off is False
+    assert reason == "Last run is within the baseline"
+    assert gap == pytest.approx(10.0)

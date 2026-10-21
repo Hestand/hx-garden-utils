@@ -156,12 +156,39 @@ async def test_moisture_and_flow_entities_follow_the_configured_sensors(
         "sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_moisture"
     )
     flow_id = registry.async_get_entity_id(
-        "sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_flow"
+        "binary_sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_flow_problem"
     )
-    learned_id = registry.async_get_entity_id(
-        "sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_learned_gpm"
+    assert (
+        registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_flow"
+        )
+        is None
     )
-    assert moisture_id and flow_id and learned_id
+    assert (
+        registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_learned_gpm"
+        )
+        is None
+    )
+    assert (
+        registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_flow_trend"
+        )
+        is None
+    )
+    last_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_last_run_gpm"
+    )
+    baseline_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_baseline_flow"
+    )
+    assert moisture_id and flow_id and last_id and baseline_id
+    assert registry.async_get_entity_id("button", DOMAIN, f"{entry.entry_id}_learn_flow")
+    problem = hass.states.get(flow_id)
+    assert problem is not None
+    assert problem.state == "off"
+    assert problem.attributes["device_class"] == "problem"
+    assert problem.attributes["reason"] == "No baseline yet"
     moisture = hass.states.get(moisture_id)
     assert moisture is not None
     assert float(moisture.state) == pytest.approx(42)
@@ -199,6 +226,16 @@ async def test_moisture_and_flow_entities_follow_the_configured_sensors(
             )
             is None
         )
+    assert (
+        registry.async_get_entity_id(
+            "binary_sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_flow_problem"
+        )
+        is None
+    )
+    assert (
+        registry.async_get_entity_id("button", DOMAIN, f"{entry.entry_id}_learn_flow")
+        is None
+    )
 
 
 async def test_whole_home_meter_skips_idle_flow_and_credits_the_running_zone(

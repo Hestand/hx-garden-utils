@@ -247,11 +247,25 @@ async def test_live_schedule_and_next_run_share_the_morning(
     assert schedule.state == "Next watering Sun Oct 25, 5:00 AM"
     assert "estimated" not in schedule.state.lower()
     assert "Start 05:00" in schedule.attributes["window"]
-    assert "2026-10-25" in schedule.attributes["markdown"]
-    assert "Test1" in schedule.attributes["markdown"]
-    assert "2026-10-24" not in schedule.attributes["markdown"]
-    assert schedule.attributes["days"][0]["date"] == "2026-10-25"
-    assert schedule.attributes["days"][0]["zones"][0]["scheduled"] is True
+    assert "markdown" not in schedule.attributes
+    day = schedule.attributes["days"][0]
+    assert day["date"] == "2026-10-25"
+    assert day["start"] == "05:00"
+    zone = day["zones"][0]
+    assert zone["name"] == "Test1"
+    assert zone["minutes"]
+    assert "reason" not in zone
+    assert "bursts" not in zone
+    from custom_components.sprinklecast.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+
+    downloaded = await async_get_config_entry_diagnostics(hass, entry)
+    assert "2026-10-25" in downloaded["schedule"]["markdown"]
+    assert "Test1" in downloaded["schedule"]["markdown"]
+    assert "2026-10-24" not in downloaded["schedule"]["markdown"]
+    detail = downloaded["schedule"]["days"][0]["zones"][0]
+    assert detail["reason"]
     parsed = dt_util.parse_datetime(next_run.state)
     assert parsed is not None
     assert parsed.astimezone(CHICAGO).date().isoformat() == "2026-10-25"
@@ -267,7 +281,8 @@ async def test_live_allowed_day_names_the_morning(
     assert len(schedule.attributes["days"]) == 1
     row = schedule.attributes["days"][0]
     assert row["date"] == "2026-10-31"
-    assert row["zones"][0]["scheduled"] is True
+    assert row["zones"][0]["minutes"]
+    assert "reason" not in row["zones"][0]
     assert schedule.state == "Next watering Sat Oct 31, 5:00 AM"
-    assert "Not an allowed watering day" not in schedule.attributes["markdown"]
+    assert "markdown" not in schedule.attributes
     assert entry.state is not None
