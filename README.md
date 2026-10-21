@@ -368,22 +368,17 @@ The switch is **off** on a new hub and stays **off** when you upgrade. That is d
 
 The hub sensor **Watering schedule** (`sensor.<hub>_watering_schedule`) lists the next watering days, not every calendar day. The count is the number of allowed weekdays: Monday, Wednesday, and Friday means the next three mornings when at least one zone is projected to water, even if those mornings are weeks apart. Every day allowed means the next seven watering mornings. An empty selection shows none. The search stops at about 365 days. Days when nothing waters are left out.
 
-The state is the next watering as an exact local date and time, such as `Next watering Fri Jul 17, 5:00 AM`. A day past the weather forecast has `estimated` set on that day. The word is not written into the state or the markdown. The date is the morning the valves open, and the clock is the first cycle. Each day includes the local start and finish, and each zone that waters: its cycles and times, minutes, inches and millimeters, gallons when the area is known, and soak. The projection refills the bucket after each of those mornings, so the second and third days are the water still needed, not a copy of the first. Near days and later days both use the morning planner, including Dynamic start time, Don't start before, the finish time, interleaving, and the 60-minute zone cap. The `window` attribute is the start, finish, and Don't start before time. With Dynamic start time on it says the run aims to finish at sunrise. Attributes:
+The state is the next watering as an exact local date and time, such as `Next watering Fri Jul 17, 5:00 AM`. A day past the weather forecast has `estimated` set on that day. The word is not written into the state. The date is the morning the valves open, and the start is the first cycle. Each day lists the zones that water and their minutes. The projection refills the bucket after each of those mornings, so the second and third days are the water still needed, not a copy of the first. Near days and later days both use the morning planner, including Dynamic start time, Don't start before, the finish time, interleaving, and the 60-minute zone cap. The `window` attribute is the start, finish, and Don't start before time. With Dynamic start time on it says the run aims to finish at sunrise.
+
+The sensor attributes stay short so Home Assistant can record them. Cycle times, depths, gallons, soak, the per-zone reasons, and the markdown table are in the diagnostics download for the config entry (Settings → System → Repairs → the integration menu, or the diagnostics button on the hub). Attributes:
 
 | Attribute | What it holds |
 | --- | --- |
-| `days` | One entry per watering day: date, local start and finish, `estimated` when the day is past the weather forecast, and each zone that waters (cycles, times, minutes, inches, millimeters, gallons when the area is known, and soak). |
-| `markdown` | The same watering days as text. |
+| `days` | One entry per watering day: `date`, local `start`, `estimated` when the day is past the weather forecast, and each zone that waters (`name` and `minutes`). |
 | `window` | Start, finish by, and Don't start before. Default with Dynamic start time off: `Start 05:00, finish by 09:00, earliest 04:00.` |
-| `note` | Later days use the forecast or the recent water-loss average and assume no rain. |
-
-A markdown card, for a hub named Garden:
-
-```yaml
-type: markdown
-title: Watering schedule
-content: "{{ state_attr('sensor.garden_watering_schedule', 'markdown') }}"
-```
+| `alerts` | Short lines, such as a freeze notice or a flow alert. |
+| `week_gal` | Gallons used this week, when the water-use sensor is not the source. |
+| `saved_gal` | Gallons saved this week versus the fixed timer. |
 
 **Watering now** is the zone that is on, or `Idle`. Each zone has a **Last run** sensor (state is the result; attributes are when, minutes, net millimeters, gallons, gallons per minute, and result) and a **Plant activity** sensor (`active`, `slow`, or `dormant`).
 

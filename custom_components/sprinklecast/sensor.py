@@ -33,7 +33,7 @@ from .const import (
 from .coordinator import SmartWaterConfigEntry
 from .entity import SmartWaterHubEntity, SmartWaterZoneEntity
 from .units import mm_to_inches
-from .week_plan import exact_next_text
+from .week_plan import exact_next_text, schedule_attributes
 
 
 def _drop_sensor(hass: HomeAssistant, unique_id: str) -> bool:
@@ -641,26 +641,19 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, object]:
-        """Watering days, each zone's plan, and markdown for a Lovelace card."""
+        """Watering days: date, start, and minutes. Detail is in diagnostics."""
         data = self.coordinator.data
         if data is None:
             return {}
-        return {
-            "days": data.schedule_days or [],
-            "markdown": data.schedule_markdown,
-            "window": data.schedule_window,
-            "note": (
-                "The list is the next watering days, one for each allowed weekday, "
-                "within a year. Days with nothing scheduled are left out. Later days "
-                "use the forecast or the recent water-loss average and assume no rain. "
-                "A day past the weather forecast has estimated set. The date and time stay exact."
-            ),
-            "alerts": data.alerts,
-            "week_gal": round(sum(zone.water_week_gal for zone in data.zones.values()), 1),
-            "saved_gal": round(
+        return schedule_attributes(
+            list(data.schedule_days or []),
+            window=data.schedule_window,
+            alerts=list(data.alerts or []),
+            week_gal=round(sum(zone.water_week_gal for zone in data.zones.values()), 1),
+            saved_gal=round(
                 sum(zone.saved_week_gal or 0.0 for zone in data.zones.values()), 1
             ),
-        }
+        )
 
 
 class WateringNowSensor(SmartWaterHubEntity, SensorEntity):

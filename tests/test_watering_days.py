@@ -320,9 +320,7 @@ def test_the_card_renders_each_watering_day_without_estimate_wording() -> None:
     text = CARD.read_text(encoding="utf-8")
     assert "_appendDay" in text
     assert "day.zones" in text
-    assert "zone.bursts" in text
-    assert "zone.gallons" in text
-    assert "soak" in text
-    assert "start_at" in text
-    assert "finish_at" in text
+    assert "zone.minutes" in text
+    assert "day.date" in text
+    assert "day.start" in text
     assert "estimated" not in text.lower()
