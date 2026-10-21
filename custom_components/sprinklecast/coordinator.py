@@ -1150,10 +1150,12 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
     ) -> None:
         """Run each selected zone and save the peak flow from the middle.
 
-        The default is 5 minutes, or the hub's learn-flow minutes. The clock
-        starts at the command. A cloud valve's open report is not the start.
+        The default minimum is 60 seconds, or the hub's learn-flow minutes.
+        The clock starts when the valve reports open or the meter rises.
+        A slow meter keeps the zone on until two middle readings exist.
         This does not change the precipitation rate. Rain and the other safety
         stops still apply. A second press while it is running is ignored.
+        Stop all watering cancels it.
         """
         if not self._options().get(CONF_FLOW_SENSOR):
             raise HomeAssistantError(
@@ -2454,17 +2456,18 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         subentry = self.config_entry.subentries.get(zone_id)
         name = subentry.title if subentry is not None else zone_id
         _ = data
-        if catch_cup or learn_flow:
-            self._store_learned(state, samples, gpm, minimum)
+        if learn_flow:
             state["last_run_gpm"] = round(gpm, 3)
             state["baseline_gpm"] = round(gpm, 3)
             state["baseline_gpm_at"] = now_iso
-            state["baseline_source"] = "catch_cup" if catch_cup else "flow_test"
-            state["baseline_window"] = "steady" if catch_cup else "middle"
-            # The test is the baseline, not one of the normal runs the trend counts.
+            state["baseline_source"] = "flow_learning"
+            state["baseline_window"] = "middle"
+            # The learned rate is the baseline, not one of the runs the trend counts.
             state["flow_history"] = []
             state["flow_alert"] = None
             state["flow_trend_alert"] = None
+            return []
+        if catch_cup:
             return []
 
         saved = self._saved_baseline(state)
@@ -3444,7 +3447,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 "credited_mm": float(net_mm),
             }
             self._catch_cup_completed.add(zone_id)
-        if gpm is not None and gpm > 0 and result == "ok":
+        if gpm is not None and gpm > 0 and result == "ok" and not catch_cup:
             alerts = self._learn_gpm(
                 zone_id,
                 state,

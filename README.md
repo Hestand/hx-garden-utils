@@ -28,7 +28,7 @@ The screens use plain names. The technical term is here so a manual or a forum p
 | Water the soil can hold | AWC, TAW | Inches of water an inch of soil can store, and the total in the root zone. |
 | Distribution uniformity | DU_lq | From a catch-cup test: the driest quarter of cups divided by the average cup. |
 | Catch-cup depth | Precipitation rate | The average depth the cups caught. Sprinklecast turns that into inches per hour and stores it on the zone. |
-| Baseline flow | | The gallons per minute from a catch-cup test, kept until you test again. Until then it shows the learned flow and says so. |
+| Baseline flow | | The gallons per minute from Learn flow rates, or a number you set. Until then it shows the learned flow and says so. |
 | Evening plan hour | Plan hour | When today's water loss is saved and the morning plan is built. Default 23:00. |
 | Dynamic start time | | On for a new hub. The morning aims to finish at local sunrise. The start is sunrise minus every cycle and soak. |
 | Don't start before | Earliest start | Hard limit. Watering never starts earlier than this. Default 04:00. |
@@ -83,7 +83,7 @@ New entity: `calendar.<hub>_watering` (name **Watering**), for example `calendar
 
 Update to `v0.14.9` from HACS. That updates `config/custom_components/sprinklecast`. Do not remove Sprinklecast in HACS.
 
-Nothing is imported again. Config entry version stays 10. Setting several zones' catch-cup depth, soil water level, or adjustment at the same time saves each one. The hub does not reload between them. **Learn flow rates** runs each zone for 5 minutes by default (change Learn flow minutes on the hub). It saves the peak flow from the middle of that run. With a flow meter, timing follows the meter rising and falling. A valve entity that reports open later is not the start. **Flow check** is replaced by **Flow problem** (off is normal, on is outside the saved baseline). With no baseline yet it stays off, and a restart keeps the last result. A repair notes that the old sensor was removed. **Learned flow** and **Flow trend** are removed. **Baseline flow** is the expected rate: the catch-cup or saved baseline, or the rate learned from normal runs when none is saved (source `learned`). The trend status, drift, and sentence are attributes on Flow problem. Restart after the update.
+Nothing is imported again. Config entry version stays 10. Setting several zones' catch-cup depth, soil water level, or adjustment at the same time saves each one. The hub does not reload between them. **Learn flow rates** is a hub button only when a flow meter is set. It runs each enabled zone for at least 60 seconds after the valve reports open or the meter rises (Learn flow minutes on the hub). A meter that updates about once a minute keeps the zone on until two readings from the middle of the run are in, and the peak of those is Baseline flow (source `flow_learning`). The next zone waits until the valve reports closed and the meter is near zero. No flow within the wait fails that zone. Watering now says Learning flow rates while it runs. A second press is ignored. Stop all watering cancels it. A catch-cup test no longer sets that baseline. It measures cup depth and credits the soil. **Flow check** is replaced by **Flow problem** (off is normal, on is outside the saved baseline). With no baseline yet it stays off, and a restart keeps the last result. A repair notes that the old sensor was removed. **Learned flow** and **Flow trend** are removed. **Baseline flow** is the expected rate: the catch-cup or saved baseline, or the rate learned from normal runs when none is saved (source `learned`). The trend status, drift, and sentence are attributes on Flow problem. Restart after the update.
 
 ### Already on Sprinklecast 0.14.7
 
@@ -141,7 +141,7 @@ Update to `v0.14.9` from HACS. That updates `config/custom_components/sprinkleca
 
 Nothing is imported again. Config entry version stays 10. Learned flow, soil water, and the automatic switch stay as they are.
 
-A catch-cup baseline is empty until you run one. Until then, flow alerts keep using the learned rate, and **Baseline flow** says the source is learned. Put cups out and press **Run catch-cup test** (or call `sprinklecast.run_catch_cup_test`) when you want a permanent baseline. After you change nozzles, run that test again.
+A flow baseline is empty until you learn one. Until then, flow alerts keep using the learned rate, and **Baseline flow** says the source is learned. With a flow meter set, press **Learn flow rates** (or call `sprinklecast.learn_flow_rates`) when you want a permanent baseline. Put cups out and press **Run catch-cup test** when you want the precipitation rate. After you change nozzles, learn the flow again.
 
 If you have not yet turned **Automatic watering** back on after 0.12.0, or set **Soil water level** after a bucket reset, do that too. See the 0.12.0 notes below.
 
@@ -437,7 +437,7 @@ Valve-on time is 249 minutes. No zone is over 60. Clock order, local time on 14 
 
 The hub has one flow meter. While a zone is running, the measured flow is that zone's. House use is not subtracted. A whole-home meter hides the idle-flow alert. An irrigation-only meter keeps it.
 
-Each zone keeps one expected rate, **Baseline flow**. A catch-cup test, Learn flow rates, or `set_flow_baseline` stores it, and it is kept across restarts and upgrades. The source attribute is `catch_cup`, `flow_test`, or `manual`, with the date. Until one of those is saved, Baseline flow shows the median learned from normal runs (default 3 runs, then the last 12). A run more than twice that median, or under 0.4 times it, is left out of the median. That source attribute says `learned`. There is no separate Learned flow sensor.
+Each zone keeps one expected rate, **Baseline flow**. **Learn flow rates** or `set_flow_baseline` stores it, and it is kept across restarts and upgrades. The source attribute is `flow_learning` or `manual`, with the date. An older catch-cup baseline stays, with source `catch_cup`, until you learn again. Until one of those is saved, Baseline flow shows the median learned from normal runs (default 3 runs, then the last 12). A run more than twice that median, or under 0.4 times it, is left out of the median. That source attribute says `learned`. There is no separate Learned flow sensor.
 
 A single run is compared with the baseline, not with the previous run, so a slow clog or a slow leak is not absorbed into the normal. The high and low percents are the same settings as before (default +30% and −25%). With no saved baseline yet, those alerts still wait for the learned median (default 3 runs). The last 30 per-run averages are kept. The median of the last 5 (change that on the hub) is the flow trend. It alerts when that median is more than 10% off a saved baseline. A trend alert notifies only. It does not stop the zone. The status, the drift percent, and the sentence are attributes on **Flow problem**. There is no separate Flow trend sensor.
 
@@ -450,7 +450,7 @@ A single run is compared with the baseline, not with the previous run, so a slow
 
 High flow and low flow are **Notify only** or **Stop and skip until reset**. Notify is the default. Stop on a zone skips that zone. Stop on idle flow skips every zone. The trend alert is notify only. `sprinklecast.reset_flow_learning` clears the samples, the alert, and the skip. It does **not** clear the baseline unless you turn on clear baseline. Leave the zone empty to reset the hub. The event is `smart_water_flow_alert`. A repair is raised with the same sentence. A notify target, if set, gets it too.
 
-After you change nozzles, run the catch-cup test again, or call `sprinklecast.set_flow_baseline`. That replaces the baseline and clears the trend history so the old nozzles are not the comparison.
+After you change nozzles, press **Learn flow rates** again, or call `sprinklecast.set_flow_baseline`. That replaces the baseline and clears the trend history so the old nozzles are not the comparison.
 
 Sensors, only when a hub flow meter is set: **Flow problem** (a problem binary sensor: off is normal, on means the last run is outside the high/low band versus the saved baseline, or the recent trend has drifted), **Last run flow**, **Baseline flow**, and **Flow vs baseline** (percent). Flow problem stays off until a saved baseline exists, including when Baseline flow is only the learned rate. Its attributes carry the last run, the baseline, the percent difference, the reason, the high and low percents, and the trend status, drift, and sentence. The last on/off result stays across a restart. With no area, gallons use the learned rate once it exists. An entered rate still wins over flow and area. Area still wins over GPM for the gallon estimate.
 
@@ -523,7 +523,7 @@ A zone is usable when Home Assistant already exposes it as a valve, switch, or i
 
 Per zone, on the device page: soil water (percent full, read-only), **Soil water level** (a number, 0–100%, step 1), **Catch-cup depth** (a number, inches or millimeters), water needed, next watering, why this plan, today's run, last run, plant activity, water used, water saved, a watering-amount number (0–300%), a run-now button, and an enabled switch. Setting Soil water level writes the water still needed as that percent of the water the soil can hold, saves it, and rebuilds the plan. The value you set is today's soil water. The next plan hour applies the following day's water loss. Catch-cup depth stores the measured average and the date, minutes, and rate as attributes. The watering point is diagnostic. Soil moisture level is diagnostic and exists only when that zone has a moisture sensor. Flow problem, last run flow, baseline flow, and flow vs baseline exist only when the hub has a flow meter.
 
-The hub has **Run catch-cup test**. It runs every enabled zone, one at a time, for 15 minutes.
+The hub has **Run catch-cup test**. It runs every enabled zone, one at a time, for 15 minutes. **Learn flow rates** is on the hub only when a flow meter is set. It runs each enabled zone and saves that zone's baseline.
 
 Hub: today's plan, rain today, next watering, watering schedule, watering now, water used, water saved, water cost when a price is set, the Automatic watering switch, and a Watering calendar (`calendar.<hub>_watering`). Water loss today (reference lawn) is diagnostic. A simulation hub also has a Sample week sensor and a Run simulation button. Entity ids are the ones created with the old names; renaming the label does not change them. The Mode sensor is removed.
 
@@ -565,7 +565,7 @@ Each selected zone runs once, for exactly the minutes you choose. The default is
 
 When the zone turns off, read the cups and average the depth. Set **Catch-cup depth** (inches or millimeters, whichever Home Assistant uses), or call `sprinklecast.set_catch_cup_result` with the zone, the depth, and the minutes if you need to override them. The precipitation rate is `depth / minutes × 60` in inches per hour. That rate is saved on the zone and replaces the sprinkler preset. The date, minutes, and depth stay on the number as attributes. The soil is credited by the depth you entered. If you correct the number, only the difference is credited.
 
-If the hub has a flow meter, the average gallons per minute of that steady run is saved as **Baseline flow**, with the date. A repair reminds you to enter the cup depths. That baseline is what later runs are compared with. Run the test again after you change nozzles, or call `sprinklecast.set_flow_baseline`.
+A repair reminds you to enter the cup depths. The catch-cup test does not set **Baseline flow**. That rate comes from **Learn flow rates**, or from `sprinklecast.set_flow_baseline`.
 
 `sprinklecast.start_audit` is the older one-zone test. It still applies the runtime cap and wants a precipitation rate first. Use it with `submit_audit` when you have at least four cups and want distribution uniformity as well as the rate. The hub button does not calculate uniformity. It uses the one average depth.
 

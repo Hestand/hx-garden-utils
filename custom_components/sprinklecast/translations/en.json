@@ -72,7 +72,7 @@
               "flow_scope": "Required when a flow sensor is set. Whole-home does not alert while the house is using water. Irrigation-only alerts when water moves and no zone is running.",
               "flow_idle_gpm": "Shown only for an irrigation-only meter. Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on.",
               "flow_idle_action": "Notify only, or stop watering and skip every zone until you reset flow learning. Hidden for a whole-home meter.",
-              "learn_flow_minutes": "How long each zone runs for Learn flow rates. Default 5 minutes. The rate saved is the peak flow in the middle of that run."
+              "learn_flow_minutes": "Minimum minutes each zone stays on after the valve reports open or the flow meter rises. Default 1 minute (60 seconds). A slow meter keeps the zone on longer, until two readings from the middle of the run are in. The saved rate is the peak of those readings."
             }
           },
           "location": {
@@ -406,7 +406,7 @@
               "flow_scope": "Required when a flow sensor is set. Whole-home does not alert while the house is using water. Irrigation-only alerts when water moves and no zone is running.",
               "flow_idle_gpm": "Shown only for an irrigation-only meter. Default 0.5 gal/min, or about 1 gallon on a volume total, while no zone is on.",
               "flow_idle_action": "Notify only, or stop watering and skip every zone until you reset flow learning. Hidden for a whole-home meter.",
-              "learn_flow_minutes": "How long each zone runs for Learn flow rates. Default 5 minutes. The rate saved is the peak flow in the middle of that run."
+              "learn_flow_minutes": "Minimum minutes each zone stays on after the valve reports open or the flow meter rises. Default 1 minute (60 seconds). A slow meter keeps the zone on longer, until two readings from the middle of the run are in. The saved rate is the peak of those readings."
             }
           },
           "location": {
@@ -934,7 +934,7 @@
     },
     "learn_flow_rates": {
       "name": "Learn flow rates",
-      "description": "Run each selected zone for a few minutes and save the peak flow from the middle. Default is the hub's learn-flow minutes, or 5. Does not open a valve until you press it. Does not change the precipitation rate."
+      "description": "Run each selected zone and save the peak flow from the middle as Baseline flow. The clock starts when the valve reports open or the meter rises. Default minimum is the hub's learn-flow minutes, or 1 minute. A slow meter extends the run until two middle readings are captured. Does not open a valve until you press it. Does not change the precipitation rate. Stop all watering cancels it."
     },
     "run_catch_cup_test": {
       "name": "Run catch-cup test",

@@ -174,6 +174,7 @@ async def test_setup_exposes_plan_and_services_do_not_move_the_valve(
     assert f"{entry.entry_id}_{zone_id}_catch_cup_depth" in unique_ids
     assert f"{entry.entry_id}_{zone_id}_run_now" in unique_ids
     assert f"{entry.entry_id}_catch_cup_test" in unique_ids
+    assert f"{entry.entry_id}_learn_flow" not in unique_ids
 
     await hass.services.async_call(
         DOMAIN,

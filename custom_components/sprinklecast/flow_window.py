@@ -22,6 +22,9 @@ SETTLE_SECONDS = 120.0
 METER_LAG_SECONDS = 60.0
 # How often a running zone is sampled. Short enough for a one-minute meter.
 SAMPLE_SECONDS = 30.0
+# Learn flow keeps the valve on this long after the minimum when a slow meter
+# has not yet put two readings in the middle of the run.
+LEARN_EXTRA_SECONDS = 180.0
 # Do not wait forever for a cloud-polled valve or a meter to catch up.
 VALVE_WAIT_TIMEOUT_SECONDS = 300.0
 
@@ -39,6 +42,8 @@ class FlowSample:
     valve: str | None
     gpm: float | None = None
     gallons: float | None = None
+    # When the flow entity last changed. Repeated polls of one meter update share it.
+    meter_at: datetime | None = None
 
 
 def zone_is_flowing(valve: str | None, gpm: float | None, idle_gpm: float) -> bool:
@@ -50,6 +55,31 @@ def zone_is_flowing(valve: str | None, gpm: float | None, idle_gpm: float) -> bo
     if gpm is not None:
         return gpm > idle_gpm
     return valve in OPEN_STATES
+
+
+def learn_confirmed(valve: str | None, gpm: float | None, idle_gpm: float) -> bool:
+    """True when a learn-flow run may start its clock.
+
+    Either signal is enough. A cloud valve can report open late, and a meter
+    can rise first. The command itself is not confirmation.
+    """
+    if gpm is not None and gpm > idle_gpm:
+        return True
+    return valve in OPEN_STATES
+
+
+def zone_ready_for_next(valve: str | None, gpm: float | None, idle_gpm: float) -> bool:
+    """True when the valve reports closed and the meter is near zero.
+
+    Learn flow waits for both before the next zone. A valve that still says
+    open, or a meter that is still up, holds the line.
+    """
+    flow_quiet = gpm is None or gpm <= idle_gpm
+    if valve is None:
+        return flow_quiet
+    if gpm is None:
+        return valve in CLOSED_STATES
+    return flow_quiet and valve in CLOSED_STATES
 
 
 def zone_is_quiet(valve: str | None, gpm: float | None, idle_gpm: float) -> bool:
@@ -108,6 +138,37 @@ def steady_gpm(samples: list[FlowSample], *, idle_gpm: float) -> float | None:
         window_start = start
     ordered = sorted(samples, key=lambda sample: sample.at)
     return _median_in_window(ordered, window_start, end, idle_gpm)
+
+
+def middle_updates(samples: list[FlowSample], *, idle_gpm: float) -> int:
+    """How many distinct meter updates were first seen in the middle third.
+
+    Polls that repeat one meter timestamp count once. A reading that started
+    before the middle, and is only polled again there, does not count. A meter
+    that updates once a minute therefore needs a longer run than the minimum.
+    """
+    bounds = flowing_bounds(samples, idle_gpm=idle_gpm)
+    if bounds is None:
+        return 0
+    start, end = bounds
+    span = (end - start).total_seconds()
+    if span < 1:
+        window_start, window_end = start, end
+    else:
+        window_start = start + timedelta(seconds=span / 3.0)
+        window_end = start + timedelta(seconds=span * 2.0 / 3.0)
+    first_seen: dict[datetime, datetime] = {}
+    for sample in sorted(samples, key=lambda item: item.at):
+        if sample.at < start or sample.at > end:
+            continue
+        if sample.gpm is None or sample.gpm <= idle_gpm:
+            continue
+        key = sample.meter_at or sample.at
+        if key not in first_seen:
+            first_seen[key] = sample.at
+    return sum(
+        1 for seen_at in first_seen.values() if window_start <= seen_at <= window_end
+    )
 
 
 def peak_middle_gpm(samples: list[FlowSample], *, idle_gpm: float) -> float | None:

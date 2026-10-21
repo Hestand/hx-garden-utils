@@ -183,6 +183,7 @@ async def test_moisture_and_flow_entities_follow_the_configured_sensors(
         "sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_baseline_flow"
     )
     assert moisture_id and flow_id and last_id and baseline_id
+    assert registry.async_get_entity_id("button", DOMAIN, f"{entry.entry_id}_learn_flow")
     problem = hass.states.get(flow_id)
     assert problem is not None
     assert problem.state == "off"
@@ -229,6 +230,10 @@ async def test_moisture_and_flow_entities_follow_the_configured_sensors(
         registry.async_get_entity_id(
             "binary_sensor", DOMAIN, f"{entry.entry_id}_{zone_id}_flow_problem"
         )
+        is None
+    )
+    assert (
+        registry.async_get_entity_id("button", DOMAIN, f"{entry.entry_id}_learn_flow")
         is None
     )
 

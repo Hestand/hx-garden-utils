@@ -133,8 +133,8 @@ DEFAULT_RECENT_RAIN_MM = 2.5
 # Valve-on minutes for one zone on one night. Soak time does not count.
 # The rest stays in the bucket. An optional hub total is off unless set.
 DEFAULT_MAX_RUN_MIN = 60
-# Learn flow rates runs each zone this long unless the hub option says otherwise.
-DEFAULT_LEARN_FLOW_MINUTES = 5
+# Minimum minutes Learn flow rates holds a zone after flow or the valve is confirmed.
+DEFAULT_LEARN_FLOW_MINUTES = 1
 
 DEFAULT_ELEVATION_M = 219.0
 # Kept so a stored 0.7 option still has a name during migration.

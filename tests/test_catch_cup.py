@@ -295,7 +295,7 @@ async def test_depth_sets_the_rate_and_credits_only_the_change(
 async def test_metered_run_saves_baseline_and_alerts_against_it(
     hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The catch-cup gallons per minute is kept, and a later run uses that number."""
+    """A catch-cup run does not set the flow baseline. A saved baseline still alerts."""
     entry = await _setup(hass, _entry(flow=True))
     _patch_valves(monkeypatch, hass)
     hass.states.async_set("sensor.main_flow", "100", {"unit_of_measurement": "gal"})
@@ -321,12 +321,19 @@ async def test_metered_run_saves_baseline_and_alerts_against_it(
     await hass.async_block_till_done()
 
     state = entry.runtime_data.store.zone("front")
-    assert state["baseline_gpm"] == pytest.approx(1.0)
-    assert state["baseline_source"] == "catch_cup"
-    assert state["baseline_gpm_at"]
+    assert state["baseline_gpm"] is None
+    assert state["catch_cup_pending"]["minutes"] == pytest.approx(15)
+    assert state["last_run"]["net_mm"] > 0
     assert events == []
     issue = ir.async_get(hass).async_get_issue(DOMAIN, f"catch_cup_{entry.entry_id}")
     assert issue is not None
+
+    await hass.services.async_call(
+        DOMAIN, "set_flow_baseline", {"zone": "Front", "gpm": 1}, blocking=True
+    )
+    state = entry.runtime_data.store.zone("front")
+    assert state["baseline_gpm"] == pytest.approx(1.0)
+    assert state["baseline_source"] == "manual"
 
     reloaded = SmartWaterStore(hass, entry.entry_id)
     await reloaded.async_load()
@@ -348,7 +355,7 @@ async def test_metered_run_saves_baseline_and_alerts_against_it(
         registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_front_baseline_flow")
     )
     assert float(baseline.state) == pytest.approx(1.0)
-    assert baseline.attributes["source"] == "catch_cup"
+    assert baseline.attributes["source"] == "manual"
     assert baseline.attributes["date"]
 
     coordinator = entry.runtime_data

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_SIMULATION, SUBENTRY_ZONE
+from .const import CONF_FLOW_SENSOR, CONF_SIMULATION, DOMAIN, SUBENTRY_ZONE
 from .coordinator import SmartWaterConfigEntry
 from .entity import SmartWaterHubEntity, SmartWaterZoneEntity
 
@@ -18,7 +19,15 @@ async def async_setup_entry(
 ) -> None:
     """Create the catch-cup button, one run-now button per zone, and a week button."""
     coordinator = entry.runtime_data
-    async_add_entities([CatchCupTestButton(coordinator), LearnFlowButton(coordinator)])
+    async_add_entities([CatchCupTestButton(coordinator)])
+    learn_id = f"{entry.entry_id}_learn_flow"
+    if entry.options.get(CONF_FLOW_SENSOR):
+        async_add_entities([LearnFlowButton(coordinator)])
+    else:
+        registry = er.async_get(hass)
+        entity_id = registry.async_get_entity_id("button", DOMAIN, learn_id)
+        if entity_id is not None:
+            registry.async_remove(entity_id)
     if entry.data.get(CONF_SIMULATION):
         async_add_entities([SimulateButton(coordinator)])
     for subentry in entry.subentries.values():

@@ -676,14 +676,29 @@ class WateringNowSensor(SmartWaterHubEntity, SensorEntity):
 
     @property
     def native_value(self) -> str:
-        """Return the running zone name."""
+        """Return the running zone name, or Learning flow rates during that run."""
         executor = self.coordinator.executor
+        if executor is not None and executor.learning_flow:
+            return "Learning flow rates"
         if executor is not None and executor.current_name:
             return executor.current_name
         data = self.coordinator.data
         if data is None:
             return "Idle"
         return data.watering_now or "Idle"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Current zone and what that run is doing."""
+        executor = self.coordinator.executor
+        if executor is None:
+            return {}
+        attrs: dict[str, object] = {}
+        if executor.current_name:
+            attrs["zone"] = executor.current_name
+        if executor.status:
+            attrs["status"] = executor.status
+        return attrs
 
 
 class LastRunSensor(_ZoneSensor):
