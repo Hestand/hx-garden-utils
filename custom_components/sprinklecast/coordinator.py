@@ -36,6 +36,7 @@ from .balance import (
     apply_daily_balance,
     clamp_deficit,
     days_to_balance,
+    rescale_deficit,
     rewind_hand_set,
     root_zone,
 )
@@ -152,8 +153,13 @@ from .const import (
     DEFAULT_FINISH_TIME,
     DEFAULT_START_TIME,
     DEFAULT_WIND_HEIGHT_M,
+    CONF_ROOT_DEPTH_IN,
     DOMAIN,
     MOISTURE_CORRECT,
+    NEXT_CHANCE_FILL,
+    NEXT_CHANCE_REFILL,
+    next_chance_label,
+    parse_next_chance_amount,
     MOISTURE_OVERRIDE,
     SUBENTRY_ZONE,
 )
@@ -249,6 +255,8 @@ from .units import (
     depth_mm,
     humidity_percent,
     inches_to_mm,
+    length_to_inches,
+    mm_to_inches,
     pressure_kpa,
     rain_rate_mm_h,
     rate_gpm,
@@ -335,6 +343,10 @@ class ZoneSnapshot:
     preset_efficiency: float | None = None
     measured_precip_in_hr: float | None = None
     measured_efficiency: float | None = None
+    root_depth_in: float | None = None
+    root_depth_source: str = "preset"
+    bucket_in: float | None = None
+    water_next_chance: str = "off"
 
 
 @dataclass
@@ -372,6 +384,7 @@ class HubSnapshot:
     watering_now: str = "Idle"
     alerts: list[str] = field(default_factory=list)
     outlook_summary: str = ""
+    water_next_chance: str = "off"
 
 
 def _optional_int(data: dict[str, Any], key: str) -> int | None:
@@ -479,6 +492,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         # A main-leak stop must not run while this lock is held. Credit needs it.
         self._pending_flow_stop = False
         self._catch_cup_completed: set[str] = set()
+        self._next_chance_in_run: set[str] = set()
+        self._next_chance_ran: set[str] = set()
         self._forecast_expected_mm = 0.0
         self._forecast_probability: float | None = None
         self._forecast_has_probability = False
@@ -775,6 +790,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             force_balance=force_balance, force_notify=force_notify
         )
         if jobs and self.executor is not None:
+            self._mark_next_chance_run(jobs)
             await self.executor.start(jobs)
         return snapshot
 
@@ -924,6 +940,177 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             until = (dt_util.now(self._timezone()).date() + timedelta(days=days)).isoformat()
             self.store.zone(zone_id)["skipped_until"] = until
         await self._save_and_refresh_snapshot()
+
+    async def async_set_root_depth(
+        self, zone_id: str, inches: float | None
+    ) -> None:
+        """Store a root depth in inches, or clear it back to the plant preset.
+
+        The next plan rescales the bucket and keeps the soil moisture percent.
+        """
+        if zone_id not in self.config_entry.subentries:
+            raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
+        state = self.store.zone(zone_id)
+        if inches is None:
+            state["root_depth_in"] = None
+        else:
+            if inches < 1 or inches > 120:
+                raise HomeAssistantError("Root depth must be from 1 to 120 inches.")
+            state["root_depth_in"] = round(float(inches), 3)
+        await self._save_and_refresh_snapshot()
+
+    async def async_set_next_chance_amount(self, amount: str) -> None:
+        """Remember which amount the Water next chance button will use."""
+        try:
+            parsed = parse_next_chance_amount(amount)
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        self.store.next_chance_amount = parsed
+        armed = self.store.next_chance
+        if isinstance(armed, dict):
+            armed["amount"] = parsed
+            self.store.next_chance = armed
+        await self._save_and_refresh_snapshot()
+
+    async def async_arm_next_chance(
+        self,
+        zone_ids: list[str] | None,
+        amount: str | None = None,
+    ) -> None:
+        """Arm one watering on the next allowed morning. Skips still apply."""
+        if amount is None:
+            parsed = self.store.next_chance_amount or NEXT_CHANCE_REFILL
+        else:
+            try:
+                parsed = parse_next_chance_amount(amount)
+            except ValueError as err:
+                raise HomeAssistantError(str(err)) from err
+        self.store.next_chance_amount = parsed
+        ids: list[str] | None
+        if zone_ids:
+            ids = []
+            for zone_id in zone_ids:
+                if zone_id not in self.config_entry.subentries:
+                    raise HomeAssistantError(f"Unknown Sprinklecast zone {zone_id}")
+                ids.append(zone_id)
+        else:
+            ids = None
+        self.store.next_chance = {"amount": parsed, "zone_ids": ids}
+        await self._save_and_refresh_snapshot()
+
+    async def async_cancel_next_chance(self) -> None:
+        """Clear an armed Water next chance run. The amount select stays."""
+        self.store.next_chance = None
+        self._next_chance_in_run = set()
+        self._next_chance_ran = set()
+        await self._save_and_refresh_snapshot()
+
+    def _next_chance_for(self, zone_id: str) -> str | None:
+        """The armed amount for this zone, or None."""
+        armed = self.store.next_chance
+        if not isinstance(armed, dict):
+            return None
+        ids = armed.get("zone_ids")
+        if ids is not None and zone_id not in list(ids):
+            return None
+        amount = armed.get("amount")
+        if amount not in (NEXT_CHANCE_REFILL, NEXT_CHANCE_FILL):
+            return None
+        return str(amount)
+
+    def water_next_chance_label(self, zone_id: str | None = None) -> str:
+        """Plain label for the hub, or for one zone."""
+        if zone_id is None:
+            armed = self.store.next_chance
+            if not isinstance(armed, dict):
+                return "off"
+            return next_chance_label(str(armed.get("amount") or ""))
+        return next_chance_label(self._next_chance_for(zone_id))
+
+    def _mark_next_chance_run(self, jobs: list[CycleJob]) -> None:
+        """Remember which armed zones this automatic run is about to water."""
+        armed_ids = self._armed_zone_ids()
+        self._next_chance_ran = set()
+        self._next_chance_in_run = {
+            job.zone_id
+            for job in jobs
+            if job.zone_id in armed_ids
+            and not job.manual
+            and not job.catch_cup
+            and not job.learn_flow
+        }
+
+    def _armed_zone_ids(self) -> set[str]:
+        armed = self.store.next_chance
+        if not isinstance(armed, dict):
+            return set()
+        ids = armed.get("zone_ids")
+        if ids is None:
+            return {
+                subentry.subentry_id
+                for subentry in self.config_entry.subentries.values()
+                if subentry.subentry_type == SUBENTRY_ZONE
+            }
+        return {str(zone_id) for zone_id in ids}
+
+    def _finish_next_chance_run(self) -> bool:
+        """Drop zones that actually ran. A skip leaves them armed."""
+        ran = set(self._next_chance_ran)
+        self._next_chance_ran = set()
+        self._next_chance_in_run = set()
+        record = self.store.next_chance
+        if not ran or not isinstance(record, dict):
+            return False
+        ids = record.get("zone_ids")
+        if ids is None:
+            current = sorted(self._armed_zone_ids())
+        else:
+            current = [str(zone_id) for zone_id in ids]
+        kept = [zone_id for zone_id in current if zone_id not in ran]
+        if not kept:
+            self.store.next_chance = None
+        else:
+            self.store.next_chance = {**record, "zone_ids": kept}
+        return True
+
+    def _note_root_form(self, state: dict[str, Any], data: dict[str, Any]) -> None:
+        """Let a saved zone form replace a number-entity depth, including blank."""
+        form = _optional_float(data, CONF_ROOT_DEPTH_IN)
+        if "root_depth_form" not in state:
+            state["root_depth_form"] = form
+            return
+        previous = state.get("root_depth_form")
+        if previous is None and form is None:
+            return
+        if (
+            previous is not None
+            and form is not None
+            and abs(float(previous) - float(form)) < 1e-4
+        ):
+            return
+        state["root_depth_form"] = form
+        state["root_depth_in"] = None
+
+    def _rescale_for_root_depth(
+        self, state: dict[str, Any], data: dict[str, Any], new_taw: float
+    ) -> None:
+        """Keep the moisture percent when the root depth changes the bucket."""
+        try:
+            depth = resolved_root_depth_in(data)
+        except KeyError:
+            return
+        applied = state.get("root_depth_applied_in")
+        old_taw = state.get("root_depth_taw_mm")
+        if (
+            applied not in (None, "")
+            and old_taw not in (None, "")
+            and abs(float(applied) - depth) > 1e-4
+        ):
+            state["deficit_mm"] = rescale_deficit(
+                float(state.get("deficit_mm") or 0.0), float(old_taw), new_taw
+            )
+        state["root_depth_applied_in"] = depth
+        state["root_depth_taw_mm"] = new_taw
 
     async def async_set_adjustment(self, zone_id: str, percent: float) -> None:
         """Scale the planned depth. 100 is unchanged. This does not water."""
@@ -1232,6 +1419,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         """Remind the user to enter cup depths after a metered test."""
         from homeassistant.helpers import issue_registry as ir
 
+        if self._finish_next_chance_run():
+            await self.store.async_save()
+            self.hass.async_create_task(self.async_request_refresh())
         ran = list(self._catch_cup_completed)
         self._catch_cup_completed = set()
         if not ran or not self._options().get(CONF_FLOW_SENSOR):
@@ -1457,6 +1647,12 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 merged[CONF_PRECIPITATION_RATE] = float(rate)
             except (TypeError, ValueError):
                 pass
+        depth = state.get("root_depth_in")
+        if depth not in (None, ""):
+            try:
+                merged[CONF_ROOT_DEPTH_IN] = float(depth)
+            except (TypeError, ValueError):
+                pass
         efficiency = state.get("measured_efficiency")
         if efficiency not in (None, ""):
             try:
@@ -1569,7 +1765,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         for subentry_id in zone_ids:
             subentry = self.config_entry.subentries[subentry_id]
             state = self.store.zone(subentry_id)
-            data = dict(subentry.data)
+            self._note_root_form(state, dict(subentry.data))
+            data = self._with_measured(dict(subentry.data), state)
             try:
                 limits = self._limits(data, et0_for_plan, now.month)
             except (KeyError, ValueError) as err:
@@ -1586,6 +1783,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             state["dormancy"] = season.status
             state["dormancy_mean_f"] = season.mean_f
             state["dormancy_detail"] = season.detail
+            self._rescale_for_root_depth(state, data, limits.taw_mm * factor)
             state["deficit_mm"] = clamp_deficit(
                 float(state["deficit_mm"]), limits.taw_mm * factor
             )
@@ -2833,23 +3031,25 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             state = self.store.zone(subentry.subentry_id)
             data = self._with_measured(dict(subentry.data), state)
             areas[subentry.subentry_id] = _optional_float(data, CONF_AREA_SQFT)
-            requests.append(
-                self._zone_request(
-                    zone_id=subentry.subentry_id,
-                    name=subentry.title,
-                    data=data,
-                    state=state,
-                    et0=et0,
-                    month=now.month,
-                    now=now,
-                    temp_f=temp_f,
-                    forecast_low_f=forecast_low_f,
-                    wind_mph=wind,
-                    freeze_default=freeze_default,
-                    drip_ignores=drip_ignores,
-                    hub_wet=hub_wet,
-                )
+            request = self._zone_request(
+                zone_id=subentry.subentry_id,
+                name=subentry.title,
+                data=data,
+                state=state,
+                et0=et0,
+                month=now.month,
+                now=now,
+                temp_f=temp_f,
+                forecast_low_f=forecast_low_f,
+                wind_mph=wind,
+                freeze_default=freeze_default,
+                drip_ignores=drip_ignores,
+                hub_wet=hub_wet,
             )
+            chance = self._next_chance_for(subentry.subentry_id)
+            if chance:
+                request = replace(request, next_chance=chance)
+            requests.append(request)
         skip = _optional_float(options, CONF_FORECAST_SKIP_MM)
         legacy_precip = 0.0 if self._forecast_has_probability else precip_tomorrow_mm
         cap = options.get(CONF_MAX_DAILY_RUNTIME_MIN)
@@ -2860,6 +3060,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         )
         dynamic = bool(options.get(CONF_DYNAMIC_START, False))
         sun = self._sun_place()
+        plan_hour = int(options.get(CONF_PLAN_HOUR, DEFAULT_PLAN_HOUR))
+        loss_factors = self._et_factors(observation, now.date(), et0)
+        armed = self.store.next_chance if isinstance(self.store.next_chance, dict) else None
         plan = build_plan(
             PlanRequest(
                 zones=tuple(requests),
@@ -2880,6 +3083,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 hourly_wind=tuple(observation.hourly_wind),
                 dynamic_start=dynamic,
                 sunrise_at=self._sunrise_on(start_at.date(), sun) if dynamic else None,
+                plan_hour=plan_hour,
+                et_factors=tuple(loss_factors),
+                et_index=(start_at.date() - now.date()).days,
             )
         )
         try:
@@ -2917,11 +3123,18 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 forecast_threshold_mm=skip,
                 defer_days=self._defer_days_before(now),
                 days=OUTLOOK_DAYS,
-                et_factors=self._et_factors(observation, now.date(), et0),
+                et_factors=loss_factors,
                 dynamic_start=dynamic,
                 latitude=None if sun is None else sun[0],
                 longitude=None if sun is None else sun[1],
                 elevation_m=0.0 if sun is None else sun[2],
+                plan_hour=plan_hour,
+                next_chance_amount=None if armed is None else str(armed.get("amount") or ""),
+                next_chance_zones=(
+                    None
+                    if armed is None or armed.get("zone_ids") is None
+                    else tuple(str(zone_id) for zone_id in armed.get("zone_ids") or [])
+                ),
             )
             self._week, self._outlook = split_outlook(
                 full,
@@ -3097,9 +3310,26 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         else:
             source = "preset"
         history = list(state.get("bucket_history") or [])[-7:]
+        runtime_depth = state.get("root_depth_in")
+        form_depth = _optional_float(data, CONF_ROOT_DEPTH_IN)
+        if runtime_depth not in (None, ""):
+            root_depth = float(runtime_depth)
+            root_source = "set"
+        elif form_depth is not None:
+            root_depth = form_depth
+            root_source = "set"
+        else:
+            try:
+                root_depth = resolved_root_depth_in(data)
+            except KeyError:
+                root_depth = None
+            root_source = "preset"
         return {
             "full_pct": round(full, 1),
             "bucket_history": history,
+            "root_depth_in": None if root_depth is None else round(root_depth, 3),
+            "root_depth_source": root_source,
+            "bucket_in": round(mm_to_inches(taw_mm), 3),
             "du_lq": state.get("measured_du_lq"),
             "precip_source": source,
             "preset_precip_in_hr": sprinkler_precip(sprinkler),
@@ -3434,6 +3664,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         if result == "ok" and net_mm > 0:
             state["deficit_mm"] = max(0.0, float(state["deficit_mm"]) - net_mm)
             state["last_watered"] = dt_util.now(self._timezone()).date().isoformat()
+            if zone_id in self._next_chance_in_run:
+                self._next_chance_ran.add(zone_id)
         today = dt_util.now(self._timezone()).date().isoformat()
         if applied is not None and applied > 0 and result == "ok":
             state["water_days"] = add_use(state.get("water_days"), today, applied)
@@ -3898,6 +4130,8 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                     ),
                 )
         self._apply_outlook(by_zone)
+        for zone_id, snap in by_zone.items():
+            snap.water_next_chance = self.water_next_chance_label(zone_id)
         blocked = plan.block_reason if plan is not None else "No plan yet."
         options = self._options()
         rules = rules_for(
@@ -3941,6 +4175,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             watering_now=watering,
             alerts=self._alert_lines(),
             outlook_summary=str((self._outlook or {}).get("summary") or ""),
+            water_next_chance=self.water_next_chance_label(),
         )
 
     def _apply_outlook(self, by_zone: dict[str, ZoneSnapshot]) -> None:

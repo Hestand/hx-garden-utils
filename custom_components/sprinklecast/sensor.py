@@ -328,6 +328,9 @@ class DeficitSensor(_ZoneSensor):
             "valve_entity": zone.valve_entity,
             "enabled": zone.enabled,
             "full_pct": zone.full_pct,
+            "root_depth_in": zone.root_depth_in,
+            "root_depth_source": zone.root_depth_source,
+            "bucket_in": zone.bucket_in,
             "history": zone.bucket_history,
             "adjustments": list(
                 self.coordinator.store.zone(self._zone_id).get("bucket_adjustments")
@@ -411,6 +414,7 @@ class NextRunSensor(_ZoneSensor):
             "max_cycle_min": zone.max_cycle_min,
             "estimated": zone.next_estimated,
             "note": zone.next_note,
+            "water_next_chance": zone.water_next_chance,
         }
 
 
@@ -526,6 +530,7 @@ class ScheduleSensor(SmartWaterHubEntity, SensorEntity):
             "round_minutes": data.round_minutes,
             "estimated": estimated,
             "note": note,
+            "water_next_chance": data.water_next_chance,
         }
 
 
@@ -653,6 +658,7 @@ class WateringScheduleSensor(SmartWaterHubEntity, SensorEntity):
             saved_gal=round(
                 sum(zone.saved_week_gal or 0.0 for zone in data.zones.values()), 1
             ),
+            water_next_chance=data.water_next_chance,
         )
 
 

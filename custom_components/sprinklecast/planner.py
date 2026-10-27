@@ -20,7 +20,7 @@ for the next allowed day.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .balance import root_zone, zone_is_due
 from .const import (
@@ -52,8 +52,14 @@ from .presets import (
     stored_float,
 )
 from .safety import block_reason, would_execute
-from .schedule import elapsed_seconds, shift_minutes
-from .schedule import clip_blackout, day_allowed, weekday_name
+from .schedule import (
+    clip_blackout,
+    day_allowed,
+    elapsed_seconds,
+    shift_minutes,
+    wall_clock,
+    weekday_name,
+)
 from .skips import SkipInputs, skip_reason
 from .timing import calm_finish, strictest_limit
 
@@ -105,6 +111,8 @@ class ZoneRequest:
     flow_locked: bool = False
     max_run_min: float | None = None
     forecast_defer_reason: str | None = None
+    # "refill" or "fill" when Water next chance is armed for this zone.
+    next_chance: str | None = None
 
 
 def build_zone_request(
@@ -239,6 +247,12 @@ class PlanRequest:
     # sunrise is missing). The fixed start time is not used.
     dynamic_start: bool = False
     sunrise_at: datetime | None = None
+    # Local hour when the day's water loss is added to the bucket.
+    plan_hour: int = 23
+    # Water-loss scale for each calendar day, index 0 = the day ``et_index``
+    # points at. Empty means every day uses the zone's own water loss.
+    et_factors: tuple[float, ...] = ()
+    et_index: int = 0
 
 
 @dataclass(frozen=True)
@@ -583,6 +597,92 @@ def _summary(
     return "\n".join(lines)
 
 
+_WEEKDAY_LABEL = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def _next_allowed_morning(morning: datetime, allowed: tuple[str, ...] | None) -> datetime | None:
+    """The next allowed start after ``morning``, at the same clock time."""
+    if morning.tzinfo is None:
+        return None
+    for step in range(1, 22):
+        day = morning.date() + timedelta(days=step)
+        candidate = wall_clock(day, morning.hour, morning.minute, morning.tzinfo)
+        if day_allowed(candidate, allowed):
+            return candidate
+    return None
+
+
+def _crossing_day(apply_at: datetime, morning: datetime):
+    """The calendar day named in an early-watering reason.
+
+    A loss at or before the morning start is already in the bucket when
+    that morning opens, so the reason names that morning. A loss within
+    12 hours after the start is still that day. The evening bucket step
+    is later than that, and the next morning is when the soil is past
+    the watering point.
+    """
+    start = morning.hour * 60 + morning.minute
+    applied = apply_at.hour * 60 + apply_at.minute
+    if applied > start and applied - start >= 12 * 60:
+        return apply_at.date() + timedelta(days=1)
+    return apply_at.date()
+
+
+def _loss_factor(factors: tuple[float, ...], index: int) -> float:
+    """Scale for one calendar day. Past the forecast, repeat a normal day."""
+    if index < 0 or not factors or index >= len(factors):
+        return 1.0
+    return max(0.0, float(factors[index]))
+
+
+def early_watering_reason(
+    *,
+    morning: datetime,
+    deficit_mm: float,
+    trigger_mm: float,
+    taw_mm: float,
+    etc_mm: float,
+    plan_hour: int,
+    allowed: tuple[str, ...] | None,
+    et_factors: tuple[float, ...] = (),
+    et_index: int = 0,
+    point_name: str = "watering point",
+) -> str | None:
+    """Why this allowed morning should water before the soil crosses.
+
+    Each day's water loss is applied at ``plan_hour``. If that loss would
+    put the soil past the watering point before the next allowed morning,
+    this morning is the last chance to refill first. None means wait.
+    """
+    if deficit_mm >= trigger_mm or trigger_mm <= 0 or etc_mm <= 0:
+        return None
+    if morning.tzinfo is None or not day_allowed(morning, allowed):
+        return None
+    nxt = _next_allowed_morning(morning, allowed)
+    if nxt is None:
+        return None
+    cursor = deficit_mm
+    seen = None
+    for step in range(0, 21):
+        day = morning.date() + timedelta(days=step)
+        apply_at = wall_clock(day, plan_hour, 0, morning.tzinfo)
+        if apply_at <= morning or apply_at >= nxt:
+            continue
+        factor = _loss_factor(et_factors, et_index + step)
+        cursor = min(taw_mm, cursor + etc_mm * factor)
+        if cursor + 1e-9 < trigger_mm:
+            continue
+        seen = _crossing_day(apply_at, morning)
+        break
+    if seen is None or seen > nxt.date():
+        return None
+    label = _WEEKDAY_LABEL[seen.weekday()]
+    return (
+        f"Watering early because the soil would drop below the {point_name} "
+        f"on {label} before the next allowed day."
+    )
+
+
 def build_plan(request: PlanRequest) -> NightPlan:
     """Build tonight's plan. ``would_execute`` follows :func:`would_execute`."""
     if request.finish_by.tzinfo is None or request.start_at.tzinfo is None:
@@ -623,6 +723,7 @@ def build_plan(request: PlanRequest) -> NightPlan:
 
     for zone in sorted(request.zones, key=lambda item: (item.priority, item.name)):
         trigger = zone.raw_mm if zone.target_depth_mm is None else zone.target_depth_mm
+        point_name = "watering point" if zone.target_depth_mm is None else "target depth"
         due, due_reason = zone_is_due(
             zone.deficit_mm,
             trigger,
@@ -632,6 +733,28 @@ def build_plan(request: PlanRequest) -> NightPlan:
         )
         if zone.target_depth_mm is not None:
             due_reason = due_reason.replace("watering point", "target depth")
+        if not due:
+            early = early_watering_reason(
+                morning=start_at,
+                deficit_mm=zone.deficit_mm,
+                trigger_mm=trigger,
+                taw_mm=zone.taw_mm,
+                etc_mm=zone.etc_mm,
+                plan_hour=request.plan_hour,
+                allowed=request.allowed_weekdays,
+                et_factors=request.et_factors,
+                et_index=request.et_index,
+                point_name=point_name,
+            )
+            if early:
+                due = True
+                due_reason = early
+        if zone.next_chance == "fill":
+            due = True
+            due_reason = "Water next chance: fill the root zone completely."
+        elif zone.next_chance == "refill":
+            due = True
+            due_reason = "Water next chance: refill the estimated need."
         blocked_reason = skip_reason(
             SkipInputs(
                 enabled=zone.enabled,
@@ -677,17 +800,24 @@ def build_plan(request: PlanRequest) -> NightPlan:
         max_cycle = 0
         soak = 0
         net_mm = 0.0
-        adjusted_mm = zone.deficit_mm * zone.adjustment_pct / 100.0
+        if zone.next_chance == "fill":
+            adjusted_mm = zone.taw_mm
+        else:
+            adjusted_mm = zone.deficit_mm * zone.adjustment_pct / 100.0
         if (
             scheduled_candidate
             and zone.dormancy == "dormant"
             and zone.maintenance_due
             and zone.maintenance_mm > 0
+            and not zone.next_chance
         ):
             adjusted_mm = min(adjusted_mm, zone.maintenance_mm)
         if scheduled_candidate and adjusted_mm <= 0:
             scheduled_candidate = False
-            reason = "Adjustment percent is 0."
+            if zone.next_chance == "refill":
+                reason = "Soil is already full."
+            else:
+                reason = "Adjustment percent is 0."
         if scheduled_candidate:
             # Refill the adjusted deficit and no more, so water stays in the root zone.
             cycle_plan = plan_cycles(

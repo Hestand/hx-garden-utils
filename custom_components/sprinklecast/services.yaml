@@ -340,6 +340,48 @@ reset_flow_learning:
       selector:
         boolean:
 
+water_next_chance:
+  name: Water next chance
+  description: >-
+    Arm one watering on the next allowed morning, even if no zone has reached
+    its watering point. Refill estimated need waters today's deficit. Fill
+    completely waters the whole root zone from empty, so the bucket ends full.
+    Uses the normal start window, cycle and soak, and each zone's minute cap.
+    Rain, freeze, wind, and the other skips still apply. A skipped morning
+    stays armed for the next chance. It clears after the run and it is kept
+    across a restart. Leave the zone empty to arm every zone.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name, if you have more than one.
+      selector:
+        text:
+    zone:
+      name: Zone
+      description: Zone name, or a list of zone names. Empty arms every zone.
+      selector:
+        text:
+    amount:
+      name: Amount
+      description: >-
+        Refill estimated need, or Fill completely. Empty uses the Water next
+        chance amount select.
+      selector:
+        select:
+          options:
+            - "Refill estimated need"
+            - "Fill completely"
+
+cancel_water_next_chance:
+  name: Cancel water next chance
+  description: Clear an armed Water next chance run. Does not open a valve.
+  fields:
+    hub:
+      name: Hub
+      description: Hub name, if you have more than one.
+      selector:
+        text:
+
 learn_flow_rates:
   name: Learn flow rates
   description: >-

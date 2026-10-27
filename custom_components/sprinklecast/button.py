@@ -19,7 +19,13 @@ async def async_setup_entry(
 ) -> None:
     """Create the catch-cup button, one run-now button per zone, and a week button."""
     coordinator = entry.runtime_data
-    async_add_entities([CatchCupTestButton(coordinator)])
+    async_add_entities(
+        [
+            CatchCupTestButton(coordinator),
+            WaterNextChanceButton(coordinator),
+            CancelWaterNextChanceButton(coordinator),
+        ]
+    )
     learn_id = f"{entry.entry_id}_learn_flow"
     if entry.options.get(CONF_FLOW_SENSOR):
         async_add_entities([LearnFlowButton(coordinator)])
@@ -69,6 +75,40 @@ class LearnFlowButton(SmartWaterHubEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Start the learn-flow sequence. Stop all watering cancels it."""
         await self.coordinator.async_learn_flow_rates(None)
+
+
+class WaterNextChanceButton(SmartWaterHubEntity, ButtonEntity):
+    """Arm every enabled zone for the next allowed watering morning."""
+
+    _attr_translation_key = "water_next_chance"
+    _attr_icon = "mdi:calendar-plus"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_water_next_chance"
+
+    async def async_press(self) -> None:
+        """Arm the amount selected on Water next chance amount."""
+        await self.coordinator.async_arm_next_chance(None)
+
+
+class CancelWaterNextChanceButton(SmartWaterHubEntity, ButtonEntity):
+    """Clear an armed Water next chance run."""
+
+    _attr_translation_key = "cancel_water_next_chance"
+    _attr_icon = "mdi:calendar-remove"
+
+    def __init__(self, coordinator) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator)
+        self._attr_unique_id = (
+            f"{coordinator.config_entry.entry_id}_cancel_water_next_chance"
+        )
+
+    async def async_press(self) -> None:
+        """Leave the next mornings on the normal plan."""
+        await self.coordinator.async_cancel_next_chance()
 
 
 class SimulateButton(SmartWaterHubEntity, ButtonEntity):

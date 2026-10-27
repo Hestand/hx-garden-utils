@@ -45,6 +45,8 @@ from .const import (
     SERVICE_SIMULATE,
     SERVICE_SKIP_ZONE,
     SERVICE_LEARN_FLOW,
+    SERVICE_WATER_NEXT_CHANCE,
+    SERVICE_CANCEL_WATER_NEXT_CHANCE,
     SERVICE_RUN_CATCH_CUP,
     SERVICE_SET_CATCH_CUP,
     SERVICE_SET_FLOW_BASELINE,
@@ -770,6 +772,73 @@ def async_setup_services(hass: HomeAssistant) -> None:
             }
         ),
         supports_response=SupportsResponse.OPTIONAL,
+    )
+    async def water_next_chance(call: ServiceCall) -> None:
+        """Arm the next allowed morning. Empty zone means every zone."""
+        hub = call.data.get("hub")
+        names = _as_list(call.data.get("zone"))
+        amount = call.data.get("amount")
+        grouped: dict[Any, list[str]] = {}
+        if names:
+            for name in names:
+                _entry, coordinator, zone_id = _find_zone(hass, name, hub)
+                grouped.setdefault(coordinator, []).append(zone_id)
+        else:
+            targets = [
+                coordinator
+                for entry, coordinator in _coordinators(hass)
+                if _hub_matches(entry, hub)
+            ]
+            if not targets:
+                raise ServiceValidationError("No Sprinklecast hub is loaded.")
+            if len(targets) > 1:
+                raise ServiceValidationError(
+                    "More than one Sprinklecast hub is loaded. Pass the hub name or a zone."
+                )
+            grouped[targets[0]] = []
+        for coordinator, zone_ids in grouped.items():
+            try:
+                await coordinator.async_arm_next_chance(
+                    zone_ids or None,
+                    None if amount in (None, "") else str(amount),
+                )
+            except HomeAssistantError as err:
+                raise ServiceValidationError(str(err)) from err
+
+    async def cancel_water_next_chance(call: ServiceCall) -> None:
+        """Clear Water next chance. The amount select is left as it is."""
+        hub = call.data.get("hub")
+        targets = [
+            coordinator
+            for entry, coordinator in _coordinators(hass)
+            if _hub_matches(entry, hub)
+        ]
+        if not targets:
+            raise ServiceValidationError("No Sprinklecast hub is loaded.")
+        if hub in (None, "") and len(targets) > 1:
+            raise ServiceValidationError(
+                "More than one Sprinklecast hub is loaded. Pass the hub name."
+            )
+        for coordinator in targets:
+            await coordinator.async_cancel_next_chance()
+
+    _register(
+        DOMAIN,
+        SERVICE_WATER_NEXT_CHANCE,
+        water_next_chance,
+        schema=vol.Schema(
+            {
+                vol.Optional("hub"): str,
+                vol.Optional("zone"): vol.Any(str, [str]),
+                vol.Optional("amount"): str,
+            }
+        ),
+    )
+    _register(
+        DOMAIN,
+        SERVICE_CANCEL_WATER_NEXT_CHANCE,
+        cancel_water_next_chance,
+        schema=vol.Schema({vol.Optional("hub"): str}),
     )
     _LOGGER.debug("Registered Sprinklecast services")
 

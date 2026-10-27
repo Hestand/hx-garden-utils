@@ -564,7 +564,7 @@
                 "moisture_learn": "Learn available water from the moisture sensor"
               },
               "data_description": {
-                "root_depth_in": "Preset {root_depth} in. Leave blank to use it.",
+                "root_depth_in": "Inches. Leave blank to keep the plant preset, which is {root_depth} in. The Root depth number uses inches or centimeters, whichever Home Assistant uses for length, and converts centimeters. A value with no unit is rejected. Examples: new Bermuda 4-6 in, established turf 6-12 in, beds 8-12 in.",
                 "awc_override": "Preset {awc} in/in. Leave blank to use it. This is how much water the soil can hold (AWC).",
                 "intake_in_hr": "Preset {intake} in/hr. Leave blank to use it.",
                 "depletion_fraction": "Preset {mad}. Leave blank to use it. This is the allowed dry-out (MAD). The planner still adjusts it for how much water the plants use today.",
@@ -857,6 +857,14 @@
       },
       "catch_cup_depth": {
         "name": "Catch-cup depth"
+      },
+      "root_depth": {
+        "name": "Root depth"
+      }
+    },
+    "select": {
+      "water_next_chance_amount": {
+        "name": "Water next chance amount"
       }
     },
     "button": {
@@ -871,6 +879,12 @@
       },
       "simulate": {
         "name": "Run simulation"
+      },
+      "water_next_chance": {
+        "name": "Water next chance"
+      },
+      "cancel_water_next_chance": {
+        "name": "Cancel water next chance"
       }
     },
     "calendar": {
@@ -931,6 +945,14 @@
     "reset_flow_learning": {
       "name": "Reset flow learning",
       "description": "Clear learned flow, the flow alert, and a skip that is waiting for reset. The baseline stays unless clear baseline is on."
+    },
+    "water_next_chance": {
+      "name": "Water next chance",
+      "description": "Arm one watering on the next allowed morning, even if no zone has reached its watering point. Refill estimated need fills today's deficit. Fill completely fills the whole root zone from empty. Rain, freeze, wind, and the other skips still apply. If this morning is skipped, it stays armed. It clears after it runs and it is kept across a restart. Leave the zone empty to arm every zone."
+    },
+    "cancel_water_next_chance": {
+      "name": "Cancel water next chance",
+      "description": "Clear an armed Water next chance run. Does not open a valve."
     },
     "learn_flow_rates": {
       "name": "Learn flow rates",
