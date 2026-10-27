@@ -150,6 +150,18 @@ def clamp_deficit(deficit_mm: float, taw_mm: float) -> float:
     return min(taw_mm, max(0.0, deficit_mm))
 
 
+def rescale_deficit(deficit_mm: float, old_taw_mm: float, new_taw_mm: float) -> float:
+    """Keep the same soil-moisture percent when the bucket changes size.
+
+    A deeper root zone holds more water. The percent full stays, so the
+    millimeters still needed grow with the bucket.
+    """
+    if old_taw_mm <= 0 or new_taw_mm <= 0:
+        return clamp_deficit(deficit_mm, new_taw_mm if new_taw_mm > 0 else 0.0)
+    full = 1.0 - min(1.0, max(0.0, deficit_mm) / old_taw_mm)
+    return clamp_deficit(new_taw_mm * (1.0 - full), new_taw_mm)
+
+
 def should_apply_balance(
     balance_date: str | None,
     today: str,

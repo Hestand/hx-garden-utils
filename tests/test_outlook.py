@@ -12,8 +12,8 @@ from tests.test_week_plan import _project
 CHICAGO = ZoneInfo("America/Chicago")
 
 
-def test_a_dry_zone_waits_for_the_next_allowed_monday() -> None:
-    """Deficit 1 mm and 2 mm a day reaches 20 mm, then waits for Monday."""
+def test_a_dry_zone_waters_the_monday_before_it_would_cross() -> None:
+    """1 mm plus 2 mm a day would pass 20 mm on Wednesday. Water the Monday before."""
     zone = _zone(
         name="Front",
         deficit_mm=1.0,
@@ -32,14 +32,17 @@ def test_a_dry_zone_waits_for_the_next_allowed_monday() -> None:
         forecast_horizon_days=2,
     )
     assert len(week["days"]) == 1
-    assert week["days"][0]["date"] == "2026-11-09"
+    assert week["days"][0]["date"] == "2026-11-02"
     assert week["days"][0]["estimated"] is True
     assert "estimated" not in str(week["summary"]).lower()
     assert "~" not in str(week["summary"])
     info = outlook["by_zone"]["front"]
-    assert info["at"] == datetime(2026, 11, 9, 5, 0, tzinfo=CHICAGO)
+    assert info["at"] == datetime(2026, 11, 2, 5, 0, tzinfo=CHICAGO)
     assert info["estimated"] is True
-    assert outlook["summary"] == "Next watering Mon Nov 9, 5:00 AM"
+    assert outlook["summary"] == "Next watering Mon Nov 2, 5:00 AM"
+    monday = next(day for day in result["days"] if day["date"] == "2026-11-02")
+    assert "Watering early" in monday["zones"][0]["reason"]
+    assert "Wed" in monday["zones"][0]["reason"]
     assert "~" not in str(outlook["summary"])
     assert "estimated" not in str(outlook["summary"]).lower()
 

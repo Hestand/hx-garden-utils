@@ -4,7 +4,7 @@
 
 Work in progress, not ready for general use.
 
-Water-balance planner and zone controller for Home Assistant (`sprinklecast` 0.15.0).
+Water-balance planner and zone controller for Home Assistant (`sprinklecast` 0.16.0).
 
 It estimates reference evapotranspiration, tracks a soil-water deficit for each zone, and builds a cycle-and-soak plan for the next morning. The plan is made at the plan hour (default 23:00). A new hub turns **Dynamic start time** on: the run aims to finish at that day's local sunrise, and it never opens before **Don't start before** (default 04:00). If that is still too early, it starts then and may run past sunrise, but it ends by the finish time (default 09:00). Turn Dynamic start time off to open at the start time (default 05:00) instead. **Automatic watering is off after a new install.** An upgrade keeps that switch as it was, unless the old Mode was Off. Turn the hub's **Automatic watering** switch on when you want it to open valves. Until then the plan is only sensors and an optional notification. Run now is a manual action and runs even while that switch is off. A simulation hub still plays an example week and never calls a real on/off entity. The controller calls `switch`, `valve`, or `input_boolean` services only. It does not call a controller API.
 
@@ -78,6 +78,16 @@ Your config entry, zones, stored soil and flow history, and entity IDs stay. Do 
 The hub **Mode** option and the Mode sensor are gone. **Automatic watering** is the only on/off for valves. If Mode was Off, automatic watering is stored off. Notify only and Auto leave that switch as it was. **Send plan notifications** is on when a notify service was set, and the evening plan is sent even while automatic watering is off. The recent-rain skip is gone. Measured rain still fills the soil bucket. A wet rain sensor, rain right now, and a confident forecast still pause or defer watering.
 
 New entity: `calendar.<hub>_watering` (name **Watering**), for example `calendar.water_test_watering`. Removed entity: the Mode sensor (`sensor.<hub>_mode` or a renamed id). Its registry row is deleted.
+
+### Already on Sprinklecast 0.15.0
+
+Update to `v0.16.0` from HACS when that release is published. Config entry version stays 10. Storage version stays 1.
+
+**Water next chance** is a hub button. **Water next chance amount** is Refill estimated need (today's deficit) or Fill completely (the whole root zone, so the bucket ends full). It arms the next allowed morning even when no zone is at its watering point, and it uses the normal start window, cycle and soak, and each zone's minute cap. Rain, freeze, wind, and the other skips still apply. A skipped morning stays armed. **Cancel water next chance** clears it. The service `sprinklecast.water_next_chance` can name zones. Next watering and the schedule show that it is armed. It is kept across a restart and clears after the run.
+
+The plan waters on the last allowed morning before the soil would pass the watering point, using the forecast water loss. It does not wait for the first allowed morning after the soil has already crossed. The reason names that day, and it is in the diagnostics download.
+
+**Root depth** is optional, in inches. Leave it blank to keep the plant preset. Centimeters are accepted on the Root depth number when that is Home Assistant's length unit, and they are converted. A value with no unit is rejected. Examples: new Bermuda 4-6 in, established turf 6-12 in, beds 8-12 in. Changing it keeps the soil moisture percent and resizes the bucket. The bucket size in inches is on the water-needed sensor, the Root depth number, and in diagnostics.
 
 ### Already on Sprinklecast 0.14.8
 
@@ -511,6 +521,8 @@ ET0 uses FAO-56 Penman-Monteith when humidity and wind are available. Daily sola
 | `start_audit` | Runs one zone for the minutes you pass, as a manual run. Freeze, wind, rain, moisture, and the zone cap still apply. |
 | `submit_audit` | Cup readings in inches, or millilitres plus a cup diameter. Stores the measured rate and scheduling efficiency. |
 | `simulate` | Plays a weather week through the planner and returns it. Does not change the stored deficit and does not call an on/off entity. |
+| `water_next_chance` | Arms the next allowed morning. Amount is Refill estimated need or Fill completely. Empty zone arms every zone. |
+| `cancel_water_next_chance` | Clears that armed run. |
 
 A zone is usable when Home Assistant already exposes it as a valve, switch, or input boolean. Your existing controller schedule is unchanged. If it still waters at dawn, Sprinklecast will not stop it.
 
@@ -518,7 +530,7 @@ A zone is usable when Home Assistant already exposes it as a valve, switch, or i
 
 Per zone, on the device page: soil water (percent full, read-only), **Soil water level** (a number, 0–100%, step 1), **Catch-cup depth** (a number, inches or millimeters), water needed, next watering, why this plan, today's run, last run, plant activity, water used, water saved, a watering-amount number (0–300%), a run-now button, and an enabled switch. Setting Soil water level writes the water still needed as that percent of the water the soil can hold, saves it, and rebuilds the plan. The value you set is today's soil water. The next plan hour applies the following day's water loss. Catch-cup depth stores the measured average and the date, minutes, and rate as attributes. The watering point is diagnostic. Soil moisture level is diagnostic and exists only when that zone has a moisture sensor. Flow problem, last run flow, baseline flow, and flow vs baseline exist only when the hub has a flow meter.
 
-The hub has **Run catch-cup test**. It runs every enabled zone, one at a time, for 15 minutes. **Learn flow rates** is on the hub only when a flow meter is set. It runs each enabled zone and saves that zone's baseline.
+The hub has **Run catch-cup test**. It runs every enabled zone, one at a time, for 15 minutes. **Learn flow rates** is on the hub only when a flow meter is set. It runs each enabled zone and saves that zone's baseline. **Water next chance** and **Cancel water next chance** are hub buttons. **Water next chance amount** chooses Refill estimated need or Fill completely. Each zone has an optional **Root depth** number. Blank keeps the plant preset.
 
 Hub: today's plan, rain today, next watering, watering schedule, watering now, water used, water saved, water cost when a price is set, the Automatic watering switch, and a Watering calendar (`calendar.<hub>_watering`). Water loss today (reference lawn) is diagnostic. A simulation hub also has a Sample week sensor and a Run simulation button. Entity ids are the ones created with the old names; renaming the label does not change them. The Mode sensor is removed.
 

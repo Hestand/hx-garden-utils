@@ -38,6 +38,10 @@ async def async_get_config_entry_diagnostics(
                 "scheduled": zone.scheduled,
                 "runtime_min": zone.runtime_min,
                 "next_run": None if zone.next_run is None else zone.next_run.isoformat(),
+                "root_depth_in": zone.root_depth_in,
+                "root_depth_source": zone.root_depth_source,
+                "bucket_in": zone.bucket_in,
+                "water_next_chance": zone.water_next_chance,
             }
         )
     return {
@@ -46,6 +50,7 @@ async def async_get_config_entry_diagnostics(
             "summary": data.outlook_summary,
             "markdown": data.schedule_markdown,
             "days": list(data.schedule_days or []),
+            "water_next_chance": data.water_next_chance,
         },
         "zones": zones,
     }

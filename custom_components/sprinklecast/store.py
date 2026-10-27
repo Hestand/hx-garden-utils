@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .climate_day import fresh_climate_day
-from .const import DEFAULT_ADJUSTMENT_PCT, DOMAIN
+from .const import DEFAULT_ADJUSTMENT_PCT, DOMAIN, NEXT_CHANCE_REFILL
 from .observe import fresh_day
 
 STORAGE_VERSION = 1
@@ -109,6 +109,10 @@ class SmartWaterStore:
         self.flow_idle_cursor: float | None = None
         self.flow_idle_last_at: str | None = None
         self.flow_idle_alert_date: str | None = None
+        # Select value, kept when nothing is armed. "refill" or "fill".
+        self.next_chance_amount = NEXT_CHANCE_REFILL
+        # Armed one-time run: {"amount": "...", "zone_ids": None | [ids]}.
+        self.next_chance: dict[str, Any] | None = None
 
     async def async_load(self) -> None:
         """Load the last saved state."""
@@ -149,6 +153,12 @@ class SmartWaterStore:
         self.flow_idle_cursor = None if cursor is None else float(cursor)
         self.flow_idle_last_at = data.get("flow_idle_last_at")
         self.flow_idle_alert_date = data.get("flow_idle_alert_date")
+        amount = data.get("next_chance_amount") or NEXT_CHANCE_REFILL
+        self.next_chance_amount = (
+            amount if amount in {"refill", "fill"} else NEXT_CHANCE_REFILL
+        )
+        saved_chance = data.get("next_chance")
+        self.next_chance = dict(saved_chance) if isinstance(saved_chance, dict) else None
 
     def zone(self, zone_id: str) -> dict[str, Any]:
         """Return mutable state for a zone, creating it at field capacity."""
@@ -212,6 +222,8 @@ class SmartWaterStore:
             "flow_idle_cursor": self.flow_idle_cursor,
             "flow_idle_last_at": self.flow_idle_last_at,
             "flow_idle_alert_date": self.flow_idle_alert_date,
+            "next_chance_amount": self.next_chance_amount,
+            "next_chance": self.next_chance,
         }
 
     async def async_save(self) -> None:

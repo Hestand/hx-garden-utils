@@ -44,6 +44,46 @@ def inches_to_m(inches: float) -> float:
     return inches * M_PER_INCH
 
 
+_LENGTH_IN = {"in", "inch", "inches"}
+_LENGTH_CM = {"cm", "centimeter", "centimeters"}
+_LENGTH_MM = {"mm", "millimeter", "millimeters"}
+
+
+def length_to_inches(value: float, unit: str | None) -> float:
+    """Convert a root depth to inches. A missing or unknown unit is an error.
+
+    Inches and centimeters are accepted. Millimeters are accepted because
+    that unit is explicit. Anything else, including a blank unit, is not
+    treated as inches.
+    """
+    token = str(unit or "").strip().casefold()
+    if token in _LENGTH_IN:
+        return float(value)
+    if token in _LENGTH_CM:
+        return float(value) / 2.54
+    if token in _LENGTH_MM:
+        return float(value) / MM_PER_INCH
+    raise ValueError(
+        "Root depth needs a unit of inches or centimeters. "
+        f"{unit!r} is not one of those."
+    )
+
+
+def inches_to_length(inches: float, unit: str | None) -> float:
+    """Convert inches to inches, centimeters, or millimeters."""
+    token = str(unit or "").strip().casefold()
+    if token in _LENGTH_IN:
+        return float(inches)
+    if token in _LENGTH_CM:
+        return float(inches) * 2.54
+    if token in _LENGTH_MM:
+        return float(inches) * MM_PER_INCH
+    raise ValueError(
+        "Root depth needs a unit of inches or centimeters. "
+        f"{unit!r} is not one of those."
+    )
+
+
 # Accepted sensor units. A missing or unknown unit is not converted.
 TEMPERATURE_UNITS = "°C, C, degC, ºC, °F, F, degF, ºF"
 HUMIDITY_UNITS = "%"

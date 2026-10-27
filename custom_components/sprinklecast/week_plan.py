@@ -24,11 +24,11 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .balance import apply_daily_balance
-from .const import WEEKDAYS
+from .const import DEFAULT_PLAN_HOUR, WEEKDAYS
 from .flow import expected_gallons
 from .forecast_rain import defer_reason
 from .planner import NightPlan, PlanRequest, ZoneRequest, build_plan
-from .schedule import morning_window, parse_clock, wall_clock
+from .schedule import day_allowed, morning_window, parse_clock, wall_clock
 from .solar import local_sunrise
 from .units import mm_to_inches
 
@@ -67,6 +67,9 @@ def project_week(
     latitude: float | None = None,
     longitude: float | None = None,
     elevation_m: float = 0.0,
+    plan_hour: int = DEFAULT_PLAN_HOUR,
+    next_chance_amount: str | None = None,
+    next_chance_zones: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     """Return ``days``, a short ``summary``, and a markdown table."""
     tz = ZoneInfo(timezone)
@@ -84,6 +87,13 @@ def project_week(
     etc = {zone.zone_id: zone.etc_mm for zone in zones}
     rows: list[dict[str, object]] = []
     waiting = {zone.zone_id: int((defer_days or {}).get(zone.zone_id, 0)) for zone in zones}
+    # Index of the first plan morning inside et_factors (those are dated from now).
+    morning_index = (first_day - local_now.date()).days
+    pending_chance: dict[str, str] = {}
+    if next_chance_amount:
+        for zone in zones:
+            if next_chance_zones is None or zone.zone_id in next_chance_zones:
+                pending_chance[zone.zone_id] = next_chance_amount
 
     for offset in range(days):
         if offset > 0:
@@ -119,6 +129,7 @@ def project_week(
                 zone,
                 deficit_mm=deficits[zone.zone_id],
                 days_since_water=since[zone.zone_id],
+                next_chance=pending_chance.get(zone.zone_id),
             )
             if offset > 0:
                 current = replace(
@@ -165,6 +176,9 @@ def project_week(
                 hourly_wind=hourly_wind if offset == 0 else (),
                 dynamic_start=dynamic_start,
                 sunrise_at=sunrise,
+                plan_hour=plan_hour,
+                et_factors=tuple(et_factors or ()),
+                et_index=morning_index + offset,
             )
         )
         row = _day_row(plan, areas, tz)
@@ -176,6 +190,13 @@ def project_week(
                 continue
             if zone_plan.scheduled:
                 waiting[zone_plan.zone_id] = 0
+                pending_chance.pop(zone_plan.zone_id, None)
+            elif (
+                zone_plan.zone_id in pending_chance
+                and zone_plan.reason == "Soil is already full."
+                and day_allowed(start_at, allowed_weekdays)
+            ):
+                pending_chance.pop(zone_plan.zone_id, None)
             if not zone_plan.scheduled:
                 continue
             deficits[zone_plan.zone_id] = max(
@@ -359,6 +380,7 @@ def schedule_attributes(
     alerts: list[str] | None = None,
     week_gal: float = 0.0,
     saved_gal: float = 0.0,
+    water_next_chance: str = "off",
 ) -> dict[str, object]:
     """Attributes for the watering-schedule sensor.
 
@@ -396,6 +418,7 @@ def schedule_attributes(
         "alerts": list(alerts or []),
         "week_gal": week_gal,
         "saved_gal": saved_gal,
+        "water_next_chance": water_next_chance,
     }
 
 

@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.const import PERCENTAGE, UnitOfPrecipitationDepth
+from homeassistant.const import PERCENTAGE, UnitOfLength, UnitOfPrecipitationDepth
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import SUBENTRY_ZONE
 from .coordinator import SmartWaterConfigEntry
 from .entity import SmartWaterZoneEntity
-from .units import depth_to_inches, inches_to_depth, inches_to_mm
+from .units import depth_to_inches, inches_to_depth, inches_to_length, inches_to_mm, length_to_inches
 
 
 async def async_setup_entry(
@@ -28,6 +28,7 @@ async def async_setup_entry(
                 AdjustmentNumber(coordinator, subentry.subentry_id),
                 SoilWaterLevelNumber(coordinator, subentry.subentry_id),
                 CatchCupDepthNumber(coordinator, subentry.subentry_id),
+                RootDepthNumber(coordinator, subentry.subentry_id),
             ],
             config_subentry_id=subentry.subentry_id,
         )
@@ -171,3 +172,83 @@ class CatchCupDepthNumber(SmartWaterZoneEntity, NumberEntity):
         """Convert the entered depth to inches and store the precipitation rate."""
         depth_in = depth_to_inches(float(value), self.native_unit_of_measurement)
         await self.coordinator.async_set_catch_cup_result(self._zone_id, depth_in)
+
+
+def _root_length_unit(hass) -> str:
+    """Inches or centimeters from Home Assistant. Anything else stays inches.
+
+    The entity always names its unit. A meter or foot setting is not read
+    as inches, and it is not left unlabeled.
+    """
+    unit = getattr(hass.config.units, "length_unit", None)
+    if unit in {UnitOfLength.CENTIMETERS, UnitOfLength.MILLIMETERS, UnitOfLength.INCHES}:
+        return str(unit)
+    return UnitOfLength.INCHES
+
+
+class RootDepthNumber(SmartWaterZoneEntity, NumberEntity):
+    """How deep the roots are. Blank in setup keeps the plant preset."""
+
+    _attr_translation_key = "root_depth"
+    _attr_mode = NumberMode.BOX
+    _attr_icon = "mdi:shovel"
+
+    def __init__(self, coordinator, zone_id: str) -> None:
+        """Set the unique id."""
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = (
+            f"{coordinator.config_entry.entry_id}_{zone_id}_root_depth"
+        )
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        """Inches, or centimeters when that is the length unit."""
+        return _root_length_unit(self.coordinator.hass)
+
+    @property
+    def native_step(self) -> float:
+        """Half an inch, or one centimeter, or ten millimeters."""
+        unit = self.native_unit_of_measurement
+        if unit == UnitOfLength.CENTIMETERS:
+            return 1.0
+        if unit == UnitOfLength.MILLIMETERS:
+            return 10.0
+        return 0.5
+
+    @property
+    def native_min_value(self) -> float:
+        """One inch, in the entity's unit."""
+        return round(inches_to_length(1.0, self.native_unit_of_measurement), 2)
+
+    @property
+    def native_max_value(self) -> float:
+        """120 inches, in the entity's unit."""
+        return round(inches_to_length(120.0, self.native_unit_of_measurement), 2)
+
+    @property
+    def native_value(self) -> float | None:
+        """The depth in use, including the plant preset when nothing is set."""
+        zone = self._zone()
+        if zone is None or zone.root_depth_in is None:
+            return None
+        return round(
+            inches_to_length(zone.root_depth_in, self.native_unit_of_measurement),
+            2,
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Where the depth came from, and how much water the bucket holds."""
+        zone = self._zone()
+        if zone is None:
+            return {}
+        return {
+            "source": zone.root_depth_source,
+            "root_depth_in": zone.root_depth_in,
+            "bucket_in": zone.bucket_in,
+        }
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Convert the entity's unit to inches and resize the bucket."""
+        inches = length_to_inches(float(value), self.native_unit_of_measurement)
+        await self.coordinator.async_set_root_depth(self._zone_id, inches)

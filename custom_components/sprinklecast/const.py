@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "sprinklecast"
 NAME = "Sprinklecast"
-VERSION = "0.15.0"
+VERSION = "0.16.0"
 
 # Retired option key. v0.5 stores the automatic-watering switch in the hub
 # store (default off) and drops this option on migration.
@@ -220,6 +220,35 @@ SERVICE_RUN_CATCH_CUP = "run_catch_cup_test"
 SERVICE_SET_CATCH_CUP = "set_catch_cup_result"
 SERVICE_SET_FLOW_BASELINE = "set_flow_baseline"
 SERVICE_LEARN_FLOW = "learn_flow_rates"
+SERVICE_WATER_NEXT_CHANCE = "water_next_chance"
+SERVICE_CANCEL_WATER_NEXT_CHANCE = "cancel_water_next_chance"
+
+# One-time watering on the next allowed morning.
+NEXT_CHANCE_REFILL = "refill"
+NEXT_CHANCE_FILL = "fill"
+NEXT_CHANCE_REFILL_LABEL = "Refill estimated need"
+NEXT_CHANCE_FILL_LABEL = "Fill completely"
+
+
+def next_chance_label(amount: str | None) -> str:
+    """Plain name for an armed amount, or ``off`` when nothing is armed."""
+    if amount == NEXT_CHANCE_FILL:
+        return NEXT_CHANCE_FILL_LABEL
+    if amount == NEXT_CHANCE_REFILL:
+        return NEXT_CHANCE_REFILL_LABEL
+    return "off"
+
+
+def parse_next_chance_amount(value: str) -> str:
+    """Read a service or select value. Unknown text is rejected."""
+    text = str(value).strip().casefold()
+    if text in {NEXT_CHANCE_FILL, NEXT_CHANCE_FILL_LABEL.casefold()}:
+        return NEXT_CHANCE_FILL
+    if text in {NEXT_CHANCE_REFILL, NEXT_CHANCE_REFILL_LABEL.casefold()}:
+        return NEXT_CHANCE_REFILL
+    raise ValueError(
+        "Amount must be Refill estimated need or Fill completely."
+    )
 
 SERVICES = (
     SERVICE_CALCULATE_PLAN,
@@ -241,6 +270,8 @@ SERVICES = (
     SERVICE_SET_CATCH_CUP,
     SERVICE_SET_FLOW_BASELINE,
     SERVICE_LEARN_FLOW,
+    SERVICE_WATER_NEXT_CHANCE,
+    SERVICE_CANCEL_WATER_NEXT_CHANCE,
 )
 
 FLOW_ACTION_NOTIFY = "notify"
@@ -258,6 +289,7 @@ PLATFORMS: list[str] = [
     "switch",
     "number",
     "button",
+    "select",
     "calendar",
 ]
 
