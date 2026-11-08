@@ -1725,6 +1725,9 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
 
         self._sync_unit_issues()
         await self._async_recompute_baselines(now)
+        # Stored rain from 0.16 was already in the soil account. Mark it
+        # credited before this refresh adds a new report.
+        self._seal_legacy_rain()
         self._accumulate_day(now, today)
         self._note_temp_history(now, today)
         observation = self._overlay_observed(await self._async_observation(now))
@@ -2398,6 +2401,39 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 },
             )
 
+    def _day_is_closed(self, day: str) -> bool:
+        """True when the evening step has already applied this local date."""
+        return any(
+            str(state.get("balance_date") or "") >= day
+            for state in self.store.zones.values()
+        )
+
+    def _seal_legacy_rain(self) -> None:
+        """Do not credit rain that an older version already applied.
+
+        Storage from 0.16 has a day's rain total and no credited amount.
+        That total was included in the evening soil step. Sealing it once
+        keeps the deficit where it was. Reports seen after this point still
+        count. Nothing is read from history.
+        """
+        if self.store.legacy_rain_sealed:
+            return
+        track = self.store.weather
+        day = str(track.get("date") or "")
+        # A loaded 0.16 day can look credited at 0 because the empty day
+        # template fills that key. Stamp the total that was already stored.
+        if day and self._day_is_closed(day):
+            rain = float(track.get("rain_mm") or 0.0)
+            track["rain_credited_mm"] = rain
+            self.store.climate_day(day)["rain_credited_mm"] = rain
+        for climate in list(self.store.climate_days):
+            name = str(climate.get("date") or "")
+            if not name or "rain_credited_mm" in climate:
+                continue
+            if self._day_is_closed(name):
+                climate["rain_credited_mm"] = float(climate.get("rain_mm") or 0.0)
+        self.store.legacy_rain_sealed = True
+
     def _stored_et0(self, day: str) -> float | None:
         """Water loss already saved for ``day``, if this refresh has none yet."""
         if self.store.et0_date == day and self.store.et0_mm is not None:
@@ -2512,6 +2548,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
         if not entity_id or getattr(state, "entity_id", None) != entity_id:
             return
         today = at.date().isoformat()
+        self._seal_legacy_rain()
         self._roll_rain_day(today)
         track = self.store.weather_for(today)
         kind = str(options.get(CONF_RAIN_KIND, DEFAULT_RAIN_KIND))

@@ -332,6 +332,50 @@ async def test_rain_after_the_evening_step_carries_across_midnight(
     assert zone["deficit_mm"] == pytest.approx(after_credit)
 
 
+async def test_old_stored_rain_is_not_credited_again(hass: HomeAssistant) -> None:
+    """0.16 already applied its stored totals. Upgrading must not subtract them again."""
+    _weather(hass)
+    entry = await _setup(hass, RAIN_KIND_INTERVAL)
+    coordinator = entry.runtime_data
+    day = str(coordinator.store.weather["date"])
+    yesterday = "2026-11-06"
+    coordinator.store.legacy_rain_sealed = False
+    coordinator.store.weather["rain_mm"] = 4.0
+    coordinator.store.weather["rain_credited_mm"] = 0.0
+    coordinator.store.weather.pop("rain_interval_id", None)
+    zone = coordinator.store.zone("front")
+    zone["deficit_mm"] = 12.0
+    zone["balance_date"] = day
+    prior = coordinator.store.climate_day(yesterday)
+    prior["rain_mm"] = 6.0
+    prior.pop("rain_credited_mm", None)
+    coordinator.store.et0_mm = 5.0
+    coordinator.store.et0_date = day
+    coordinator._seal_legacy_rain()
+    coordinator._credit_uncredited_rain(day, 5.0)
+    assert zone["deficit_mm"] == pytest.approx(12.0)
+    assert coordinator.store.weather["rain_credited_mm"] == pytest.approx(4.0)
+    assert prior["rain_credited_mm"] == pytest.approx(6.0)
+    coordinator._ingest_rain_state(
+        SimpleNamespace(
+            entity_id=RAIN,
+            state="0.10",
+            attributes={
+                "unit_of_measurement": "in",
+                "last_reset": "2026-11-08T18:00:00-06:00",
+            },
+            last_changed=None,
+            last_updated=None,
+            last_reset=None,
+        ),
+        dt_util.now(CHICAGO),
+    )
+    coordinator._credit_uncredited_rain(day, 5.0)
+    assert zone["deficit_mm"] == pytest.approx(12.0 - 2.54)
+    coordinator._credit_uncredited_rain(day, 5.0)
+    assert zone["deficit_mm"] == pytest.approx(12.0 - 2.54)
+
+
 def test_invalid_state_object_does_not_guess_a_unit() -> None:
     """A blank unit is not inches. The helper the coordinator uses rejects it."""
     assert depth_mm(0.1, "") is None
