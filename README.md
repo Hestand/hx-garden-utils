@@ -4,7 +4,7 @@
 
 Work in progress, not ready for general use.
 
-Water-balance planner and zone controller for Home Assistant (`sprinklecast` 0.16.0).
+Water-balance planner and zone controller for Home Assistant (`sprinklecast` 0.17.0).
 
 It estimates reference evapotranspiration, tracks a soil-water deficit for each zone, and builds a cycle-and-soak plan for the next morning. The plan is made at the plan hour (default 23:00). A new hub turns **Dynamic start time** on: the run aims to finish at that day's local sunrise, and it never opens before **Don't start before** (default 04:00). If that is still too early, it starts then and may run past sunrise, but it ends by the finish time (default 09:00). Turn Dynamic start time off to open at the start time (default 05:00) instead. **Automatic watering is off after a new install.** An upgrade keeps that switch as it was, unless the old Mode was Off. Turn the hub's **Automatic watering** switch on when you want it to open valves. Until then the plan is only sensors and an optional notification. Run now is a manual action and runs even while that switch is off. A simulation hub still plays an example week and never calls a real on/off entity. The controller calls `switch`, `valve`, or `input_boolean` services only. It does not call a controller API.
 
@@ -78,6 +78,12 @@ Your config entry, zones, stored soil and flow history, and entity IDs stay. Do 
 The hub **Mode** option and the Mode sensor are gone. **Automatic watering** is the only on/off for valves. If Mode was Off, automatic watering is stored off. Notify only and Auto leave that switch as it was. **Send plan notifications** is on when a notify service was set, and the evening plan is sent even while automatic watering is off. The recent-rain skip is gone. Measured rain still fills the soil bucket. A wet rain sensor, rain right now, and a confident forecast still pause or defer watering.
 
 New entity: `calendar.<hub>_watering` (name **Watering**), for example `calendar.water_test_watering`. Removed entity: the Mode sensor (`sensor.<hub>_mode` or a renamed id). Its registry row is deleted.
+
+### Already on Sprinklecast 0.16.0
+
+Update to `v0.17.0` from HACS when that release is published. Config entry version stays 10. Storage version stays 1. An existing hub keeps Daily total, so a rain-today sensor behaves as it does now.
+
+**Each report** is an optional rain sensor kind. Use it when the sensor publishes one amount per minute or per report, instead of a running total for the day. Sprinklecast adds each new report into the local day's rain, including two reports with the same number when the reset time is new. A repeated poll, a reload, or a restart does not add that report again. The day's total is what the bucket checks, so a storm of small reports can still count. Rain after the evening soil update is kept and credited once, including across midnight. A missing or unknown unit, including centimeters, shows a warning and that reading is skipped.
 
 ### Already on Sprinklecast 0.15.0
 

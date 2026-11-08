@@ -289,6 +289,7 @@ async def async_setup_entry(hass, entry) -> bool:
 
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop))
     coordinator.async_watch_units()
+    coordinator.async_watch_rain()
     await coordinator.async_config_entry_first_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     coordinator.async_track_plan_time()

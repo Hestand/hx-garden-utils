@@ -174,10 +174,15 @@ class SmartWaterStore:
             events = list(self.weather.get("rain_events") or [])
             cursor = self.weather.get("rain_cursor")
             last_at = self.weather.get("rain_last_at")
+            # The open report stays identified so midnight does not add it again.
+            interval_id = self.weather.get("rain_interval_id")
+            interval_mm = self.weather.get("rain_interval_mm")
             self.weather = fresh_day(date)
             self.weather["rain_events"] = events
             self.weather["rain_cursor"] = cursor
             self.weather["rain_last_at"] = last_at
+            self.weather["rain_interval_id"] = interval_id
+            self.weather["rain_interval_mm"] = interval_mm
         return self.weather
 
     def climate_day(self, day: str) -> dict[str, Any]:

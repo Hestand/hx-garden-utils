@@ -36,6 +36,7 @@ from .balance import (
     apply_daily_balance,
     clamp_deficit,
     days_to_balance,
+    rain_effect,
     rescale_deficit,
     rewind_hand_set,
     root_zone,
@@ -147,6 +148,7 @@ from .const import (
     DEFAULT_MOISTURE_WEIGHT,
     DEFAULT_PLAN_HOUR,
     DEFAULT_RAIN_KIND,
+    RAIN_KIND_INTERVAL,
     DEFAULT_ROUND_MINUTES,
     DEFAULT_SPRINKLER_TYPE,
     DEFAULT_EARLIEST_START,
@@ -212,7 +214,9 @@ from .flow_window import baseline_gpm_from_history
 from .learn import should_learn, update_awc_factor
 from .moisture import apply_moisture, deficit_from_reading, reading_percent
 from .observe import (
+    interval_identity,
     note_rain,
+    note_rain_interval,
     note_solar_w,
     note_temperature,
     observed_temperature_range,
@@ -514,6 +518,34 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
 
         self.config_entry.async_on_unload(
             async_track_time_change(self.hass, _at_plan_hour, hour=hour, minute=5)
+        )
+
+    @callback
+    def async_watch_rain(self) -> None:
+        """Add each new rain report as it arrives.
+
+        The hourly refresh and the plan-hour refresh are too far apart for a
+        sensor that publishes one amount per minute. This listener records
+        the state on the event, so two reports that share a number are both
+        kept when each one has its own identity. Recorder history is not
+        read: reports from before this listener was attached are not invented.
+        """
+        options = self._options()
+        entity_id = options.get(CONF_RAIN_AMOUNT_SENSOR)
+        kind = str(options.get(CONF_RAIN_KIND, DEFAULT_RAIN_KIND))
+        if not entity_id or kind != RAIN_KIND_INTERVAL:
+            return
+
+        @callback
+        def _rain(event: Event) -> None:
+            new_state = event.data.get("new_state")
+            if new_state is None:
+                return
+            self._ingest_rain_state(new_state, dt_util.now(self._timezone()))
+            self.hass.async_create_task(self.async_request_refresh())
+
+        self.config_entry.async_on_unload(
+            async_track_state_change_event(self.hass, [str(entity_id)], _rain)
         )
 
     @callback
@@ -1751,15 +1783,10 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
             else et0 if et0 is not None else self.store.et0_mm
         )
         if et0 is not None:
-            preview = apply_daily_balance(
-                0.0,
-                1000.0,
-                etc_mm=et0,
-                precip_mm=observation.precip_today_mm,
-                et0_mm=et0,
-            )
-            self.store.weather["effective_rain_mm"] = preview.effective_precip_mm
-            self.store.weather["rain_ignored"] = preview.rain_ignored
+            effective, ignored, reason = rain_effect(observation.precip_today_mm, et0)
+            self.store.weather["effective_rain_mm"] = effective
+            self.store.weather["rain_ignored"] = ignored
+            self.store.weather["rain_ignore_reason"] = reason
 
         pending_learn: list[tuple[str, float, float, float]] = []
         for subentry_id in zone_ids:
@@ -1824,6 +1851,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 )
                 state["deficit_mm"] = updated.deficit_mm
                 state["balance_date"] = day
+                self._remember_credited_rain(day, updated.effective_precip_mm)
                 balanced = True
             learned = self._consider_learning(
                 state, data, limits, today=now.date(), rain_mm=observation.precip_today_mm
@@ -1832,6 +1860,7 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 pending_learn.append((subentry_id, *learned))
             self._apply_moisture(state, data, limits, balanced=balanced, awc_factor=factor)
             self._note_bucket(state, today, limits.taw_mm * factor)
+        self._credit_uncredited_rain(today, et0 if et0 is not None else self._stored_et0(today))
         self._note_hub_flow(now, today)
 
         plan: NightPlan | None = None
@@ -2369,33 +2398,194 @@ class SmartWaterCoordinator(DataUpdateCoordinator[HubSnapshot]):
                 },
             )
 
+    def _stored_et0(self, day: str) -> float | None:
+        """Water loss already saved for ``day``, if this refresh has none yet."""
+        if self.store.et0_date == day and self.store.et0_mm is not None:
+            return float(self.store.et0_mm)
+        for item in self.store.climate_days:
+            if item.get("date") == day and item.get("et0_mm") is not None:
+                return float(item["et0_mm"])
+        return None
+
+    def _remember_credited_rain(self, day: str, effective_mm: float) -> None:
+        """Remember how much of ``day`` already lowered the soil water."""
+        if str(self.store.weather.get("date") or "") == day:
+            self.store.weather["rain_credited_mm"] = effective_mm
+        self.store.climate_day(day)["rain_credited_mm"] = effective_mm
+
+    def _credit_one_day(
+        self,
+        day: str,
+        rain_mm: float,
+        credited_mm: float,
+        et0_mm: float | None,
+        track: dict[str, Any] | None,
+    ) -> None:
+        """Credit rain that arrived after the day's water loss was applied.
+
+        The evening step already included the rain it could see. A later
+        report subtracts only the increase. A day that has not been applied
+        yet is left alone, so the evening step can include the whole total
+        once. Reports are not credited again on a later replan.
+        """
+        if et0_mm is None:
+            if track is not None:
+                track["effective_rain_mm"] = 0.0
+                track["rain_ignored"] = False
+                track["rain_ignore_reason"] = (
+                    "Today's water loss is not known yet, so this rain "
+                    "waits for the evening step."
+                )
+            return
+        effective, ignored, reason = rain_effect(rain_mm, et0_mm)
+        if track is not None:
+            track["effective_rain_mm"] = effective
+            track["rain_ignored"] = ignored
+            track["rain_ignore_reason"] = reason
+        delta = effective - credited_mm
+        if delta <= 1e-6:
+            return
+        changed = False
+        for state in self.store.zones.values():
+            if str(state.get("balance_date") or "") >= day:
+                state["deficit_mm"] = max(0.0, float(state.get("deficit_mm") or 0.0) - delta)
+                changed = True
+        if changed:
+            self._remember_credited_rain(day, effective)
+
+    def _credit_uncredited_rain(self, today: str, et0_mm: float | None) -> None:
+        """Apply leftover rain for today and for days already in the soil account."""
+        track = self.store.weather
+        if str(track.get("date") or "") == today:
+            self._credit_one_day(
+                today,
+                float(track.get("rain_mm") or 0.0),
+                float(track.get("rain_credited_mm") or 0.0),
+                et0_mm,
+                track,
+            )
+        for climate in list(self.store.climate_days):
+            day = str(climate.get("date") or "")
+            if not day or day >= today:
+                continue
+            self._credit_one_day(
+                day,
+                float(climate.get("rain_mm") or 0.0),
+                float(climate.get("rain_credited_mm") or 0.0),
+                self._stored_et0(day),
+                None,
+            )
+
+    def _roll_rain_day(self, today: str) -> None:
+        """Keep yesterday's rain, including rain after the plan hour, then start today.
+
+        The open report's identity is kept, so the same report is not added
+        to both days. Rain already subtracted from the soil is not subtracted
+        again.
+        """
+        previous = str(self.store.weather.get("date") or "")
+        if not previous or previous == today:
+            return
+        rain = float(self.store.weather.get("rain_mm") or 0.0)
+        credited = float(self.store.weather.get("rain_credited_mm") or 0.0)
+        self._store_day_rain(previous, rain)
+        self._credit_one_day(previous, rain, credited, self._stored_et0(previous), None)
+        self.store.weather_for(today)
+
+    def _rain_interval_identity(self, state) -> str | None:
+        """Prefer the sensor's reset time. Equal amounts with a new reset still count."""
+        reset = state.attributes.get("last_reset")
+        if reset in (None, ""):
+            reset = getattr(state, "last_reset", None)
+        changed = getattr(state, "last_changed", None)
+        updated = getattr(state, "last_updated", None)
+        return interval_identity(
+            None if reset in (None, "") else str(reset),
+            None if changed is None else changed.isoformat(),
+            None if updated is None else updated.isoformat(),
+        )
+
+    def _ingest_rain_state(self, state, at: datetime) -> None:
+        """Fold one rain-sensor state into the local day. Bad units are not guessed."""
+        options = self._options()
+        entity_id = options.get(CONF_RAIN_AMOUNT_SENSOR)
+        if not entity_id or getattr(state, "entity_id", None) != entity_id:
+            return
+        today = at.date().isoformat()
+        self._roll_rain_day(today)
+        track = self.store.weather_for(today)
+        kind = str(options.get(CONF_RAIN_KIND, DEFAULT_RAIN_KIND))
+        track["rain_mode"] = kind
+        if state.state in {"unknown", "unavailable", "none", ""}:
+            return
+        try:
+            value = float(state.state)
+        except (TypeError, ValueError):
+            return
+        unit = state.attributes.get("unit_of_measurement")
+        track["rain_unit"] = None if unit is None else str(unit)
+        rain_mm = depth_mm(value, track["rain_unit"])
+        if rain_mm is None:
+            track["rain_unit_rejected"] = True
+            return
+        track["rain_unit_rejected"] = False
+        track["rain_raw_mm"] = rain_mm
+        if kind == RAIN_KIND_INTERVAL:
+            identity = self._rain_interval_identity(state)
+            if identity is None:
+                return
+            note_rain_interval(track, value_mm=rain_mm, identity=identity, at=at)
+        else:
+            note_rain(track, kind=kind, value_mm=rain_mm, at=at)
+        track["precip_source"] = "sensor"
+        self._store_day_rain(today, float(track.get("rain_mm") or 0.0))
+
+    def rain_diagnostics(self) -> dict[str, Any]:
+        """Rain source, mode, and why the day's total did or did not count."""
+        options = self._options()
+        track = self.store.weather
+        mode = str(options.get(CONF_RAIN_KIND, DEFAULT_RAIN_KIND) or DEFAULT_RAIN_KIND)
+        sensor = options.get(CONF_RAIN_AMOUNT_SENSOR) or None
+        state = self.hass.states.get(str(sensor)) if sensor else None
+        reset = None if state is None else state.attributes.get("last_reset")
+        note = ""
+        if mode == DEFAULT_RAIN_KIND and reset not in (None, ""):
+            note = (
+                "This sensor has a last reset time. Daily total keeps only the "
+                "current reading. Choose Each report if every reset is a new amount."
+            )
+        return {
+            "sensor": None if not sensor else str(sensor),
+            "mode": mode,
+            "source": str(track.get("precip_source") or "none"),
+            "raw_mm": track.get("rain_raw_mm"),
+            "accumulated_mm": float(track.get("rain_mm") or 0.0),
+            "effective_mm": float(track.get("effective_rain_mm") or 0.0),
+            "ignored": bool(track.get("rain_ignored")),
+            "ignore_reason": str(track.get("rain_ignore_reason") or ""),
+            "unit": track.get("rain_unit"),
+            "unit_rejected": bool(track.get("rain_unit_rejected")),
+            "credited_mm": float(track.get("rain_credited_mm") or 0.0),
+            "note": note,
+        }
+
     def _accumulate_day(self, now: datetime, today: str) -> None:
         """Fold entity samples into today's temperature, rain, solar, and flow."""
         options = self._options()
-        # Midnight clears the weather total. Keep yesterday's rain on the
-        # climate day first, or a catch-up after the roll has nothing to credit.
-        previous_date = str(self.store.weather.get("date") or "")
-        if previous_date and previous_date != today:
-            self._store_day_rain(
-                previous_date, float(self.store.weather.get("rain_mm") or 0.0)
-            )
+        # Midnight clears the weather total. Keep yesterday's rain, including
+        # rain after the plan hour, before the new day starts.
+        self._roll_rain_day(today)
         track = self.store.weather_for(today)
         temp, temp_unit = _state_float(self.hass, options.get(CONF_TEMPERATURE_SENSOR))
         if temp is not None:
             converted = temperature_c(temp, temp_unit)
             if converted is not None:
                 note_temperature(track, converted)
-        rain, rain_unit = _state_float(self.hass, options.get(CONF_RAIN_AMOUNT_SENSOR))
-        if rain is not None:
-            rain_mm = depth_mm(rain, rain_unit)
-            if rain_mm is not None:
-                note_rain(
-                    track,
-                    kind=str(options.get(CONF_RAIN_KIND, DEFAULT_RAIN_KIND)),
-                    value_mm=rain_mm,
-                    at=now,
-                )
-                track["precip_source"] = "sensor"
+        rain_entity = options.get(CONF_RAIN_AMOUNT_SENSOR)
+        if rain_entity:
+            rain_state = self.hass.states.get(str(rain_entity))
+            if rain_state is not None:
+                self._ingest_rain_state(rain_state, now)
         solar, solar_unit = _state_float(self.hass, options.get(CONF_SOLAR_SENSOR))
         solar_used = False
         if solar is not None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "sprinklecast"
 NAME = "Sprinklecast"
-VERSION = "0.16.0"
+VERSION = "0.17.0"
 
 # Retired option key. v0.5 stores the automatic-watering switch in the hub
 # store (default off) and drops this option on migration.
@@ -168,7 +168,14 @@ UV_INDEX_TO_W_M2 = 100.0
 RAIN_KIND_DAILY = "daily_total"
 RAIN_KIND_CUMULATIVE = "cumulative"
 RAIN_KIND_RATE = "rate"
-RAIN_KINDS = (RAIN_KIND_DAILY, RAIN_KIND_CUMULATIVE, RAIN_KIND_RATE)
+# One amount per report. The integration adds each new report into the local day.
+RAIN_KIND_INTERVAL = "interval"
+RAIN_KINDS = (
+    RAIN_KIND_DAILY,
+    RAIN_KIND_INTERVAL,
+    RAIN_KIND_CUMULATIVE,
+    RAIN_KIND_RATE,
+)
 
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 

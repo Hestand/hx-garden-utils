@@ -116,11 +116,9 @@ def apply_daily_balance(
         raise ValueError("deficit cannot start below zero")
     if taw_mm <= 0:
         raise ValueError("TAW must be positive")
-    rain_ignored = precip_mm < RAIN_IGNORE_FRACTION_OF_ET0 * max(et0_mm, 0.0)
-    if rain_ignored:
-        effective_precip = 0.0
-    else:
-        effective_precip = max(0.0, precip_mm - max(0.0, runoff_mm))
+    effective_precip, rain_ignored, _reason = rain_effect(precip_mm, et0_mm)
+    if not rain_ignored:
+        effective_precip = max(0.0, effective_precip - max(0.0, runoff_mm))
     # Eq. 85 without DP, then Eq. 88: DP is the negative excursion.
     raw_balance = (
         deficit_mm
@@ -142,6 +140,34 @@ def apply_daily_balance(
         rain_ignored=rain_ignored,
         etc_mm=max(0.0, etc_mm),
         irrigation_mm=max(0.0, irrigation_mm),
+    )
+
+
+def rain_effect(precip_mm: float, et0_mm: float) -> tuple[float, bool, str]:
+    """How much of one day's rain the bucket may use.
+
+    FAO ignores a day below about 0.2 × ET0. The check is the day's total.
+    A storm made of small reports still counts once those reports add up.
+    """
+    precip = max(0.0, float(precip_mm))
+    limit = RAIN_IGNORE_FRACTION_OF_ET0 * max(float(et0_mm), 0.0)
+    if precip < limit:
+        if precip <= 0:
+            reason = "No rain has been recorded for this day."
+        else:
+            reason = (
+                f"{precip:.2f} mm is below 0.2 × today's water loss "
+                f"({float(et0_mm):.2f} mm, so {limit:.2f} mm). "
+                "The day's total is checked, not each report."
+            )
+        return 0.0, True, reason
+    return (
+        precip,
+        False,
+        (
+            f"{precip:.2f} mm is at least 0.2 × today's water loss "
+            f"({float(et0_mm):.2f} mm), so it counts."
+        ),
     )
 
 
