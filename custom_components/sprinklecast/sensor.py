@@ -465,11 +465,19 @@ class RainSensor(SmartWaterHubEntity, SensorEntity):
         data = self.coordinator.data
         if data is None:
             return {}
+        rain = self.coordinator.rain_diagnostics()
         return {
             "effective_mm": data.effective_rain_mm,
             "ignored": data.rain_ignored,
             "source": data.precip_source,
             "solar_mj": data.solar_mj,
+            "mode": rain["mode"],
+            "sensor": rain["sensor"],
+            "raw_mm": rain["raw_mm"],
+            "accumulated_mm": rain["accumulated_mm"],
+            "ignore_reason": rain["ignore_reason"],
+            "unit": rain["unit"],
+            "note": rain["note"],
         }
 
 

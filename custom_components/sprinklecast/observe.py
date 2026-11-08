@@ -16,6 +16,7 @@ from .schedule import elapsed_seconds, shift_minutes
 from .const import (
     RAIN_KIND_CUMULATIVE,
     RAIN_KIND_DAILY,
+    RAIN_KIND_INTERVAL,
     RAIN_KIND_RATE,
     UV_INDEX_TO_W_M2,
 )
@@ -38,6 +39,14 @@ def fresh_day(date: str) -> dict[str, object]:
         "solar_last_at": None,
         "effective_rain_mm": 0.0,
         "rain_ignored": False,
+        "rain_ignore_reason": "",
+        "rain_credited_mm": 0.0,
+        "rain_raw_mm": None,
+        "rain_unit": None,
+        "rain_mode": None,
+        # Identity of the last interval already added. A repeat of this id is not new.
+        "rain_interval_id": None,
+        "rain_interval_mm": None,
         "precip_source": "none",
         "rain_events": [],
     }
@@ -93,6 +102,8 @@ def note_rain(
             track["rain_cursor"] = value_mm
         track["rain_last_at"] = at.isoformat()
         return
+    if kind == RAIN_KIND_INTERVAL:
+        raise ValueError("interval rain is recorded by note_rain_interval")
     if kind != RAIN_KIND_RATE:
         raise ValueError(f"unknown rain kind {kind}")
     last = track["rain_last_at"]
@@ -108,6 +119,63 @@ def note_rain(
             _add_rain_event(track, at, added)
     track["rain_cursor"] = value_mm
     track["rain_last_at"] = at.isoformat()
+
+
+def interval_identity(
+    last_reset: str | None,
+    last_changed: str | None,
+    last_updated: str | None,
+) -> str | None:
+    """One report's identity. A reset time wins over the state's own clock.
+
+    Equal amounts are still different reports when this identity changes.
+    The same identity is the same report, including after a restart.
+    """
+    for token in (last_reset, last_changed, last_updated):
+        if token is None:
+            continue
+        text = str(token).strip()
+        if text:
+            return text
+    return None
+
+
+def note_rain_interval(
+    track: dict[str, object],
+    *,
+    value_mm: float,
+    identity: str,
+    at: datetime,
+) -> bool:
+    """Add one reporting period into today's total.
+
+    A new identity adds its full amount, even when the number matches the
+    previous period. The same identity adds only an increase, so a poll,
+    a reload, or a restored state does not count twice. Nothing is read
+    from history: a period that was never seen is not invented.
+    """
+    if not identity or value_mm < 0:
+        return False
+    current = track.get("rain_interval_id")
+    already = track.get("rain_interval_mm")
+    if current == identity:
+        baseline = 0.0 if already in (None, "") else float(already)
+        delta = value_mm - baseline
+        if delta <= 0:
+            return False
+        track["rain_mm"] = float(track["rain_mm"]) + delta
+        track["rain_interval_mm"] = value_mm
+        track["rain_last_at"] = at.isoformat()
+        _add_rain_event(track, at, delta)
+        return True
+    track["rain_interval_id"] = identity
+    track["rain_interval_mm"] = value_mm
+    track["rain_last_at"] = at.isoformat()
+    if value_mm <= 0:
+        return False
+    track["rain_mm"] = float(track["rain_mm"]) + value_mm
+    _add_rain_event(track, at, value_mm)
+    return True
 
 
 def _event_time(event: dict[str, object], fallback: datetime) -> datetime:

@@ -26,7 +26,11 @@ async def async_get_config_entry_diagnostics(
         for subentry in entry.subentries.values()
     }
     if data is None:
-        return {"schedule": {"window": "", "markdown": "", "days": []}, "zones": []}
+        return {
+            "rain": coordinator.rain_diagnostics(),
+            "schedule": {"window": "", "markdown": "", "days": []},
+            "zones": [],
+        }
     zones: list[dict[str, Any]] = []
     for zone_id, zone in data.zones.items():
         zones.append(
@@ -45,6 +49,7 @@ async def async_get_config_entry_diagnostics(
             }
         )
     return {
+        "rain": coordinator.rain_diagnostics(),
         "schedule": {
             "window": data.schedule_window,
             "summary": data.outlook_summary,

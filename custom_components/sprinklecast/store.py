@@ -113,6 +113,8 @@ class SmartWaterStore:
         self.next_chance_amount = NEXT_CHANCE_REFILL
         # Armed one-time run: {"amount": "...", "zone_ids": None | [ids]}.
         self.next_chance: dict[str, Any] | None = None
+        # 0.16 and earlier already applied stored rain. Seal that once.
+        self.legacy_rain_sealed = False
 
     async def async_load(self) -> None:
         """Load the last saved state."""
@@ -159,6 +161,7 @@ class SmartWaterStore:
         )
         saved_chance = data.get("next_chance")
         self.next_chance = dict(saved_chance) if isinstance(saved_chance, dict) else None
+        self.legacy_rain_sealed = bool(data.get("legacy_rain_sealed", False))
 
     def zone(self, zone_id: str) -> dict[str, Any]:
         """Return mutable state for a zone, creating it at field capacity."""
@@ -174,10 +177,15 @@ class SmartWaterStore:
             events = list(self.weather.get("rain_events") or [])
             cursor = self.weather.get("rain_cursor")
             last_at = self.weather.get("rain_last_at")
+            # The open report stays identified so midnight does not add it again.
+            interval_id = self.weather.get("rain_interval_id")
+            interval_mm = self.weather.get("rain_interval_mm")
             self.weather = fresh_day(date)
             self.weather["rain_events"] = events
             self.weather["rain_cursor"] = cursor
             self.weather["rain_last_at"] = last_at
+            self.weather["rain_interval_id"] = interval_id
+            self.weather["rain_interval_mm"] = interval_mm
         return self.weather
 
     def climate_day(self, day: str) -> dict[str, Any]:
@@ -224,6 +232,7 @@ class SmartWaterStore:
             "flow_idle_alert_date": self.flow_idle_alert_date,
             "next_chance_amount": self.next_chance_amount,
             "next_chance": self.next_chance,
+            "legacy_rain_sealed": self.legacy_rain_sealed,
         }
 
     async def async_save(self) -> None:
